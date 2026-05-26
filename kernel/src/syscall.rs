@@ -98,6 +98,19 @@ core::arch::global_asm!(
 #[no_mangle]
 pub extern "C" fn syscall_handler(nr: u64, arg1: u64, arg2: u64, arg3: u64) -> u64 {
     match nr {
+        2 => {
+            // sys_clear — clear VGA screen
+            crate::vga::clear();
+            0
+        }
+        3 => {
+            // sys_reboot — pulse keyboard controller reset line
+            unsafe {
+                loop { if crate::port::inb(0x64) & 0x02 == 0 { break; } }
+                crate::port::outb(0x64, 0xFE);
+            }
+            loop {}
+        }
         0 => {
             // sys_read(fd, buf_virt, len) — blocks with sti+hlt until '\n'
             let len = (arg3 as usize).min(256);

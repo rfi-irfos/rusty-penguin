@@ -56,6 +56,7 @@ fn scroll_up() {
 }
 
 pub fn write_byte(b: u8, color: Color) {
+    crate::serial::write_byte(b);
     unsafe {
         if b == b'\n' {
             CUR_COL = 0;

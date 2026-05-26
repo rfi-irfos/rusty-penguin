@@ -111,9 +111,13 @@ extern "x86-interrupt" fn irq_timer(_f: InterruptFrame) {
     }
 }
 
+static mut SHIFT_DOWN: bool = false;
+
 extern "x86-interrupt" fn irq_keyboard(_f: InterruptFrame) {
     let sc = unsafe { port::inb(0x60) };
     match sc {
+        0x2A | 0x36 => unsafe { SHIFT_DOWN = true;  }  // L/R shift press
+        0xAA | 0xB6 => unsafe { SHIFT_DOWN = false; }  // L/R shift release
         0x0E => {
             // Backspace: undo last buffered char (if any), then update display
             unsafe {
@@ -140,10 +144,13 @@ extern "x86-interrupt" fn irq_keyboard(_f: InterruptFrame) {
 }
 
 fn sc_to_ascii(sc: u8) -> Option<u8> {
-    if sc & 0x80 != 0 { return None; } // key release
-    // QWERTZ layout (DE): y/z swapped vs US at positions 0x15/0x2C
-    const MAP: &[u8] = b"\x00\x001234567890-=\x00\tqwertzuiop[]\n\x00asdfghjkl;'`\x00\\yxcvbnm,./\x00*\x00 ";
-    MAP.get(sc as usize).copied().filter(|&b| b != 0)
+    if sc & 0x80 != 0 { return None; } // key release — ignore
+    let shift = unsafe { SHIFT_DOWN };
+    // QWERTZ (DE): y↔z swapped. Shift layer gives uppercase + common symbols.
+    const NORMAL: &[u8] = b"\x00\x001234567890-=\x00\tqwertzuiop[]\n\x00asdfghjkl;'`\x00\\yxcvbnm,./\x00*\x00 ";
+    const SHIFTED: &[u8] = b"\x00\x00!\"#$%&/()=?+\x00\tQWERTZUIOp{}\n\x00ASDFGHJKL:*^\x00|YXCVBNM<>_\x00*\x00 ";
+    let map = if shift { SHIFTED } else { NORMAL };
+    map.get(sc as usize).copied().filter(|&b| b != 0)
 }
 
 // ── Init ─────────────────────────────────────────────────────────────────────

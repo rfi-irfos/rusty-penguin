@@ -15,6 +15,7 @@ mod memory;
 mod vmm;
 mod syscall;
 mod elf;
+mod serial;
 
 use ternary_core::{Trit, Tryte};
 use mathematics::{mul_tryte, consensus, scale};
@@ -30,6 +31,7 @@ static USER_PSH_ELF: &[u8] = include_bytes!("../user-psh.elf");
 #[no_mangle]
 pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
     vga::clear();
+    serial::init();
 
     if magic != 0x36d76289 {
         vga::write_str("ERROR: bad multiboot2 magic\n", vga::Color::Red);
