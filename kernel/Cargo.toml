@@ -1,0 +1,18 @@
+[package]
+name = "rusty-penguin-kernel"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "kernel"
+path = "src/main.rs"
+
+[dependencies]
+ternary-core = { path = "../ternary-core" }
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+strip = false

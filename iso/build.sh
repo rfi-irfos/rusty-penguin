@@ -125,11 +125,26 @@ INITRD="$ISO_DIR/initrd.img"
 (cd "$INITRAMFS_DIR" && find . | cpio -o -H newc 2>/dev/null | gzip -9 > "$INITRD")
 echo "[build] initrd.img: $(du -sh "$INITRD" | cut -f1)"
 
+# 3b. Build bare-metal kernel ELF
+echo "[build] Building bare-metal kernel..."
+(cd "$REPO_ROOT/kernel" && cargo +nightly build --release \
+    -Zjson-target-spec \
+    -Zbuild-std=core,compiler_builtins \
+    -Zbuild-std-features=compiler-builtins-mem \
+    --target x86_64-rusty-penguin.json 2>&1)
+KERNEL_ELF="$REPO_ROOT/target/x86_64-rusty-penguin/release/kernel"
+if [ ! -f "$KERNEL_ELF" ]; then
+    echo "[build] ERROR: kernel.elf not found at $KERNEL_ELF"
+    exit 1
+fi
+echo "[build] kernel.elf: $(du -sh "$KERNEL_ELF" | cut -f1)"
+
 # 4. Assemble ISO tree
 echo "[build] Assembling ISO tree..."
 mkdir -p "$ISO_DIR/boot/grub"
 cp "$VMLINUZ" "$ISO_DIR/boot/vmlinuz"
 cp "$INITRD"  "$ISO_DIR/boot/initrd.img"
+cp "$KERNEL_ELF" "$ISO_DIR/boot/kernel.elf"
 # grub.cfg is already at iso/grub/grub.cfg
 cp "$ISO_DIR/grub/grub.cfg" "$ISO_DIR/boot/grub/grub.cfg"
 

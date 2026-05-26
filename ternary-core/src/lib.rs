@@ -1,4 +1,5 @@
-use std::ops::{Add, Neg};
+#![no_std]
+use core::ops::{Add, Neg};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(i8)]

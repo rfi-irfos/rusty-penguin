@@ -104,6 +104,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "rusty-penguin-kernel"
+version = "0.1.0"
+dependencies = [
+ "ternary-core",
+]
+
+[[package]]
 name = "scheduler"
 version = "0.1.0"
 dependencies = [
