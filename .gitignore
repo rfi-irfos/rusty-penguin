@@ -1,0 +1,6 @@
+/target/
+*.iso
+*.img
+*.vmdk
+*.vbox
+**/*.iso

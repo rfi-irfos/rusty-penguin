@@ -1,0 +1,13 @@
+[package]
+name = "ai-runtime"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description.workspace = true
+
+[dependencies]
+ternary-core = { path = "../ternary-core" }
+anyhow = "1.0"
+log = "0.4"

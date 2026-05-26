@@ -1,0 +1,12 @@
+[package]
+name = "scheduler"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description.workspace = true
+
+[dependencies]
+nix = { version = "0.27", features = ["signal"] }
+thiserror = "1.0"
