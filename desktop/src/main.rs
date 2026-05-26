@@ -6,6 +6,7 @@ mod font;
 mod input;
 mod wm;
 
+use std::os::unix::io::AsRawFd;
 use std::os::unix::process::CommandExt;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
@@ -14,6 +15,31 @@ use std::time::Duration;
 
 use fb::Framebuffer;
 use input::MouseState;
+
+// Stop the kernel fbcon driver from writing text over our pixels.
+// Must be called once we own the framebuffer.
+fn set_vt_graphics() {
+    const KDSETMODE: u64 = 0x4B3A;
+    const KD_GRAPHICS: u64 = 0x01;
+    for path in &["/dev/tty0", "/dev/tty1", "/dev/tty"] {
+        if let Ok(f) = std::fs::OpenOptions::new().read(true).write(true).open(path) {
+            unsafe { libc::ioctl(f.as_raw_fd(), KDSETMODE, KD_GRAPHICS); }
+            return;
+        }
+    }
+}
+
+// Restore text mode before handing off to psh.
+fn set_vt_text() {
+    const KDSETMODE: u64 = 0x4B3A;
+    const KD_TEXT: u64 = 0x00;
+    for path in &["/dev/tty0", "/dev/tty1", "/dev/tty"] {
+        if let Ok(f) = std::fs::OpenOptions::new().read(true).write(true).open(path) {
+            unsafe { libc::ioctl(f.as_raw_fd(), KDSETMODE, KD_TEXT); }
+            return;
+        }
+    }
+}
 
 // ---- Color palette ----
 const BG: u32      = 0x0F172A;
@@ -103,13 +129,13 @@ fn draw_initial_desktop(fb: &mut Framebuffer) {
 
     // Penguin ASCII art — centered
     let art = [
-        "  _____  ",
+        "  .---.  ",
+        " ( o o ) ",
+        "  ( u )  ",
         " /     \\ ",
-        "| (o)(o)|",
-        "|  ___  |",
+        "|       |",
         " \\_____/ ",
-        " /|   |\\ ",
-        "/ |   | \\",
+        "   | |   ",
     ];
     let art_w = 9u32 * 8;
     let art_h = 7u32 * 8;
@@ -169,17 +195,15 @@ fn read_rtc_time() -> String {
 }
 
 fn exec_psh() -> ! {
+    set_vt_text();
     let candidates = ["/bin/psh", "/usr/local/bin/psh"];
     for psh in &candidates {
         if std::path::Path::new(psh).exists() {
             let _ = Command::new(psh).exec();
         }
     }
-    // Nothing worked; print message and loop forever
     eprintln!("[desktop] psh not found");
-    loop {
-        std::thread::sleep(Duration::from_secs(60));
-    }
+    loop { std::thread::sleep(Duration::from_secs(60)); }
 }
 
 fn main() {
@@ -188,9 +212,13 @@ fn main() {
         Ok(f) => f,
         Err(e) => {
             eprintln!("[desktop] framebuffer unavailable ({}), exec psh", e);
+            set_vt_text();
             exec_psh();
         }
     };
+
+    // Take ownership: tell the kernel to stop printing text onto our framebuffer
+    set_vt_graphics();
 
     let width = fb.width as i32;
     let height = fb.height as i32;
