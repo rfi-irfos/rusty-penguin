@@ -1,6 +1,6 @@
 // Balanced ternary arithmetic for Rusty Penguin.
 // Operates on Tryte (9 trits, range -9841..+9841).
-
+#![no_std]
 use ternary_core::{Trit, Tryte};
 
 /// Multiply two Trytes. Returns (low_word, high_word) — the full double-width product.

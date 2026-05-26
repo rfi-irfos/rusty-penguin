@@ -1,3 +1,4 @@
+#![no_std]
 use ternary_core::{Trit, Tryte};
 
 pub trait TernaryALU {

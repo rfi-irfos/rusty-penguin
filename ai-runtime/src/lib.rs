@@ -1,3 +1,7 @@
+#![no_std]
+extern crate alloc;
+use alloc::vec::Vec;
+use alloc::vec;
 use ternary_core::Trit;
 
 #[derive(Debug, Clone)]

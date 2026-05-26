@@ -8,7 +8,10 @@ name = "kernel"
 path = "src/main.rs"
 
 [dependencies]
-ternary-core = { path = "../ternary-core" }
+ternary-core          = { path = "../ternary-core" }
+mathematics           = { path = "../mathematics" }
+hardware-abstraction  = { path = "../hardware-abstraction" }
+ai-runtime            = { path = "../ai-runtime" }
 
 [profile.dev]
 panic = "abort"

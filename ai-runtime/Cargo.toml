@@ -9,5 +9,3 @@ description.workspace = true
 
 [dependencies]
 ternary-core = { path = "../ternary-core" }
-anyhow = "1.0"
-log = "0.4"

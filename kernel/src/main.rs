@@ -2,13 +2,19 @@
 #![no_main]
 #![feature(abi_x86_interrupt)]
 
+extern crate alloc;
+
+mod allocator;
 mod vga;
 mod port;
 mod pic;
 mod idt;
 mod memory;
 
-use ternary_core::Tryte;
+use ternary_core::{Trit, Tryte};
+use mathematics::{mul_tryte, consensus, scale};
+use hardware_abstraction::{TernaryALU, SoftwareALU};
+use ai_runtime::{TernaryTensor, TernaryLinear};
 use core::panic::PanicInfo;
 
 #[no_mangle]
@@ -23,24 +29,81 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
     vga::write_str("  Rusty Penguin v1.0.0 -- bare metal kernel\n", vga::Color::Green);
     vga::write_str("  Binary hardware. Ternary mind.\n\n", vga::Color::Amber);
 
-    // Phase 1: interrupts
+    // Init heap before anything that allocates
+    allocator::init();
+
+    // Interrupts + PIC
     unsafe { pic::init(); }
     idt::init();
     idt::enable();
     vga::write_str("  [interrupts: OK]\n", vga::Color::Green);
 
-    // Memory map from multiboot2
+    // Memory map
     vga::write_str("  [memory map]\n", vga::Color::Cyan);
     memory::print_map(mb2);
     vga::write_byte(b'\n', vga::Color::White);
 
-    // Ternary demo
+    // Ternary mathematics
+    vga::write_str("  [mathematics]\n", vga::Color::Cyan);
     let a = Tryte::from_i32(42);
     let b = Tryte::from_i32(-7);
-    let c = a + b;
-    vga::write_str("  ternary: 42 + (-7) = ", vga::Color::Cyan);
-    vga::write_i32(c.to_i32());
-    vga::write_str("\n\n  keyboard active -- type below\n  > ", vga::Color::White);
+    vga::write_str("    42 + (-7)  = ", vga::Color::White);
+    vga::write_i32((a + b).to_i32());
+    vga::write_byte(b'\n', vga::Color::White);
+
+    let (lo, _hi) = mul_tryte(Tryte::from_i32(6), Tryte::from_i32(7));
+    vga::write_str("    6 * 7      = ", vga::Color::White);
+    vga::write_i32(lo.to_i32());
+    vga::write_byte(b'\n', vga::Color::White);
+
+    vga::write_str("    scale(100,-)= ", vga::Color::White);
+    vga::write_i32(scale(Tryte::from_i32(100), Trit::Neg).to_i32());
+    vga::write_byte(b'\n', vga::Color::White);
+
+    let con = consensus(Trit::Pos, Trit::Pos);
+    vga::write_str("    cons(+,+)  = ", vga::Color::White);
+    vga::write_str(match con { Trit::Pos => "Pos", Trit::Neg => "Neg", Trit::Zero => "Zero" }, vga::Color::Green);
+    vga::write_byte(b'\n', vga::Color::White);
+
+    // Hardware ALU
+    let alu = SoftwareALU;
+    let r = alu.add(Tryte::from_i32(9), Tryte::from_i32(3));
+    vga::write_str("    ALU 9+3    = ", vga::Color::White);
+    vga::write_i32(r.to_i32());
+    vga::write_byte(b'\n', vga::Color::White);
+    vga::write_byte(b'\n', vga::Color::White);
+
+    // Sparse AI inference — TernaryLinear layer on bare metal
+    vga::write_str("  [sparse AI inference]\n", vga::Color::Cyan);
+    let mut layer = TernaryLinear::new(4, 2);
+    // Hand-set weights: row0=[+,0,-,+], row1=[-,+,0,-]
+    layer.weights.data = alloc::vec![
+        Trit::Pos,  Trit::Zero, Trit::Neg, Trit::Pos,
+        Trit::Neg,  Trit::Pos,  Trit::Zero, Trit::Neg,
+    ];
+    let input = TernaryTensor::new(
+        alloc::vec![Trit::Pos, Trit::Zero, Trit::Neg, Trit::Pos],
+        alloc::vec![4],
+    );
+    let (output, total_ops, skipped) = layer.forward(&input);
+    vga::write_str("    input:  [+, 0, -, +]\n", vga::Color::White);
+    vga::write_str("    output: [", vga::Color::White);
+    for (i, t) in output.data.iter().enumerate() {
+        if i > 0 { vga::write_str(", ", vga::Color::White); }
+        vga::write_str(match t { Trit::Pos => "+", Trit::Neg => "-", Trit::Zero => "0" }, vga::Color::Amber);
+    }
+    vga::write_str("]\n    ops: ", vga::Color::White);
+    vga::write_i32(total_ops as i32);
+    vga::write_str(" total, ", vga::Color::White);
+    vga::write_i32(skipped as i32);
+    let pct = (skipped * 100) / total_ops.max(1);
+    vga::write_str(" skipped (", vga::Color::White);
+    vga::write_i32(pct as i32);
+    vga::write_str("% zero-dormancy)\n    heap used: ", vga::Color::White);
+    vga::write_i32(allocator::used() as i32);
+    vga::write_str(" bytes\n\n", vga::Color::White);
+
+    vga::write_str("  keyboard active -- type below\n  > ", vga::Color::White);
 
     loop {
         unsafe { core::arch::asm!("hlt", options(nostack)); }
