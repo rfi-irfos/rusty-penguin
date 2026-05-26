@@ -12,7 +12,7 @@ echo "[build] Rusty Penguin ISO builder"
 
 # 1. Compile init and shell binaries
 echo "[build] Compiling init and shell crates..."
-cargo build --release -p init -p shell --manifest-path "$REPO_ROOT/Cargo.toml" 2>&1
+cargo build --release -p init -p shell -p desktop --manifest-path "$REPO_ROOT/Cargo.toml" 2>&1
 INIT_BIN="$REPO_ROOT/target/release/init"
 PSH_BIN="$REPO_ROOT/target/release/shell"
 
@@ -56,6 +56,14 @@ chmod +x "$INITRAMFS_DIR/init"
 cp "$PSH_BIN" "$INITRAMFS_DIR/bin/psh"
 cp "$PSH_BIN" "$INITRAMFS_DIR/usr/local/bin/psh"
 chmod +x "$INITRAMFS_DIR/bin/psh" "$INITRAMFS_DIR/usr/local/bin/psh"
+
+# desktop binary
+DESKTOP_BIN="$REPO_ROOT/target/release/desktop"
+if [ -f "$DESKTOP_BIN" ]; then
+    cp "$DESKTOP_BIN" "$INITRAMFS_DIR/bin/desktop"
+    cp "$DESKTOP_BIN" "$INITRAMFS_DIR/usr/local/bin/desktop"
+    chmod +x "$INITRAMFS_DIR/bin/desktop" "$INITRAMFS_DIR/usr/local/bin/desktop"
+fi
 
 # Bundle shared libraries required by the dynamically-linked init binary
 for lib in libc.so.6 libgcc_s.so.1; do

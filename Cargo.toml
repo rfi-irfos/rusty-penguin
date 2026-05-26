@@ -8,6 +8,7 @@ members = [
     "scheduler",
     "shell",
     "init",
+    "desktop",
 ]
 
 [workspace.package]

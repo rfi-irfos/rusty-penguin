@@ -44,6 +44,23 @@ fn main() {
     println!("  Architecture: ternary-first · scheduler: active/dormant/suppressed");
     println!("  Type 'help' for commands.\n");
 
+    // Try to launch the graphical desktop first.
+    // If /dev/fb0 is not available, desktop will exec psh itself.
+    let desktop_candidates = ["/bin/desktop", "/usr/local/bin/desktop"];
+    for desktop in &desktop_candidates {
+        if std::path::Path::new(desktop).exists() {
+            let status = Command::new(desktop).status();
+            match status {
+                Ok(s) => {
+                    println!("[init] desktop exited: {}", s);
+                    // Fall through to psh below
+                }
+                Err(e) => eprintln!("[init] failed to exec {}: {}", desktop, e),
+            }
+            break;
+        }
+    }
+
     // Spawn psh — if the binary is embedded alongside init, use it directly.
     // During development on a host system, fall back to the host psh path.
     let psh_candidates = [
