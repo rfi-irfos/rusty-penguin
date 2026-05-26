@@ -38,6 +38,10 @@ fn log(msg: &str) {
     if let Ok(mut f) = OpenOptions::new().create(true).append(true).open("/tmp/desktop.log") {
         let _ = writeln!(f, "{}", msg);
     }
+    // Mirror to serial so host captures it via -serial file:/tmp/rusty-penguin.log
+    if let Ok(mut s) = OpenOptions::new().write(true).open("/dev/ttyS0") {
+        let _ = writeln!(s, "[input] {}", msg);
+    }
 }
 
 unsafe fn is_pointer_device(fd: i32) -> bool {

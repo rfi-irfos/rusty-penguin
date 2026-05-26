@@ -9,16 +9,33 @@ use std::io::{self, Write};
 use std::os::unix::io::AsRawFd;
 use std::process::Command;
 
+fn slog(msg: &str) {
+    use std::io::Write;
+    // Write to serial port — captured by QEMU's -serial file:/tmp/rusty-penguin.log on host
+    if let Ok(mut f) = std::fs::OpenOptions::new().write(true).open("/dev/ttyS0") {
+        let _ = writeln!(f, "[init] {}", msg);
+    }
+    eprintln!("[init] {}", msg);
+}
+
 // Load a kernel module from a .ko or .ko.zst file using finit_module syscall.
 fn insmod(path: &str) {
+    slog(&format!("insmod {}", path));
     match std::fs::File::open(path) {
         Ok(f) => unsafe {
             let ret = libc::syscall(libc::SYS_finit_module, f.as_raw_fd(), b"\0".as_ptr(), 0i32);
             if ret != 0 {
-                eprintln!("[init] insmod {}: errno {}", path, *libc::__errno_location());
+                let errno = *libc::__errno_location();
+                slog(&format!("insmod {} FAILED errno={}", path, errno));
+                eprintln!("[init] insmod {}: errno {}", path, errno);
+            } else {
+                slog(&format!("insmod {} OK", path));
             }
         },
-        Err(e) => eprintln!("[init] insmod {}: {}", path, e),
+        Err(e) => {
+            slog(&format!("insmod {} open error: {}", path, e));
+            eprintln!("[init] insmod {}: {}", path, e);
+        }
     }
 }
 
@@ -51,8 +68,26 @@ fn main() {
     mount_fs("devtmpfs","/dev",  "devtmpfs",MsFlags::MS_NOSUID);
     mount_fs("tmpfs",   "/tmp",  "tmpfs",   MsFlags::MS_NOSUID | MsFlags::MS_NODEV);
 
+    // Serial port is now available (devtmpfs mounted) — announce boot
+    slog("=== Rusty Penguin init starting ===");
+
+    // Log what /dev/input looks like before insmod
+    let pre_events: Vec<String> = (0..8).filter_map(|i| {
+        let p = format!("/dev/input/event{}", i);
+        if std::path::Path::new(&p).exists() { Some(p) } else { None }
+    }).collect();
+    slog(&format!("pre-insmod /dev/input devices: {:?}", pre_events));
+
     // Load VirtIO input driver (provides /dev/input/event* for virtio-tablet-pci)
     insmod("/lib/modules/virtio_input.ko.zst");
+
+    // Log /dev/input after insmod
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    let post_events: Vec<String> = (0..8).filter_map(|i| {
+        let p = format!("/dev/input/event{}", i);
+        if std::path::Path::new(&p).exists() { Some(p) } else { None }
+    }).collect();
+    slog(&format!("post-insmod /dev/input devices: {:?}", post_events));
 
     // Set hostname
     sethostname("rusty-penguin").unwrap_or_else(|e| eprintln!("[init] sethostname: {}", e));
@@ -63,16 +98,21 @@ fn main() {
 
     // Try to launch the graphical desktop first.
     // If /dev/fb0 is not available, desktop will exec psh itself.
+    slog("launching desktop");
     let desktop_candidates = ["/bin/desktop", "/usr/local/bin/desktop"];
     for desktop in &desktop_candidates {
         if std::path::Path::new(desktop).exists() {
             let status = Command::new(desktop).status();
             match status {
                 Ok(s) => {
+                    slog(&format!("desktop exited: {}", s));
                     println!("[init] desktop exited: {}", s);
                     // Fall through to psh below
                 }
-                Err(e) => eprintln!("[init] failed to exec {}: {}", desktop, e),
+                Err(e) => {
+                    slog(&format!("failed to exec {}: {}", desktop, e));
+                    eprintln!("[init] failed to exec {}: {}", desktop, e);
+                }
             }
             break;
         }

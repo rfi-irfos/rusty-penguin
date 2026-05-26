@@ -15,6 +15,13 @@ use std::time::Duration;
 use fb::Framebuffer;
 use input::MouseState;
 
+fn slog(msg: &str) {
+    use std::io::Write;
+    if let Ok(mut s) = std::fs::OpenOptions::new().write(true).open("/dev/ttyS0") {
+        let _ = writeln!(s, "[desktop] {}", msg);
+    }
+}
+
 // Silence the kernel framebuffer console by unbinding it from fb0.
 // Safer than KDSETMODE(KD_GRAPHICS) which also mutes keyboard input.
 fn unbind_fbcon() {
@@ -189,17 +196,23 @@ fn exec_psh() -> ! {
 }
 
 fn main() {
+    slog("=== desktop starting ===");
+
     // Attempt to open framebuffer
     let mut fb = match Framebuffer::open() {
         Ok(f) => f,
         Err(e) => {
+            slog(&format!("framebuffer unavailable: {}", e));
             eprintln!("[desktop] framebuffer unavailable ({}), exec psh", e);
             exec_psh();
         }
     };
 
+    slog(&format!("framebuffer: {}x{}x{}", fb.width, fb.height, fb.bpp));
+
     // Unbind fbcon so kernel console stops writing over our pixels
     unbind_fbcon();
+    slog("fbcon unbound");
 
     let width = fb.width as i32;
     let height = fb.height as i32;
