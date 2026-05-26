@@ -125,6 +125,20 @@ INITRD="$ISO_DIR/initrd.img"
 (cd "$INITRAMFS_DIR" && find . | cpio -o -H newc 2>/dev/null | gzip -9 > "$INITRD")
 echo "[build] initrd.img: $(du -sh "$INITRD" | cut -f1)"
 
+# 3a. Build user-psh (bare-metal ring-3 shell — must be before kernel)
+echo "[build] Building user-psh..."
+(cd "$REPO_ROOT/user-psh" && cargo +nightly build --release \
+    -Zjson-target-spec \
+    -Zbuild-std=core,compiler_builtins \
+    -Zbuild-std-features=compiler-builtins-mem 2>&1)
+USER_PSH_ELF="$REPO_ROOT/user-psh/target/x86_64-user-psh/release/user-psh"
+if [ ! -f "$USER_PSH_ELF" ]; then
+    echo "[build] ERROR: user-psh ELF not found at $USER_PSH_ELF"
+    exit 1
+fi
+cp "$USER_PSH_ELF" "$REPO_ROOT/kernel/user-psh.elf"
+echo "[build] user-psh.elf: $(du -sh "$REPO_ROOT/kernel/user-psh.elf" | cut -f1)"
+
 # 3b. Build bare-metal kernel ELF
 echo "[build] Building bare-metal kernel..."
 (cd "$REPO_ROOT/kernel" && cargo +nightly build --release \

@@ -89,6 +89,21 @@ pub fn ticks() -> u64 {
     unsafe { TICKS }
 }
 
+// Keyboard ring buffer — filled by IRQ, drained by sys_read
+const KBD_BUF_SIZE: usize = 256;
+static mut KBD_BUF:  [u8; KBD_BUF_SIZE] = [0; KBD_BUF_SIZE];
+static mut KBD_HEAD: usize = 0;  // next write index
+static mut KBD_TAIL: usize = 0;  // next read index
+
+pub fn kbd_get() -> Option<u8> {
+    unsafe {
+        if KBD_HEAD == KBD_TAIL { return None; }
+        let ch = KBD_BUF[KBD_TAIL];
+        KBD_TAIL = (KBD_TAIL + 1) % KBD_BUF_SIZE;
+        Some(ch)
+    }
+}
+
 extern "x86-interrupt" fn irq_timer(_f: InterruptFrame) {
     unsafe {
         TICKS += 1;
@@ -99,14 +114,24 @@ extern "x86-interrupt" fn irq_timer(_f: InterruptFrame) {
 extern "x86-interrupt" fn irq_keyboard(_f: InterruptFrame) {
     let sc = unsafe { port::inb(0x60) };
     match sc {
-        0x0E => vga::backspace(),
+        0x0E => {
+            // Backspace: undo last buffered char (if any), then update display
+            unsafe {
+                if KBD_HEAD != KBD_TAIL {
+                    KBD_HEAD = (KBD_HEAD + KBD_BUF_SIZE - 1) % KBD_BUF_SIZE;
+                    vga::backspace();
+                }
+            }
+        }
         _ => {
             if let Some(ch) = sc_to_ascii(sc) {
-                if ch == b'\n' {
-                    vga::write_byte(b'\n', vga::Color::White);
-                    vga::write_str("> ", vga::Color::Amber);
-                } else {
-                    vga::write_byte(ch, vga::Color::White);
+                vga::write_byte(ch, vga::Color::White);
+                unsafe {
+                    let next = (KBD_HEAD + 1) % KBD_BUF_SIZE;
+                    if next != KBD_TAIL {  // drop if full
+                        KBD_BUF[KBD_HEAD] = ch;
+                        KBD_HEAD = next;
+                    }
                 }
             }
         }

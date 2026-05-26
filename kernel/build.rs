@@ -4,6 +4,7 @@ fn main() {
 
     println!("cargo:rerun-if-changed=src/boot.s");
     println!("cargo:rerun-if-changed=linker.ld");
+    println!("cargo:rerun-if-changed=user-psh.elf");
 
     let boot_s = format!("{}/src/boot.s", manifest);
     let boot_o = format!("{}/boot.o", out);

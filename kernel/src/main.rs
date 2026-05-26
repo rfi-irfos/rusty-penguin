@@ -14,6 +14,7 @@ mod pmm;
 mod memory;
 mod vmm;
 mod syscall;
+mod elf;
 
 use ternary_core::{Trit, Tryte};
 use mathematics::{mul_tryte, consensus, scale};
@@ -23,47 +24,8 @@ use core::panic::PanicInfo;
 
 extern "C" { static kernel_end: u8; }
 
-// ── Tiny ring-3 user binary (hand-assembled x86-64) ─────────────────────────
-//
-// Loaded at USER_CODE_VIRT (0x401000).  The binary is position-independent:
-//   lea rsi, [rip + offset_to_msg]
-//
-// Source:
-//   mov rax, 1          ; sys_write
-//   mov rdi, 1          ; fd=stdout
-//   lea rsi, [rip+0x17] ; → msg (23 bytes past end of lea)
-//   mov rdx, 20         ; len
-//   syscall
-//   mov rax, 60         ; sys_exit
-//   xor rdi, rdi
-//   syscall
-//   jmp -2              ; safety spin
-//   msg: "hello from ring 3!\n\0"
-static USER_BIN: &[u8] = &[
-    // mov rax, 1
-    0x48, 0xC7, 0xC0, 0x01, 0x00, 0x00, 0x00,
-    // mov rdi, 1
-    0x48, 0xC7, 0xC7, 0x01, 0x00, 0x00, 0x00,
-    // lea rsi, [rip+0x17]  (inst ends at byte 21; msg at byte 44; 44-21=23=0x17)
-    0x48, 0x8D, 0x35, 0x17, 0x00, 0x00, 0x00,
-    // mov rdx, 20  (0x14)
-    0x48, 0xC7, 0xC2, 0x14, 0x00, 0x00, 0x00,
-    // syscall
-    0x0F, 0x05,
-    // mov rax, 60  (0x3C)
-    0x48, 0xC7, 0xC0, 0x3C, 0x00, 0x00, 0x00,
-    // xor rdi, rdi
-    0x48, 0x31, 0xFF,
-    // syscall
-    0x0F, 0x05,
-    // jmp -2 (spin)
-    0xEB, 0xFE,
-    // msg: "hello from ring 3!\n\0"
-    b'h', b'e', b'l', b'l', b'o', b' ',
-    b'f', b'r', b'o', b'm', b' ',
-    b'r', b'i', b'n', b'g', b' ',
-    b'3', b'!', b'\n', 0x00,
-];
+// user-psh ELF — built by iso/build.sh, embedded at compile time
+static USER_PSH_ELF: &[u8] = include_bytes!("../user-psh.elf");
 
 #[no_mangle]
 pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
@@ -158,49 +120,31 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
     // ── Ring-3 launch ────────────────────────────────────────────────────────
     vga::write_str("  [ring-3 launch]\n", vga::Color::Cyan);
 
-    // 1. Map user code page (execute, user, not writable)
-    let code_frame = pmm::alloc_frame().expect("no frame for user code");
-    unsafe {
-        core::ptr::copy_nonoverlapping(USER_BIN.as_ptr(), code_frame as *mut u8, USER_BIN.len());
-        vmm::map_page(vmm::USER_CODE_VIRT, code_frame,
-                      vmm::PTE_PRESENT | vmm::PTE_USER);
-    }
-
-    // 2. Map user stack pages (writable, user), grows down from USER_STACK_TOP
-    for i in 0..vmm::USER_STACK_PAGES {
-        let frame = pmm::alloc_frame().expect("no frame for user stack");
-        let virt = vmm::USER_STACK_TOP - ((i + 1) * 4096) as u64;
-        unsafe {
-            vmm::map_page(virt, frame, vmm::PTE_PRESENT | vmm::PTE_WRITABLE | vmm::PTE_USER);
-        }
-    }
-
-    vga::write_str("    code @ 0x", vga::Color::DimGray);
-    vga::write_hex(vmm::USER_CODE_VIRT, vga::Color::DimGray);
+    // Load user-psh ELF into identity-mapped address space (virt == phys)
+    let entry = elf::load(USER_PSH_ELF).expect("ELF parse failed");
+    vga::write_str("    psh @ 0x", vga::Color::DimGray);
+    vga::write_hex(entry, vga::Color::DimGray);
     vga::write_str("  stack @ 0x", vga::Color::DimGray);
     vga::write_hex(vmm::USER_STACK_TOP, vga::Color::DimGray);
     vga::write_byte(b'\n', vga::Color::White);
 
-    // 3. IRETQ into ring-3
-    //    Frame on stack (top → bottom):  SS RSP RFLAGS CS RIP
+    // IRETQ into ring-3 — stack + code both live in PTE_USER huge pages
     unsafe {
         let user_rsp: u64 = vmm::USER_STACK_TOP - 8;
-        let user_rip: u64 = vmm::USER_CODE_VIRT;
         core::arch::asm!(
-            // push IRETQ frame
             "mov rax, 0x1B",    // SS = UDATA_SEL | 3
             "push rax",
-            "push {rsp}",       // RSP
+            "push {rsp}",
             "pushfq",
             "pop rax",
             "or  rax, 0x202",   // RFLAGS: IF=1, reserved=1
             "push rax",
             "mov rax, 0x23",    // CS = UCODE_SEL | 3
             "push rax",
-            "push {rip}",       // RIP
+            "push {rip}",
             "iretq",
             rsp = in(reg) user_rsp,
-            rip = in(reg) user_rip,
+            rip = in(reg) entry,
             options(noreturn),
         );
     }

@@ -98,13 +98,32 @@ core::arch::global_asm!(
 #[no_mangle]
 pub extern "C" fn syscall_handler(nr: u64, arg1: u64, arg2: u64, arg3: u64) -> u64 {
     match nr {
+        0 => {
+            // sys_read(fd, buf_virt, len) — blocks with sti+hlt until '\n'
+            let len = (arg3 as usize).min(256);
+            if len == 0 { return 0; }
+            let buf = arg2 as *mut u8;
+            let mut i = 0;
+            while i < len {
+                let ch = loop {
+                    unsafe {
+                        core::arch::asm!("sti", options(nostack));
+                        core::arch::asm!("hlt", options(nostack));
+                    }
+                    if let Some(c) = crate::idt::kbd_get() { break c; }
+                };
+                unsafe { *buf.add(i) = ch; }
+                i += 1;
+                if ch == b'\n' { break; }
+            }
+            i as u64
+        }
         1 => {
             // sys_write(fd, buf_virt, len)
             let len = (arg3 as usize).min(256);
             if len == 0 { return 0; }
             let ptr = arg2 as *const u8;
             let bytes = unsafe { core::slice::from_raw_parts(ptr, len) };
-            vga::write_str("  [user] ", vga::Color::Amber);
             for &b in bytes {
                 if b == 0 { break; }
                 vga::write_byte(b, vga::Color::White);
@@ -113,8 +132,7 @@ pub extern "C" fn syscall_handler(nr: u64, arg1: u64, arg2: u64, arg3: u64) -> u
         }
         60 => {
             // sys_exit(code)
-            vga::write_str("\n  [user exited — ring-3 demo complete]\n", vga::Color::Green);
-            vga::write_str("  > ", vga::Color::White);
+            vga::write_str("\n  [psh exited]\n", vga::Color::Green);
             loop { unsafe { core::arch::asm!("hlt", options(nostack)); } }
         }
         _ => u64::MAX,

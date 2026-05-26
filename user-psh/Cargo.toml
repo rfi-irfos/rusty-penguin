@@ -1,0 +1,18 @@
+[workspace]
+
+[package]
+name = "user-psh"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "user-psh"
+path = "src/main.rs"
+
+[profile.dev]
+panic = "abort"
+opt-level = 2
+
+[profile.release]
+panic = "abort"
+strip = false

@@ -74,7 +74,8 @@ pub fn extend_identity_map(limit_mib: usize) {
         for i in 1..=entries {
             if read64(pd, i) & PTE_PRESENT == 0 {
                 let phys = i as u64 * 2 * 1024 * 1024;
-                write64(pd, i, phys | PTE_HUGE | PTE_WRITABLE | PTE_PRESENT);
+                // PTE_USER: ring-3 psh code and stack live in this identity-mapped range
+                write64(pd, i, phys | PTE_HUGE | PTE_WRITABLE | PTE_USER | PTE_PRESENT);
             }
         }
         flush_tlb();
