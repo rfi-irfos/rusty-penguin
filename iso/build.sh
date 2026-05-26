@@ -129,7 +129,7 @@ echo "[build] initrd.img: $(du -sh "$INITRD" | cut -f1)"
 echo "[build] Building bare-metal kernel..."
 (cd "$REPO_ROOT/kernel" && cargo +nightly build --release \
     -Zjson-target-spec \
-    -Zbuild-std=core,compiler_builtins \
+    -Zbuild-std=core,compiler_builtins,alloc \
     -Zbuild-std-features=compiler-builtins-mem \
     --target x86_64-rusty-penguin.json 2>&1)
 KERNEL_ELF="$REPO_ROOT/target/x86_64-rusty-penguin/release/kernel"

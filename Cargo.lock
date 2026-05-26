@@ -6,16 +6,8 @@ version = 4
 name = "ai-runtime"
 version = "0.1.0"
 dependencies = [
- "anyhow",
- "log",
  "ternary-core",
 ]
-
-[[package]]
-name = "anyhow"
-version = "1.0.102"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "bitflags"
@@ -62,12 +54,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 
 [[package]]
-name = "log"
-version = "0.4.30"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "616ec5685824bcc94416c6d4a7a446eea774a31efd7062c8480ba6fd06d7a6e5"
-
-[[package]]
 name = "mathematics"
 version = "0.1.0"
 dependencies = [
@@ -107,6 +93,9 @@ dependencies = [
 name = "rusty-penguin-kernel"
 version = "0.1.0"
 dependencies = [
+ "ai-runtime",
+ "hardware-abstraction",
+ "mathematics",
  "ternary-core",
 ]
 

@@ -9,7 +9,7 @@ static HEAP_START: AtomicUsize = AtomicUsize::new(0);
 static HEAP_NEXT:  AtomicUsize = AtomicUsize::new(0);
 
 pub fn init() {
-    let start = unsafe { core::ptr::addr_of!(HEAP) as usize };
+    let start = core::ptr::addr_of!(HEAP) as usize;
     HEAP_START.store(start, Ordering::Relaxed);
     HEAP_NEXT.store(start, Ordering::Relaxed);
 }

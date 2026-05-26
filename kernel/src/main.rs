@@ -9,6 +9,8 @@ mod vga;
 mod port;
 mod pic;
 mod idt;
+mod gdt;
+mod pmm;
 mod memory;
 
 use ternary_core::{Trit, Tryte};
@@ -16,6 +18,8 @@ use mathematics::{mul_tryte, consensus, scale};
 use hardware_abstraction::{TernaryALU, SoftwareALU};
 use ai_runtime::{TernaryTensor, TernaryLinear};
 use core::panic::PanicInfo;
+
+extern "C" { static kernel_end: u8; }
 
 #[no_mangle]
 pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
@@ -29,19 +33,43 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
     vga::write_str("  Rusty Penguin v1.0.0 -- bare metal kernel\n", vga::Color::Green);
     vga::write_str("  Binary hardware. Ternary mind.\n\n", vga::Color::Amber);
 
-    // Init heap before anything that allocates
+    // Heap for Vec/Box in ai-runtime
     allocator::init();
 
-    // Interrupts + PIC
+    // Proper GDT (null | kcode | kdata | TSS) + load TSS
+    gdt::init();
+    vga::write_str("  [GDT+TSS: OK]\n", vga::Color::Green);
+
+    // PIC + IDT
     unsafe { pic::init(); }
     idt::init();
     idt::enable();
     vga::write_str("  [interrupts: OK]\n", vga::Color::Green);
 
-    // Memory map
+    // Physical memory map
     vga::write_str("  [memory map]\n", vga::Color::Cyan);
     memory::print_map(mb2);
     vga::write_byte(b'\n', vga::Color::White);
+
+    // Bitmap page allocator
+    let kend = core::ptr::addr_of!(kernel_end) as u64;
+    pmm::init(mb2, kend);
+    let (free, total) = pmm::stats();
+    vga::write_str("  [PMM] ", vga::Color::Cyan);
+    vga::write_i32((free / 256) as i32);
+    vga::write_str(" MiB free / ", vga::Color::White);
+    vga::write_i32((total / 256) as i32);
+    vga::write_str(" MiB total  (", vga::Color::White);
+    vga::write_i32(free as i32);
+    vga::write_str(" frames)\n", vga::Color::White);
+
+    // Test: allocate + free one frame
+    if let Some(frame) = pmm::alloc_frame() {
+        vga::write_str("  [PMM] alloc test: 0x", vga::Color::Green);
+        vga::write_hex(frame, vga::Color::Green);
+        pmm::free_frame(frame);
+        vga::write_str(" [freed]\n\n", vga::Color::Green);
+    }
 
     // Ternary mathematics
     vga::write_str("  [mathematics]\n", vga::Color::Cyan);
@@ -73,10 +101,9 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
     vga::write_byte(b'\n', vga::Color::White);
     vga::write_byte(b'\n', vga::Color::White);
 
-    // Sparse AI inference — TernaryLinear layer on bare metal
+    // Sparse AI inference
     vga::write_str("  [sparse AI inference]\n", vga::Color::Cyan);
     let mut layer = TernaryLinear::new(4, 2);
-    // Hand-set weights: row0=[+,0,-,+], row1=[-,+,0,-]
     layer.weights.data = alloc::vec![
         Trit::Pos,  Trit::Zero, Trit::Neg, Trit::Pos,
         Trit::Neg,  Trit::Pos,  Trit::Zero, Trit::Neg,
