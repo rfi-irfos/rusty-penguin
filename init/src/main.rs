@@ -79,7 +79,8 @@ fn main() {
     slog(&format!("pre-insmod /dev/input devices: {:?}", pre_events));
 
     // Load VirtIO input driver (provides /dev/input/event* for virtio-tablet-pci)
-    insmod("/lib/modules/virtio_input.ko.zst");
+    // Must be uncompressed .ko — finit_module takes raw ELF, not .ko.zst
+    insmod("/lib/modules/virtio_input.ko");
 
     // Log /dev/input after insmod
     std::thread::sleep(std::time::Duration::from_millis(200));

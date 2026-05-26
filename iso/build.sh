@@ -79,12 +79,19 @@ cp "$LD_SRC" "$INITRAMFS_DIR/lib64/ld-linux-x86-64.so.2"
 ln -sf /lib64/ld-linux-x86-64.so.2 "$INITRAMFS_DIR/lib/ld-linux-x86-64.so.2" 2>/dev/null || true
 
 # Bundle virtio_input kernel module (needed for virtio-tablet-pci mouse in QEMU)
+# IMPORTANT: finit_module syscall requires raw ELF, not zstd-compressed .ko.zst.
+# Decompress here so init can load it directly without modprobe.
 KVER=$(uname -r)
 VIRTIO_MOD=$(find /lib/modules/$KVER -name "virtio_input.ko*" 2>/dev/null | head -1)
 if [ -n "$VIRTIO_MOD" ]; then
     mkdir -p "$INITRAMFS_DIR/lib/modules"
-    cp "$VIRTIO_MOD" "$INITRAMFS_DIR/lib/modules/virtio_input.ko.zst"
-    echo "[build] bundled virtio_input: $(basename $VIRTIO_MOD)"
+    if [[ "$VIRTIO_MOD" == *.zst ]]; then
+        zstd -d "$VIRTIO_MOD" -o "$INITRAMFS_DIR/lib/modules/virtio_input.ko" --force
+        echo "[build] bundled virtio_input (decompressed from .zst): $(basename $VIRTIO_MOD)"
+    else
+        cp "$VIRTIO_MOD" "$INITRAMFS_DIR/lib/modules/virtio_input.ko"
+        echo "[build] bundled virtio_input: $(basename $VIRTIO_MOD)"
+    fi
 else
     echo "[build] WARNING: virtio_input module not found"
 fi
