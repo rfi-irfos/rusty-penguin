@@ -7,3 +7,4 @@
 iso/boot/
 iso/initrd.img
 iso/vmlinuz-netboot
+iso/vmlinuz-*

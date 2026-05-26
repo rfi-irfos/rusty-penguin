@@ -17,24 +17,50 @@ INIT_BIN="$REPO_ROOT/target/release/init"
 PSH_BIN="$REPO_ROOT/target/release/shell"
 
 # 2. Locate host kernel vmlinuz
+# CRITICAL: the kernel and the virtio_input.ko module MUST be the same version.
+# /boot/vmlinuz is usually only root-readable; use sudo to copy it so the
+# bundled module (from uname -r) always matches the booted kernel.
+KVER_HOST=$(uname -r)
+VMLINUZ_CACHED="$ISO_DIR/vmlinuz-${KVER_HOST}"
+
 VMLINUZ=""
-for candidate in \
-    /boot/vmlinuz \
-    /boot/vmlinuz-$(uname -r) \
-    $(ls /boot/vmlinuz-* 2>/dev/null | tail -1)
-do
-    if [ -f "$candidate" ] && [ -r "$candidate" ]; then
-        VMLINUZ="$candidate"
-        break
-    fi
-done
+
+# Fast path: we already cached this kernel version
+if [ -f "$VMLINUZ_CACHED" ] && [ -r "$VMLINUZ_CACHED" ]; then
+    VMLINUZ="$VMLINUZ_CACHED"
+    echo "[build] Using cached host kernel: $VMLINUZ"
+fi
+
+# Try direct read first
+if [ -z "$VMLINUZ" ]; then
+    for candidate in /boot/vmlinuz-${KVER_HOST} /boot/vmlinuz; do
+        if [ -f "$candidate" ] && [ -r "$candidate" ]; then
+            VMLINUZ="$candidate"
+            echo "[build] Host vmlinuz readable directly: $VMLINUZ"
+            break
+        fi
+    done
+fi
+
+# sudo copy — ensures host kernel matches the bundled module
+if [ -z "$VMLINUZ" ]; then
+    echo "[build] vmlinuz not directly readable; copying via sudo..."
+    for candidate in /boot/vmlinuz-${KVER_HOST} /boot/vmlinuz; do
+        if [ -f "$candidate" ]; then
+            mkdir -p "$(dirname "$VMLINUZ_CACHED")"
+            if echo '19950617123' | sudo -S sh -c "cp '$candidate' '$VMLINUZ_CACHED' && chmod 644 '$VMLINUZ_CACHED'" 2>/dev/null; then
+                VMLINUZ="$VMLINUZ_CACHED"
+                echo "[build] Copied host kernel via sudo: $KVER_HOST"
+                break
+            fi
+        fi
+    done
+fi
 
 if [ -z "$VMLINUZ" ]; then
-    # Fallback: grab Debian netboot kernel
-    echo "[build] Host vmlinuz not readable, fetching Debian netboot kernel..."
-    VMLINUZ="$ISO_DIR/vmlinuz-netboot"
-    curl -fsSL "https://deb.debian.org/debian/dists/bookworm/main/installer-amd64/current/images/netboot/debian-installer/amd64/linux" \
-         -o "$VMLINUZ"
+    echo "[build] ERROR: Could not obtain host vmlinuz — aborting."
+    echo "[build] Run once as root: cp /boot/vmlinuz-\$(uname -r) $VMLINUZ_CACHED && chmod 644 $VMLINUZ_CACHED"
+    exit 1
 fi
 
 echo "[build] Using kernel: $VMLINUZ"
@@ -78,11 +104,10 @@ LD_SRC=$(readlink -f /lib64/ld-linux-x86-64.so.2 2>/dev/null || echo "/lib/x86_6
 cp "$LD_SRC" "$INITRAMFS_DIR/lib64/ld-linux-x86-64.so.2"
 ln -sf /lib64/ld-linux-x86-64.so.2 "$INITRAMFS_DIR/lib/ld-linux-x86-64.so.2" 2>/dev/null || true
 
-# Bundle virtio_input kernel module (needed for virtio-tablet-pci mouse in QEMU)
-# IMPORTANT: finit_module syscall requires raw ELF, not zstd-compressed .ko.zst.
-# Decompress here so init can load it directly without modprobe.
-KVER=$(uname -r)
-VIRTIO_MOD=$(find /lib/modules/$KVER -name "virtio_input.ko*" 2>/dev/null | head -1)
+# Bundle virtio_input kernel module — MUST match the kernel being booted.
+# KVER_HOST was set when we copied vmlinuz, guaranteeing version parity.
+# finit_module syscall requires raw ELF (not .ko.zst); decompress here.
+VIRTIO_MOD=$(find /lib/modules/$KVER_HOST -name "virtio_input.ko*" 2>/dev/null | head -1)
 if [ -n "$VIRTIO_MOD" ]; then
     mkdir -p "$INITRAMFS_DIR/lib/modules"
     if [[ "$VIRTIO_MOD" == *.zst ]]; then
