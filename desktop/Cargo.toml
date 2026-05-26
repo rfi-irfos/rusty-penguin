@@ -9,4 +9,5 @@ path = "src/main.rs"
 
 [dependencies]
 nix = { version = "0.27", features = ["fs", "ioctl", "mman", "signal", "process"] }
+libc = "0.2"
 ternary-core = { path = "../ternary-core" }
