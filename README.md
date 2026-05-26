@@ -4,7 +4,10 @@
 
 **The first bootable operating system in Rust built around ternary logic as a first-class computational primitive.**
 
-Boots to a graphical desktop today. Runs on standard Linux hardware (userspace track). Building toward a native bare-metal ternary kernel.
+Two boot tracks. Both working today:
+
+- **Userspace track** — GRUB → Linux kernel → Rust init (PID 1) → framebuffer desktop + psh
+- **Bare-metal track** — GRUB → our own x86_64 kernel (no Linux, no libc) → VGA output + keyboard + ternary arithmetic on bare metal
 
 Built by [RFI-IRFOS](https://github.com/rfi-irfos) as part of the [Ternary Intelligence Stack](https://ternlang.com).
 
@@ -57,11 +60,11 @@ Everything from the framebuffer driver to the font renderer to the PTY multiplex
 | `init` | PID 1 init: mounts, VirtIO, hostname, spawns desktop | Working |
 | `desktop` | Graphical WM, framebuffer renderer, PTY terminals | Working |
 | `iso/` | Bootable ISO builder (grub-mkrescue) | Working |
+| `kernel/` | Bare-metal x86_64 kernel — multiboot2, VGA, interrupts, keyboard, memory map | **Working** (Phase 1) |
 | `compiler/` | ternlang-core lexer/parser/VM | Planned |
 | `filesystem/` | Ternary-annotated VFS | Planned |
 | `ipc/` | Actor model (TernNode, Unix sockets) | Planned |
 | `memory/` | TernPage: ternary-annotated mmap pages | Planned |
-| `kernel/` | Bare-metal x86_64-unknown-none kernel | Research |
 
 ---
 
@@ -113,8 +116,28 @@ psh> scale 100 -1     # one-trit transform (negate)
 **Track 1: Userspace personality (today)**
 Stock Linux kernel + minimal initramfs containing the desktop, psh, and Rust-only init. Boots in under 3 seconds in QEMU. The entire OS stack — init, WM, terminal, AI runtime — is compiled Rust.
 
-**Track 2: Bare-metal kernel (long-term)**
-`x86_64-unknown-none` no_std Rust kernel with Multiboot2 boot, ternary scheduler, BET bytecode VM. Target: replace the Linux kernel entirely with a ternary-first execution model.
+**Track 2: Bare-metal kernel (working — Phase 1)**
+No Linux. No libc. No OS of any kind. GRUB loads our ELF, the boot stub transitions from 32-bit protected mode to 64-bit long mode, hands off to `kernel_main`. VGA driver writes directly to 0xB8000. 8259 PIC remapped, timer + keyboard IRQs live. PS/2 keyboard echoes to screen with full backspace and newline handling. Multiboot2 memory map parsed (511 MiB available). `ternary-core` arithmetic runs on bare metal as the first computation.
+
+Select "Rusty Penguin (bare metal)" at the GRUB menu.
+
+```
+Rusty Penguin v1.0.0 -- bare metal kernel
+Binary hardware. Ternary mind.
+
+[interrupts: OK]
+[memory map]
+  0x0 + 27F KiB
+  0x100000 + 7FBB0 KiB
+  total available: 1FF MiB
+
+ternary: 42 + (-7) = 35
+
+keyboard active -- type below
+> _
+```
+
+Next: physical page allocator → virtual memory → processes → psh on bare metal.
 
 ---
 
