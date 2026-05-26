@@ -192,6 +192,20 @@ impl Framebuffer {
         }
     }
 
+    // Draw an 8×8 bitmap at 2× scale (16×16 output).
+    pub fn draw_bitmap_2x(&mut self, x: u32, y: u32, bitmap: &[u8; 8], fg: u32, bg: u32) {
+        for row in 0..8u32 {
+            let byte = bitmap[row as usize];
+            for col in 0..8u32 {
+                let color = if (byte >> (7 - col)) & 1 != 0 { fg } else { bg };
+                self.set_pixel(x + col * 2,     y + row * 2,     color);
+                self.set_pixel(x + col * 2 + 1, y + row * 2,     color);
+                self.set_pixel(x + col * 2,     y + row * 2 + 1, color);
+                self.set_pixel(x + col * 2 + 1, y + row * 2 + 1, color);
+            }
+        }
+    }
+
     pub fn draw_char(&mut self, x: u32, y: u32, ch: char, fg: u32, bg: u32) {
         let idx = (ch as u32).wrapping_sub(0x20);
         if idx >= 95 { return; }

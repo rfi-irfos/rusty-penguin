@@ -40,6 +40,19 @@ const WHITE: u32   = 0xF8FAFC;
 const AMBER: u32   = 0xFBBF24;
 const CURSOR: u32  = 0xF8FAFC;
 
+// Dingir (𒀭) — Sumerian divine determinative, rendered as 8-pointed star
+#[rustfmt::skip]
+const DINGIR: [u8; 8] = [
+    0x18, // . . . # # . . .
+    0x5A, // . # . # # . # .
+    0x3C, // . . # # # # . .
+    0xFF, // # # # # # # # #
+    0x3C, // . . # # # # . .
+    0x5A, // . # . # # . # .
+    0x18, // . . . # # . . .
+    0x00, // . . . . . . . .
+];
+
 const CURSOR_W: u32 = 12;
 const CURSOR_H: u32 = 20;
 
@@ -115,7 +128,8 @@ fn draw_desktop_bg(fb: &mut Framebuffer) {
     let tb_y = h - 28;
     fb.fill_rect(0, tb_y, w, 28, TASKBAR);
     fb.fill_rect(0, tb_y, w, 1, BORDER);
-    fb.draw_str(12, tb_y + 10, "RUSTY PENGUIN", GREEN, TASKBAR);
+    fb.draw_bitmap_2x(4, tb_y + 6, &DINGIR, GREEN, TASKBAR);
+    fb.draw_str(28, tb_y + 10, "RUSTY PENGUIN", GREEN, TASKBAR);
 
     // Tux ASCII art
     let art = [

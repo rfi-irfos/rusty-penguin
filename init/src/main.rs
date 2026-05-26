@@ -66,6 +66,7 @@ fn main() {
     mount_fs("proc",    "/proc", "proc",    MsFlags::MS_NOSUID | MsFlags::MS_NODEV | MsFlags::MS_NOEXEC);
     mount_fs("sysfs",   "/sys",  "sysfs",   MsFlags::MS_NOSUID | MsFlags::MS_NODEV | MsFlags::MS_NOEXEC);
     mount_fs("devtmpfs","/dev",  "devtmpfs",MsFlags::MS_NOSUID);
+    mount_fs("devpts",  "/dev/pts","devpts",MsFlags::MS_NOSUID | MsFlags::MS_NOEXEC);
     mount_fs("tmpfs",   "/tmp",  "tmpfs",   MsFlags::MS_NOSUID | MsFlags::MS_NODEV);
 
     // Serial port is now available (devtmpfs mounted) — announce boot
