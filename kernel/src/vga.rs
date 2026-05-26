@@ -19,9 +19,18 @@ pub enum Color {
     DimGray = 0x08,
 }
 
-// Global cursor position (column only — we scroll line by line)
 static mut CUR_ROW: usize = 0;
 static mut CUR_COL: usize = 0;
+
+fn hw_cursor_sync() {
+    let pos = unsafe { CUR_ROW * COLS + CUR_COL };
+    unsafe {
+        crate::port::outb(0x3D4, 0x0F);
+        crate::port::outb(0x3D5, (pos & 0xFF) as u8);
+        crate::port::outb(0x3D4, 0x0E);
+        crate::port::outb(0x3D5, ((pos >> 8) & 0xFF) as u8);
+    }
+}
 
 #[inline(always)]
 fn vga() -> *mut u16 {
@@ -38,6 +47,7 @@ pub fn clear() {
         unsafe { vga().add(i).write_volatile(blank); }
     }
     unsafe { CUR_ROW = 0; CUR_COL = 0; }
+    hw_cursor_sync();
 }
 
 fn scroll_up() {
@@ -73,6 +83,7 @@ pub fn write_byte(b: u8, color: Color) {
             scroll_up();
             CUR_ROW = ROWS - 1;
         }
+        hw_cursor_sync();
     }
 }
 
@@ -93,6 +104,7 @@ pub fn backspace() {
             return;
         }
         vga().add(CUR_ROW * COLS + CUR_COL).write_volatile(cell(b' ', Color::Black));
+        hw_cursor_sync();
     }
 }
 
