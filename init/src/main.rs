@@ -6,7 +6,21 @@ use nix::mount::{mount, MsFlags};
 use nix::sys::reboot::{reboot, RebootMode};
 use nix::unistd::sethostname;
 use std::io::{self, Write};
+use std::os::unix::io::AsRawFd;
 use std::process::Command;
+
+// Load a kernel module from a .ko or .ko.zst file using finit_module syscall.
+fn insmod(path: &str) {
+    match std::fs::File::open(path) {
+        Ok(f) => unsafe {
+            let ret = libc::syscall(libc::SYS_finit_module, f.as_raw_fd(), b"\0".as_ptr(), 0i32);
+            if ret != 0 {
+                eprintln!("[init] insmod {}: errno {}", path, *libc::__errno_location());
+            }
+        },
+        Err(e) => eprintln!("[init] insmod {}: {}", path, e),
+    }
+}
 
 const BANNER: &str = r#"
   ____            _           ____                        _
@@ -36,6 +50,9 @@ fn main() {
     mount_fs("sysfs",   "/sys",  "sysfs",   MsFlags::MS_NOSUID | MsFlags::MS_NODEV | MsFlags::MS_NOEXEC);
     mount_fs("devtmpfs","/dev",  "devtmpfs",MsFlags::MS_NOSUID);
     mount_fs("tmpfs",   "/tmp",  "tmpfs",   MsFlags::MS_NOSUID | MsFlags::MS_NODEV);
+
+    // Load VirtIO input driver (provides /dev/input/event* for virtio-tablet-pci)
+    insmod("/lib/modules/virtio_input.ko.zst");
 
     // Set hostname
     sethostname("rusty-penguin").unwrap_or_else(|e| eprintln!("[init] sethostname: {}", e));

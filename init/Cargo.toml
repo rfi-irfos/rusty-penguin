@@ -13,3 +13,4 @@ path = "src/main.rs"
 ternary-core = { path = "../ternary-core" }
 scheduler = { path = "../scheduler" }
 nix = { version = "0.27", features = ["process", "mount", "reboot", "hostname"] }
+libc = "0.2"

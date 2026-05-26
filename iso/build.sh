@@ -78,6 +78,17 @@ LD_SRC=$(readlink -f /lib64/ld-linux-x86-64.so.2 2>/dev/null || echo "/lib/x86_6
 cp "$LD_SRC" "$INITRAMFS_DIR/lib64/ld-linux-x86-64.so.2"
 ln -sf /lib64/ld-linux-x86-64.so.2 "$INITRAMFS_DIR/lib/ld-linux-x86-64.so.2" 2>/dev/null || true
 
+# Bundle virtio_input kernel module (needed for virtio-tablet-pci mouse in QEMU)
+KVER=$(uname -r)
+VIRTIO_MOD=$(find /lib/modules/$KVER -name "virtio_input.ko*" 2>/dev/null | head -1)
+if [ -n "$VIRTIO_MOD" ]; then
+    mkdir -p "$INITRAMFS_DIR/lib/modules"
+    cp "$VIRTIO_MOD" "$INITRAMFS_DIR/lib/modules/virtio_input.ko.zst"
+    echo "[build] bundled virtio_input: $(basename $VIRTIO_MOD)"
+else
+    echo "[build] WARNING: virtio_input module not found"
+fi
+
 INITRD="$ISO_DIR/initrd.img"
 (cd "$INITRAMFS_DIR" && find . | cpio -o -H newc 2>/dev/null | gzip -9 > "$INITRD")
 echo "[build] initrd.img: $(du -sh "$INITRD" | cut -f1)"
