@@ -6,7 +6,6 @@ mod font;
 mod input;
 mod wm;
 
-use std::os::unix::io::AsRawFd;
 use std::os::unix::process::CommandExt;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
@@ -16,28 +15,12 @@ use std::time::Duration;
 use fb::Framebuffer;
 use input::MouseState;
 
-// Stop the kernel fbcon driver from writing text over our pixels.
-// Must be called once we own the framebuffer.
-fn set_vt_graphics() {
-    const KDSETMODE: u64 = 0x4B3A;
-    const KD_GRAPHICS: u64 = 0x01;
-    for path in &["/dev/tty0", "/dev/tty1", "/dev/tty"] {
-        if let Ok(f) = std::fs::OpenOptions::new().read(true).write(true).open(path) {
-            unsafe { libc::ioctl(f.as_raw_fd(), KDSETMODE, KD_GRAPHICS); }
-            return;
-        }
-    }
-}
-
-// Restore text mode before handing off to psh.
-fn set_vt_text() {
-    const KDSETMODE: u64 = 0x4B3A;
-    const KD_TEXT: u64 = 0x00;
-    for path in &["/dev/tty0", "/dev/tty1", "/dev/tty"] {
-        if let Ok(f) = std::fs::OpenOptions::new().read(true).write(true).open(path) {
-            unsafe { libc::ioctl(f.as_raw_fd(), KDSETMODE, KD_TEXT); }
-            return;
-        }
+// Silence the kernel framebuffer console by unbinding it from fb0.
+// Safer than KDSETMODE(KD_GRAPHICS) which also mutes keyboard input.
+fn unbind_fbcon() {
+    for vtcon in &["vtcon0", "vtcon1"] {
+        let path = format!("/sys/class/vtconsole/{}/bind", vtcon);
+        std::fs::write(&path, "0\n").ok();
     }
 }
 
@@ -127,17 +110,17 @@ fn draw_initial_desktop(fb: &mut Framebuffer) {
     // "RUSTY PENGUIN" label in taskbar
     fb.draw_str(12, tb_y + 10, "RUSTY PENGUIN", GREEN, TASKBAR);
 
-    // Penguin ASCII art — centered
+    // Penguin ASCII art (Tux) — centered
     let art = [
-        "  .---.  ",
-        " ( o o ) ",
-        "  ( u )  ",
-        " /     \\ ",
-        "|       |",
-        " \\_____/ ",
-        "   | |   ",
+        "   .--.   ",
+        "  |o_o |  ",
+        "  |:_/ |  ",
+        " //   \\ \\ ",
+        "(|     | )",
+        " \\'\\_ _/'\\",
+        " \\___)=(_/",
     ];
-    let art_w = 9u32 * 8;
+    let art_w = 10u32 * 8;
     let art_h = 7u32 * 8;
     let art_x = (w.saturating_sub(art_w)) / 2;
     let art_y = (h.saturating_sub(art_h + 80)) / 2;
@@ -195,7 +178,6 @@ fn read_rtc_time() -> String {
 }
 
 fn exec_psh() -> ! {
-    set_vt_text();
     let candidates = ["/bin/psh", "/usr/local/bin/psh"];
     for psh in &candidates {
         if std::path::Path::new(psh).exists() {
@@ -212,13 +194,12 @@ fn main() {
         Ok(f) => f,
         Err(e) => {
             eprintln!("[desktop] framebuffer unavailable ({}), exec psh", e);
-            set_vt_text();
             exec_psh();
         }
     };
 
-    // Take ownership: tell the kernel to stop printing text onto our framebuffer
-    set_vt_graphics();
+    // Unbind fbcon so kernel console stops writing over our pixels
+    unbind_fbcon();
 
     let width = fb.width as i32;
     let height = fb.height as i32;
