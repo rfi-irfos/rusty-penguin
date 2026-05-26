@@ -62,19 +62,34 @@ pub unsafe fn map_page(virt: u64, phys: u64, flags: u64) -> bool {
 }
 
 /// Extend the boot identity map from 2 MiB up to `limit_mib` MiB (max 1022).
-/// Boot.s only maps PD[0] (0–2 MiB huge page).  We add PD[1..N] as additional
-/// 2 MiB huge pages so PMM frames above 2 MiB are reachable.
+/// Boot.s sets PML4[0]/PDPT[0]/PD[0] with only PRESENT|WRITABLE — no USER bit.
+/// The x86 page table walk checks U/S at EVERY level, so all three levels must
+/// have PTE_USER before ring-3 can touch anything in this range.
 pub fn extend_identity_map(limit_mib: usize) {
     unsafe {
         let pml4 = cr3();
-        let pdpt = read64(pml4, 0) & !0xFFF;
-        let pd   = read64(pdpt,  0) & !0xFFF;
 
-        let entries = (limit_mib / 2).min(511);  // PD[0] already set, fill [1..entries]
+        // Fix PML4[0]: add PTE_USER (boot.s used 0x3 — present+writable only)
+        let pml4_e = read64(pml4, 0);
+        write64(pml4, 0, pml4_e | PTE_USER);
+        let pdpt = pml4_e & !0xFFF;
+
+        // Fix PDPT[0]: same issue
+        let pdpt_e = read64(pdpt, 0);
+        write64(pdpt, 0, pdpt_e | PTE_USER);
+        let pd = pdpt_e & !0xFFF;
+
+        // Fix PD[0]: boot.s set this huge page with 0x83 (no USER)
+        let pd0 = read64(pd, 0);
+        if pd0 & PTE_PRESENT != 0 {
+            write64(pd, 0, pd0 | PTE_USER);
+        }
+
+        // Fill PD[1..N] as new 2 MiB USER huge pages
+        let entries = (limit_mib / 2).min(511);
         for i in 1..=entries {
             if read64(pd, i) & PTE_PRESENT == 0 {
                 let phys = i as u64 * 2 * 1024 * 1024;
-                // PTE_USER: ring-3 psh code and stack live in this identity-mapped range
                 write64(pd, i, phys | PTE_HUGE | PTE_WRITABLE | PTE_USER | PTE_PRESENT);
             }
         }
