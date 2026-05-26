@@ -1,8 +1,8 @@
 // Input handling — evdev via /dev/input/event*
-// Handles both relative (PS/2 mouse) and absolute (USB tablet) devices.
-// USB tablet preferred: no grab required, absolute coordinates.
+// Scans all event devices and picks the first pointer (EV_ABS or EV_REL) device.
 use std::fs::{File, OpenOptions};
-use std::io::Read;
+use std::io::{Read, Write};
+use std::os::fd::AsRawFd;
 use std::sync::{Arc, Mutex};
 
 pub struct MouseState {
@@ -27,52 +27,83 @@ const ABS_Y: u16 = 0x01;
 const BTN_LEFT: u16  = 0x110;
 const BTN_RIGHT: u16 = 0x111;
 
-// QEMU USB tablet reports ABS coordinates in 0..32767
+// QEMU virtio-tablet reports ABS coordinates in 0..32767
 const TABLET_MAX: i32 = 32767;
 
-fn open_event_device() -> Option<File> {
-    // In QEMU: event0 = PS/2 keyboard, event1 = PS/2 mouse (psmouse built-in).
-    // Try event1 first so we don't get stuck reading keyboard events.
-    let candidates = [
-        "/dev/input/event1",
-        "/dev/input/event2",
-        "/dev/input/event3",
-        "/dev/input/event0",
-        "/dev/input/mice",   // fallback: requires mousedev module
-    ];
-    for path in &candidates {
-        if let Ok(f) = OpenOptions::new().read(true).open(path) {
-            eprintln!("[desktop] input: opened {}", path);
-            return Some(f);
-        }
+// EVIOCGBIT(0, 1) — returns bitmask of supported event types in first byte.
+// bit 2 = EV_REL (relative mouse), bit 3 = EV_ABS (absolute tablet)
+const EVIOCGBIT_TYPES: u64 = 0x80014520;
+
+fn log(msg: &str) {
+    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open("/tmp/desktop.log") {
+        let _ = writeln!(f, "{}", msg);
     }
-    eprintln!("[desktop] input: no device found");
+}
+
+unsafe fn is_pointer_device(fd: i32) -> bool {
+    let mut bits = [0u8; 1];
+    if libc::ioctl(fd, EVIOCGBIT_TYPES, bits.as_mut_ptr()) >= 0 {
+        let has_rel = (bits[0] >> (EV_REL as u32)) & 1 != 0;
+        let has_abs = (bits[0] >> (EV_ABS as u32)) & 1 != 0;
+        has_rel || has_abs
+    } else {
+        false
+    }
+}
+
+fn open_event_device() -> Option<File> {
+    log("=== input: scanning event devices ===");
+    // Wait up to 3 seconds for virtio_input to finish creating devices
+    for attempt in 0..30 {
+        for i in 0..8 {
+            let path = format!("/dev/input/event{}", i);
+            match OpenOptions::new().read(true).open(&path) {
+                Ok(f) => {
+                    let is_ptr = unsafe { is_pointer_device(f.as_raw_fd()) };
+                    log(&format!("  event{}: exists, is_pointer={}", i, is_ptr));
+                    if is_ptr {
+                        log(&format!("  -> using event{}", i));
+                        return Some(f);
+                    }
+                }
+                Err(_) => {}
+            }
+        }
+        if attempt == 0 {
+            log("  no pointer device yet, retrying...");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    log("  FAILED: no pointer device found after 3s");
     None
 }
 
 pub fn mouse_thread(state: Arc<Mutex<MouseState>>, width: i32, height: i32) {
     let mut file = match open_event_device() {
         Some(f) => f,
-        None => {
-            eprintln!("[desktop] input: no input device found");
-            return;
-        }
+        None => return,
     };
 
     let mut buf = [0u8; INPUT_EVENT_SIZE];
     let mut pending_x: Option<i32> = None;
     let mut pending_y: Option<i32> = None;
     let mut abs_mode = false;
+    let mut event_count: u64 = 0;
 
     loop {
         if file.read_exact(&mut buf).is_err() {
+            log("input: read_exact failed, stopping");
             break;
         }
 
-        // Parse input_event fields (little-endian, native byte order)
         let ev_type  = u16::from_ne_bytes([buf[16], buf[17]]);
         let ev_code  = u16::from_ne_bytes([buf[18], buf[19]]);
         let ev_value = i32::from_ne_bytes([buf[20], buf[21], buf[22], buf[23]]);
+
+        event_count += 1;
+        if event_count <= 20 || event_count % 100 == 0 {
+            log(&format!("  ev #{}: type={} code={} val={}", event_count, ev_type, ev_code, ev_value));
+        }
 
         match ev_type {
             EV_ABS => {
@@ -84,7 +115,6 @@ pub fn mouse_thread(state: Arc<Mutex<MouseState>>, width: i32, height: i32) {
                 }
             }
             EV_REL => {
-                // Relative movement (PS/2 mouse fallback)
                 let mut s = state.lock().unwrap();
                 match ev_code {
                     REL_X => s.x = (s.x + ev_value).max(0).min(width  - 1),
@@ -101,7 +131,6 @@ pub fn mouse_thread(state: Arc<Mutex<MouseState>>, width: i32, height: i32) {
                 }
             }
             EV_SYN => {
-                // Flush accumulated absolute position
                 if abs_mode {
                     let mut s = state.lock().unwrap();
                     if let Some(x) = pending_x.take() { s.x = x; }
