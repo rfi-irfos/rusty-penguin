@@ -219,6 +219,21 @@ fn main() {
         });
     }
 
+    // Keyboard fallback: any keypress launches psh.
+    // Lets the user reach the shell to read /tmp/desktop.log when mouse is unavailable.
+    thread::spawn(move || {
+        use std::io::Read;
+        let mut buf = [0u8; 1];
+        if std::io::stdin().lock().read_exact(&mut buf).is_ok() {
+            let candidates = ["/bin/psh", "/usr/local/bin/psh"];
+            for psh in &candidates {
+                if std::path::Path::new(psh).exists() {
+                    let _ = std::process::Command::new(psh).exec();
+                }
+            }
+        }
+    });
+
     // Initial desktop draw
     draw_initial_desktop(&mut fb);
 
