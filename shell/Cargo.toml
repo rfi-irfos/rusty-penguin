@@ -9,5 +9,6 @@ description.workspace = true
 
 [dependencies]
 ternary-core = { path = "../ternary-core" }
+mathematics = { path = "../mathematics" }
 scheduler = { path = "../scheduler" }
 ai-runtime = { path = "../ai-runtime" }

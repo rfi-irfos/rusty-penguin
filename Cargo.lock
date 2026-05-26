@@ -37,6 +37,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "init"
+version = "0.1.0"
+dependencies = [
+ "nix",
+ "scheduler",
+ "ternary-core",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.186"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -51,6 +60,9 @@ checksum = "616ec5685824bcc94416c6d4a7a446eea774a31efd7062c8480ba6fd06d7a6e5"
 [[package]]
 name = "mathematics"
 version = "0.1.0"
+dependencies = [
+ "ternary-core",
+]
 
 [[package]]
 name = "nix"
@@ -94,6 +106,7 @@ name = "shell"
 version = "0.1.0"
 dependencies = [
  "ai-runtime",
+ "mathematics",
  "scheduler",
  "ternary-core",
 ]

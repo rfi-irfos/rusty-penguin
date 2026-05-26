@@ -1,0 +1,15 @@
+[package]
+name = "init"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Rusty Penguin PID 1 — ternary init process"
+
+[[bin]]
+name = "init"
+path = "src/main.rs"
+
+[dependencies]
+ternary-core = { path = "../ternary-core" }
+scheduler = { path = "../scheduler" }
+nix = { version = "0.27", features = ["process", "mount", "reboot", "hostname"] }

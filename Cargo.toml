@@ -2,9 +2,12 @@
 resolver = "2"
 members = [
     "ternary-core",
-    "shell",
+    "mathematics",
+    "hardware-abstraction",
+    "ai-runtime",
     "scheduler",
-    "mathematics", "hardware-abstraction", "ai-runtime",
+    "shell",
+    "init",
 ]
 
 [workspace.package]
