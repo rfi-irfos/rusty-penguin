@@ -1,5 +1,3 @@
-// Rusty Penguin Desktop — framebuffer GUI with PTY terminal windows
-
 mod fb;
 mod font;
 mod input;
@@ -7,8 +5,6 @@ mod keyboard;
 mod term;
 mod wm;
 
-use std::os::unix::process::CommandExt;
-use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -24,37 +20,33 @@ fn slog(msg: &str) {
 }
 
 fn unbind_fbcon() {
-    for vtcon in &["vtcon0", "vtcon1"] {
-        let path = format!("/sys/class/vtconsole/{}/bind", vtcon);
-        std::fs::write(&path, "0\n").ok();
+    for v in &["vtcon0", "vtcon1"] {
+        std::fs::write(format!("/sys/class/vtconsole/{}/bind", v), "0\n").ok();
     }
 }
 
-// ---- Color palette ----
-const BG: u32      = 0x0F172A;
-const TASKBAR: u32 = 0x1E293B;
-const BORDER: u32  = 0x334155;
-const GREEN: u32   = 0x4ADE80;
-const DIM: u32     = 0x475569;
-const WHITE: u32   = 0xF8FAFC;
-const AMBER: u32   = 0xFBBF24;
-const CURSOR: u32  = 0xF8FAFC;
-
-// Dingir (𒀭) — Sumerian divine determinative, rendered as 8-pointed star
-#[rustfmt::skip]
-const DINGIR: [u8; 8] = [
-    0x18, // . . . # # . . .
-    0x5A, // . # . # # . # .
-    0x3C, // . . # # # # . .
-    0xFF, // # # # # # # # #
-    0x3C, // . . # # # # . .
-    0x5A, // . # . # # . # .
-    0x18, // . . . # # . . .
-    0x00, // . . . . . . . .
-];
+// ---- Palette ----
+const BG:      u32 = 0x0B1220;
+const TASKBAR: u32 = 0x111827;
+const BORDER:  u32 = 0x1E293B;
+const GREEN:   u32 = 0x4ADE80;
+const DIM:     u32 = 0x334155;
+const DIMMER:  u32 = 0x1E293B;
+const WHITE:   u32 = 0xF8FAFC;
+const AMBER:   u32 = 0xFBBF24;
+const BLUE:    u32 = 0x60A5FA;
+const CURSOR:  u32 = 0xF8FAFC;
+const TASKBTN_BG:  u32 = 0x1E293B;
+const TASKBTN_ACT: u32 = 0x334155;
 
 const CURSOR_W: u32 = 12;
 const CURSOR_H: u32 = 20;
+
+// Dingir (𒀭) — 8-pointed star
+#[rustfmt::skip]
+const DINGIR: [u8; 8] = [
+    0x18, 0x5A, 0x3C, 0xFF, 0x3C, 0x5A, 0x18, 0x00,
+];
 
 #[rustfmt::skip]
 const CURSOR_SHAPE: [[bool; 12]; 20] = [
@@ -83,9 +75,8 @@ const CURSOR_SHAPE: [[bool; 12]; 20] = [
 fn save_cursor_bg(fb: &Framebuffer, x: i32, y: i32, buf: &mut [u32]) {
     for row in 0..CURSOR_H as i32 {
         for col in 0..CURSOR_W as i32 {
+            let px = x + col; let py = y + row;
             let idx = (row * CURSOR_W as i32 + col) as usize;
-            let px = x + col;
-            let py = y + row;
             buf[idx] = if px >= 0 && py >= 0 && (px as u32) < fb.width && (py as u32) < fb.height {
                 fb.get_pixel(px as u32, py as u32)
             } else { BG };
@@ -96,8 +87,7 @@ fn save_cursor_bg(fb: &Framebuffer, x: i32, y: i32, buf: &mut [u32]) {
 fn restore_cursor_bg(fb: &mut Framebuffer, x: i32, y: i32, buf: &[u32]) {
     for row in 0..CURSOR_H as i32 {
         for col in 0..CURSOR_W as i32 {
-            let px = x + col;
-            let py = y + row;
+            let px = x + col; let py = y + row;
             if px >= 0 && py >= 0 && (px as u32) < fb.width && (py as u32) < fb.height {
                 fb.set_pixel(px as u32, py as u32, buf[(row * CURSOR_W as i32 + col) as usize]);
             }
@@ -109,8 +99,7 @@ fn draw_cursor(fb: &mut Framebuffer, x: i32, y: i32) {
     for row in 0..CURSOR_H as i32 {
         for col in 0..CURSOR_W as i32 {
             if CURSOR_SHAPE[row as usize][col as usize] {
-                let px = x + col;
-                let py = y + row;
+                let px = x + col; let py = y + row;
                 if px >= 0 && py >= 0 && (px as u32) < fb.width && (py as u32) < fb.height {
                     fb.set_pixel(px as u32, py as u32, CURSOR);
                 }
@@ -119,10 +108,36 @@ fn draw_cursor(fb: &mut Framebuffer, x: i32, y: i32) {
     }
 }
 
+// ---- Desktop background ----
 fn draw_desktop_bg(fb: &mut Framebuffer) {
-    let w = fb.width;
-    let h = fb.height;
+    let w = fb.width; let h = fb.height;
     fb.fill_rect(0, 0, w, h, BG);
+    // Subtle grid
+    let mut gx = 0u32;
+    while gx < w { fb.fill_rect(gx, 0, 1, h.saturating_sub(28), 0x0D1628); gx += 40; }
+    let mut gy = 0u32;
+    while gy < h.saturating_sub(28) { fb.fill_rect(0, gy, w, 1, 0x0D1628); gy += 40; }
+
+    // Tux art — centered
+    let art = [
+        "   .--.   ",
+        "  |o_o |  ",
+        "  |:_/ |  ",
+        " //   \\ \\ ",
+        "(|     | )",
+        " \\'\\_._/'\\",
+        " \\___)=(_/",
+    ];
+    let art_w = 10u32 * 8;
+    let art_h = 7u32 * 8;
+    let art_x = w.saturating_sub(art_w) / 2;
+    let art_y = (h.saturating_sub(28 + art_h + 72)) / 2;
+    for (i, line) in art.iter().enumerate() {
+        fb.draw_str(art_x, art_y + i as u32 * 8, line, AMBER, BG);
+    }
+    let tag = "Binary hardware. Ternary mind.";
+    let tag_w = tag.len() as u32 * 8;
+    fb.draw_str(w.saturating_sub(tag_w) / 2, art_y + art_h + 8, tag, DIM, BG);
 
     // Taskbar
     let tb_y = h - 28;
@@ -130,40 +145,96 @@ fn draw_desktop_bg(fb: &mut Framebuffer) {
     fb.fill_rect(0, tb_y, w, 1, BORDER);
     fb.draw_bitmap_2x(4, tb_y + 6, &DINGIR, GREEN, TASKBAR);
     fb.draw_str(28, tb_y + 10, "RUSTY PENGUIN", GREEN, TASKBAR);
-
-    // Tux ASCII art
-    let art = [
-        "   .--.   ",
-        "  |o_o |  ",
-        "  |:_/ |  ",
-        " //   \\ \\ ",
-        "(|     | )",
-        " \\'\\_ _/'\\",
-        " \\___)=(_/",
-    ];
-    let art_w = 10u32 * 8;
-    let art_h = 7u32 * 8;
-    let art_x = (w.saturating_sub(art_w)) / 2;
-    let art_y = (h.saturating_sub(art_h + 80)) / 2;
-    for (i, line) in art.iter().enumerate() {
-        fb.draw_str(art_x, art_y + i as u32 * 8, line, AMBER, BG);
-    }
-
-    let tag = "Binary hardware. Ternary mind.";
-    let tag_w = tag.len() as u32 * 8;
-    let tag_x = (w.saturating_sub(tag_w)) / 2;
-    fb.draw_str(tag_x, art_y + art_h + 8, tag, DIM, BG);
 }
 
-fn draw_psh_button(fb: &mut Framebuffer, bx: u32, by: u32) {
-    fb.fill_rect(bx, by, 80, 24, GREEN);
-    fb.fill_rect(bx + 1, by + 1, 78, 22, TASKBAR);
-    fb.draw_str(bx + 12, by + 8, "[ psh ]", GREEN, TASKBAR);
+// ---- Launcher buttons ----
+struct Launcher {
+    label: &'static str,
+    cmd:   Option<&'static str>, // psh command pre-seeded on open
+    title: &'static str,
+    color: u32,
+}
+
+const LAUNCHERS: &[Launcher] = &[
+    Launcher { label: " psh ",  cmd: None,              title: "psh — Penguin Shell",   color: GREEN },
+    Launcher { label: " ps  ",  cmd: Some("ps\n"),      title: "ps — Processes",        color: BLUE  },
+    Launcher { label: " ai  ",  cmd: Some("ai 32\n"),   title: "ai — Ternary Inference", color: AMBER },
+    Launcher { label: " trit",  cmd: Some("trit 42\n"), title: "trit — Ternary Calc",   color: 0xC084FC },
+];
+
+fn launcher_rects(fb_w: u32, fb_h: u32) -> Vec<(u32, u32, u32, u32)> {
+    let btn_w: u32 = 52;
+    let btn_h: u32 = 20;
+    let gap:   u32 = 8;
+    let n = LAUNCHERS.len() as u32;
+    let total_w = n * btn_w + (n - 1) * gap;
+    let start_x = fb_w.saturating_sub(total_w) / 2;
+    let y = fb_h - 28 - btn_h - 12;
+    (0..n).map(|i| (start_x + i * (btn_w + gap), y, btn_w, btn_h)).collect()
+}
+
+fn draw_launchers(fb: &mut Framebuffer) {
+    let rects = launcher_rects(fb.width, fb.height);
+    for (l, (x, y, w, h)) in LAUNCHERS.iter().zip(rects.iter()) {
+        fb.fill_rect(*x, *y, *w, *h, DIMMER);
+        fb.fill_rect(*x, *y, *w, 1,  l.color);
+        fb.fill_rect(*x, *y, 1,  *h, l.color);
+        fb.fill_rect(*x + *w - 1, *y, 1, *h, l.color);
+        fb.fill_rect(*x, *y + *h - 1, *w, 1, l.color);
+        fb.draw_str(*x + 2, *y + 6, l.label, l.color, DIMMER);
+    }
+}
+
+fn launcher_hit(fb_w: u32, fb_h: u32, mx: i32, my: i32) -> Option<usize> {
+    let rects = launcher_rects(fb_w, fb_h);
+    for (i, (x, y, w, h)) in rects.iter().enumerate() {
+        if mx >= *x as i32 && mx < (*x + *w) as i32
+            && my >= *y as i32 && my < (*y + *h) as i32
+        {
+            return Some(i);
+        }
+    }
+    None
+}
+
+// ---- Taskbar minimized buttons ----
+fn taskbar_min_btn_rect(fb_w: u32, fb_h: u32, idx: usize) -> (i32, i32, i32, i32) {
+    let x = 160 + idx as i32 * 96;
+    let y = (fb_h - 22) as i32;
+    (x, y, 88, 18)
+}
+
+fn draw_taskbar_min_buttons(fb: &mut Framebuffer, term_wins: &[TermWin]) {
+    let w = fb.width; let h = fb.height;
+    let mut slot = 0;
+    for tw in term_wins.iter() {
+        if !tw.win.minimized { continue; }
+        let (x, y, bw, bh) = taskbar_min_btn_rect(w, h, slot);
+        if x + bw >= w as i32 { break; }
+        fb.fill_rect(x as u32, y as u32, bw as u32, bh as u32, TASKBTN_ACT);
+        fb.fill_rect(x as u32, y as u32, bw as u32, 1, BORDER);
+        let max_chars = ((bw - 4) / 8) as usize;
+        let label: String = tw.win.title.chars().take(max_chars).collect();
+        fb.draw_str((x + 2) as u32, (y + 5) as u32, &label, WHITE, TASKBTN_ACT);
+        slot += 1;
+    }
+}
+
+fn taskbar_min_btn_hit(fb_w: u32, fb_h: u32, term_wins: &[TermWin], mx: i32, my: i32) -> Option<usize> {
+    let mut slot = 0;
+    for (i, tw) in term_wins.iter().enumerate() {
+        if !tw.win.minimized { continue; }
+        let (x, y, bw, bh) = taskbar_min_btn_rect(fb_w, fb_h, slot);
+        if mx >= x && mx < x + bw && my >= y && my < y + bh {
+            return Some(i);
+        }
+        slot += 1;
+    }
+    None
 }
 
 fn draw_taskbar_clock(fb: &mut Framebuffer, time_str: &str) {
-    let h = fb.height;
-    let w = fb.width;
+    let h = fb.height; let w = fb.width;
     let tb_y = h - 28;
     let text_w = time_str.len() as u32 * 8;
     let tx = w.saturating_sub(text_w + 12);
@@ -184,22 +255,53 @@ fn read_rtc_time() -> String {
     "--:--:--".to_string()
 }
 
-fn exec_psh() -> ! {
-    let candidates = ["/bin/psh", "/usr/local/bin/psh"];
-    for psh in &candidates {
-        if std::path::Path::new(psh).exists() {
-            let _ = Command::new(psh).exec();
-        }
+// ---- Full scene recomposite ----
+fn recomposite(fb: &mut Framebuffer, term_wins: &mut Vec<TermWin>) {
+    draw_desktop_bg(fb);
+    draw_launchers(fb);
+    draw_taskbar_min_buttons(fb, term_wins);
+    let n = term_wins.len();
+    for (i, tw) in term_wins.iter_mut().enumerate() {
+        if tw.win.minimized { continue; }
+        wm::draw_window(fb, &tw.win, i == n - 1);
+        let (ox, oy) = wm::content_origin(&tw.win);
+        tw.term.render(fb, ox as u32, oy as u32);
+        tw.term.dirty = false;
+        tw.win_dirty = false;
     }
-    eprintln!("[desktop] psh not found");
-    loop { std::thread::sleep(Duration::from_secs(60)); }
 }
 
-// ---- Terminal window state ----
+// ---- Terminal window ----
 struct TermWin {
-    win: wm::Window,
-    term: term::Terminal,
-    win_dirty: bool,  // window chrome needs full redraw
+    win:         wm::Window,
+    term:        term::Terminal,
+    win_dirty:   bool,
+    initial_cmd: Option<Vec<u8>>,
+}
+
+fn open_term(width: i32, height: i32, idx: usize, l: &Launcher) -> Option<TermWin> {
+    match term::Terminal::spawn() {
+        Ok(t) => {
+            let cascade = idx as i32 * 20;
+            let wx = ((width  - wm::WINDOW_W) / 2 + cascade).max(0).min(width  - wm::WINDOW_W);
+            let wy = ((height - wm::WINDOW_H - 28) / 2 + cascade).max(0).min(height - wm::WINDOW_H - 28);
+            slog(&format!("terminal '{}' opened at {}x{}", l.title, wx, wy));
+            Some(TermWin {
+                win: wm::Window::new(wx, wy, l.title),
+                term: t,
+                win_dirty: true,
+                initial_cmd: l.cmd.map(|s| s.as_bytes().to_vec()),
+            })
+        }
+        Err(e) => { slog(&format!("spawn failed: {}", e)); None }
+    }
+}
+
+fn exec_psh() -> ! {
+    use std::os::unix::process::CommandExt;
+    let _ = std::process::Command::new("/bin/psh").exec();
+    let _ = std::process::Command::new("/usr/local/bin/psh").exec();
+    loop { thread::sleep(Duration::from_secs(60)); }
 }
 
 fn main() {
@@ -209,7 +311,6 @@ fn main() {
         Ok(f) => f,
         Err(e) => {
             slog(&format!("framebuffer unavailable: {}", e));
-            eprintln!("[desktop] framebuffer unavailable ({}), exec psh", e);
             exec_psh();
         }
     };
@@ -220,72 +321,51 @@ fn main() {
     let width  = fb.width  as i32;
     let height = fb.height as i32;
 
-    // Shared mouse state
-    let mouse_state = Arc::new(Mutex::new(MouseState {
-        x: width / 2,
-        y: height / 2,
-        buttons: 0,
-    }));
+    let mouse_state = Arc::new(Mutex::new(MouseState { x: width / 2, y: height / 2, buttons: 0 }));
+    { let ms = Arc::clone(&mouse_state); thread::spawn(move || input::mouse_thread(ms, width, height)); }
 
-    // Mouse reader thread
-    {
-        let ms = Arc::clone(&mouse_state);
-        thread::spawn(move || input::mouse_thread(ms, width, height));
-    }
-
-    // Keyboard channel: raw stdin bytes → main loop → PTY master
     let (kb_tx, kb_rx) = std::sync::mpsc::channel::<Vec<u8>>();
     thread::spawn(move || keyboard::keyboard_thread(kb_tx));
 
-    // Initial desktop draw
+    // Initial draw
     draw_desktop_bg(&mut fb);
-    let btn_x = (fb.width / 2 - 40) as i32;
-    let btn_y = (fb.height / 2 + 60) as i32;
-    draw_psh_button(&mut fb, btn_x as u32, btn_y as u32);
+    draw_launchers(&mut fb);
 
-    // Cursor setup
     let cursor_buf_len = (CURSOR_W * CURSOR_H) as usize;
-    let mut cursor_bg = vec![BG; cursor_buf_len];
-    let mut cur_x;
-    let mut cur_y;
-    {
-        let s = mouse_state.lock().unwrap();
-        cur_x = s.x;
-        cur_y = s.y;
-    }
+    let mut cursor_bg  = vec![BG; cursor_buf_len];
+    let mut cur_x; let mut cur_y;
+    { let s = mouse_state.lock().unwrap(); cur_x = s.x; cur_y = s.y; }
     save_cursor_bg(&fb, cur_x, cur_y, &mut cursor_bg);
     draw_cursor(&mut fb, cur_x, cur_y);
 
     let mut prev_buttons: u8 = 0;
     let mut tick: u64 = 0;
-    let mut term_win: Option<TermWin> = None;
+    let mut term_wins: Vec<TermWin> = Vec::new();
 
     loop {
         thread::sleep(Duration::from_millis(16));
 
         let (new_x, new_y, buttons) = {
-            let s = mouse_state.lock().unwrap();
-            (s.x, s.y, s.buttons)
+            let s = mouse_state.lock().unwrap(); (s.x, s.y, s.buttons)
         };
 
-        // --- Forward keyboard input to active terminal ---
+        // Keyboard → focused (topmost) window
         while let Ok(data) = kb_rx.try_recv() {
-            if let Some(ref tw) = term_win {
+            if let Some(tw) = term_wins.last() {
                 tw.term.write_input(&data);
             }
         }
 
-        // --- Poll PTY for new output ---
-        if let Some(ref mut tw) = term_win {
-            if tw.term.poll() {
-                tw.term.dirty = true;
+        // PTY poll + initial command injection
+        for tw in term_wins.iter_mut() {
+            if let Some(cmd) = tw.initial_cmd.take() {
+                tw.term.write_input(&cmd);
             }
-            // Detect child exit (EIO on read already stops poll; check status)
+            if tw.term.poll() { tw.term.dirty = true; }
             if matches!(tw.term.child.try_wait(), Ok(Some(_))) {
-                // psh exited — write a notice to the terminal grid
                 let msg = b"[process exited]";
                 for (i, &b) in msg.iter().enumerate() {
-                    let idx = (tw.term.cur_row * term::COLS).min(term::COLS * term::ROWS - 1) + i;
+                    let idx = tw.term.cur_row * term::COLS + i;
                     if idx < term::COLS * term::ROWS {
                         tw.term.cells[idx] = term::Cell { ch: b, fg: 0xFBBF24, bg: 0x0F172A };
                     }
@@ -294,40 +374,21 @@ fn main() {
             }
         }
 
-        // --- Determine what needs redrawing ---
-        let cursor_moved = new_x != cur_x || new_y != cur_y;
-        let term_content_dirty = term_win.as_ref().map(|tw| tw.term.dirty).unwrap_or(false);
-        let win_chrome_dirty   = term_win.as_ref().map(|tw| tw.win_dirty).unwrap_or(false);
-        let needs_redraw = cursor_moved || term_content_dirty || win_chrome_dirty;
+        let cursor_moved    = new_x != cur_x || new_y != cur_y;
+        let any_dirty       = term_wins.iter().any(|tw| tw.term.dirty || tw.win_dirty);
+        let needs_redraw    = cursor_moved || any_dirty;
 
         if needs_redraw {
             restore_cursor_bg(&mut fb, cur_x, cur_y, &cursor_bg);
-
-            if win_chrome_dirty {
-                if let Some(ref mut tw) = term_win {
-                    wm::draw_window(&mut fb, &tw.win);
-                    let (ox, oy) = wm::content_origin(&tw.win);
-                    tw.term.render(&mut fb, ox as u32, oy as u32);
-                    tw.term.dirty = false;
-                    tw.win_dirty = false;
-                }
-            } else if term_content_dirty {
-                if let Some(ref mut tw) = term_win {
-                    let (ox, oy) = wm::content_origin(&tw.win);
-                    tw.term.render(&mut fb, ox as u32, oy as u32);
-                    tw.term.dirty = false;
-                }
+            if any_dirty {
+                recomposite(&mut fb, &mut term_wins);
             }
-
-            if cursor_moved {
-                cur_x = new_x;
-                cur_y = new_y;
-            }
+            if cursor_moved { cur_x = new_x; cur_y = new_y; }
             save_cursor_bg(&fb, cur_x, cur_y, &mut cursor_bg);
             draw_cursor(&mut fb, cur_x, cur_y);
         }
 
-        // --- Clock (~once per second) ---
+        // Clock (~1/s)
         if tick % 60 == 0 {
             restore_cursor_bg(&mut fb, cur_x, cur_y, &cursor_bg);
             draw_taskbar_clock(&mut fb, &read_rtc_time());
@@ -336,110 +397,76 @@ fn main() {
         }
         tick = tick.wrapping_add(1);
 
-        // --- Mouse click (rising edge) ---
+        // ---- Click handling ----
         let left_now = (buttons & 0x01) != 0;
         let left_was = (prev_buttons & 0x01) != 0;
 
         if left_now && !left_was {
-            // Check close / drag-start on existing window
-            let mut close_window = false;
-            let mut start_drag   = false;
-            if let Some(ref tw) = term_win {
-                if wm::close_btn_hit(&tw.win, cur_x, cur_y) {
-                    close_window = true;
-                } else if wm::titlebar_hit(&tw.win, cur_x, cur_y) {
-                    start_drag = true;
-                }
-                // min/max: stubs — don't crash
-            }
+            // Find topmost window under click (reverse order = topmost first)
+            let hit_idx = term_wins.iter().enumerate().rev()
+                .find(|(_, tw)| wm::window_hit(&tw.win, cur_x, cur_y))
+                .map(|(i, _)| i);
 
-            if close_window {
-                restore_cursor_bg(&mut fb, cur_x, cur_y, &cursor_bg);
-                drop(term_win.take()); // kills child, closes PTY fd
-                draw_desktop_bg(&mut fb);
-                draw_psh_button(&mut fb, btn_x as u32, btn_y as u32);
-                save_cursor_bg(&fb, cur_x, cur_y, &mut cursor_bg);
-                draw_cursor(&mut fb, cur_x, cur_y);
-            } else if start_drag {
-                if let Some(ref mut tw) = term_win {
-                    tw.win.dragging = true;
-                    tw.win.drag_ox = cur_x - tw.win.x;
-                    tw.win.drag_oy = cur_y - tw.win.y;
+            if let Some(hi) = hit_idx {
+                // Bring to front if not already
+                if hi != term_wins.len() - 1 {
+                    let tw = term_wins.remove(hi);
+                    term_wins.push(tw);
+                    let last = term_wins.len() - 1;
+                    term_wins[last].win_dirty = true;
                 }
-            } else if term_win.is_none() {
-                // PSH button hit → open terminal window
-                if cur_x >= btn_x && cur_x < btn_x + 80
-                    && cur_y >= btn_y && cur_y < btn_y + 24
-                {
-                    match term::Terminal::spawn() {
-                        Ok(t) => {
-                            let wx = ((width  - wm::WINDOW_W) / 2).max(0);
-                            let wy = ((height - wm::WINDOW_H - 28) / 2).max(0);
-                            let win = wm::Window {
-                                x: wx, y: wy,
-                                w: wm::WINDOW_W,
-                                h: wm::WINDOW_H,
-                                title: "psh — Penguin Shell".to_string(),
-                                dragging: false,
-                                drag_ox: 0,
-                                drag_oy: 0,
-                            };
-                            slog(&format!("terminal window opened at {}x{}", wx, wy));
-                            term_win = Some(TermWin { win, term: t, win_dirty: true });
-                        }
-                        Err(e) => {
-                            slog(&format!("spawn failed: {}", e));
-                        }
+                let last = term_wins.len() - 1;
+                let tw = &mut term_wins[last];
+
+                if wm::close_btn_hit(&tw.win, cur_x, cur_y) {
+                    restore_cursor_bg(&mut fb, cur_x, cur_y, &cursor_bg);
+                    term_wins.remove(last);
+                    recomposite(&mut fb, &mut term_wins);
+                    save_cursor_bg(&fb, cur_x, cur_y, &mut cursor_bg);
+                    draw_cursor(&mut fb, cur_x, cur_y);
+                } else if wm::min_btn_hit(&tw.win, cur_x, cur_y) {
+                    tw.win.minimized = true;
+                    tw.win_dirty = true;
+                } else if wm::max_btn_hit(&tw.win, cur_x, cur_y) {
+                    tw.win.toggle_maximize(width, height);
+                    tw.win_dirty = true;
+                } else if wm::titlebar_hit(&tw.win, cur_x, cur_y) {
+                    tw.win.dragging = true;
+                    tw.win.drag_ox  = cur_x - tw.win.x;
+                    tw.win.drag_oy  = cur_y - tw.win.y;
+                }
+            } else {
+                // No window hit — check taskbar minimized buttons
+                let min_hit = taskbar_min_btn_hit(fb.width, fb.height, &term_wins, cur_x, cur_y);
+                if let Some(mi) = min_hit {
+                    term_wins[mi].win.minimized = false;
+                    term_wins[mi].win_dirty = true;
+                    // Bring restored window to front
+                    let tw = term_wins.remove(mi);
+                    term_wins.push(tw);
+                } else if let Some(li) = launcher_hit(fb.width, fb.height, cur_x, cur_y) {
+                    // Open a new terminal window
+                    if let Some(tw) = open_term(width, height, term_wins.len(), &LAUNCHERS[li]) {
+                        term_wins.push(tw);
                     }
                 }
             }
         }
 
-        // --- Window drag (button held) ---
+        // ---- Drag ----
         if left_now {
-            let mut moved = false;
-            let mut nx = 0i32;
-            let mut ny = 0i32;
-            let mut old_x = 0i32;
-            let mut old_y = 0i32;
-            let mut old_w = 0i32;
-            let mut old_h = 0i32;
-            if let Some(ref tw) = term_win {
+            if let Some(tw) = term_wins.last_mut() {
                 if tw.win.dragging {
-                    let cx2 = cur_x - tw.win.drag_ox;
-                    let cy2 = cur_y - tw.win.drag_oy;
-                    let clamped_x = cx2.max(0).min(width  - tw.win.w);
-                    let clamped_y = cy2.max(0).min(height - tw.win.h - 28);
-                    if clamped_x != tw.win.x || clamped_y != tw.win.y {
-                        moved = true;
-                        old_x = tw.win.x; old_y = tw.win.y;
-                        old_w = tw.win.w; old_h = tw.win.h;
-                        nx = clamped_x;   ny = clamped_y;
+                    let nx = (cur_x - tw.win.drag_ox).max(0).min(width  - tw.win.w);
+                    let ny = (cur_y - tw.win.drag_oy).max(0).min(height - tw.win.h - 28);
+                    if nx != tw.win.x || ny != tw.win.y {
+                        tw.win.x = nx; tw.win.y = ny;
+                        tw.win_dirty = true;
                     }
                 }
             }
-            if moved {
-                if let Some(ref mut tw) = term_win {
-                    restore_cursor_bg(&mut fb, cur_x, cur_y, &cursor_bg);
-                    // Clear old window rect by redrawing desktop there
-                    fb.fill_rect(old_x as u32, old_y as u32, old_w as u32, old_h as u32, BG);
-                    // Repaint desktop art that may have been under the old position
-                    draw_desktop_bg(&mut fb);
-                    draw_psh_button(&mut fb, btn_x as u32, btn_y as u32);
-                    tw.win.x = nx; tw.win.y = ny;
-                    wm::draw_window(&mut fb, &tw.win);
-                    let (ox, oy) = wm::content_origin(&tw.win);
-                    tw.term.render(&mut fb, ox as u32, oy as u32);
-                    tw.term.dirty = false;
-                    save_cursor_bg(&fb, cur_x, cur_y, &mut cursor_bg);
-                    draw_cursor(&mut fb, cur_x, cur_y);
-                }
-            }
         } else {
-            // Mouse button released — end drag
-            if let Some(ref mut tw) = term_win {
-                tw.win.dragging = false;
-            }
+            for tw in term_wins.iter_mut() { tw.win.dragging = false; }
         }
 
         prev_buttons = buttons;
