@@ -5,6 +5,9 @@
 extern crate alloc;
 
 mod allocator;
+mod font;
+mod fb;
+mod term;
 mod vga;
 mod port;
 mod pic;
@@ -27,6 +30,36 @@ extern "C" { static kernel_end: u8; }
 
 // user-psh ELF — built by iso/build.sh, embedded at compile time
 static USER_PSH_ELF: &[u8] = include_bytes!("../user-psh.elf");
+
+/// Walk the Multiboot2 info structure looking for the framebuffer tag (type=8).
+/// Returns (phys_addr, width, height, pitch, bpp) if found.
+unsafe fn parse_mb2_framebuffer(mb2: u32) -> Option<(u64, u32, u32, u32, u8)> {
+    if mb2 == 0 { return None; }
+    let total = *(mb2 as *const u32);
+    let mut off: u32 = 8;
+    while off < total {
+        let tag_ptr = (mb2 + off) as *const u32;
+        let ttype = *tag_ptr;
+        let tsize = *tag_ptr.add(1);
+        if ttype == 0 { break; }
+        if ttype == 8 && tsize >= 32 {
+            // struct multiboot_tag_framebuffer:
+            //   u32 type, u32 size, u64 addr, u32 pitch, u32 width, u32 height, u8 bpp, u8 fb_type
+            let addr  = *((mb2 + off + 8)  as *const u64);
+            let pitch = *((mb2 + off + 16) as *const u32);
+            let width = *((mb2 + off + 20) as *const u32);
+            let height= *((mb2 + off + 24) as *const u32);
+            let bpp   = *((mb2 + off + 28) as *const u8);
+            let fbtype= *((mb2 + off + 29) as *const u8);
+            // fbtype 1 = RGB linear (what we want), 2 = EGA text (skip)
+            if fbtype == 1 && bpp >= 24 && addr != 0 {
+                return Some((addr, width, height, pitch, bpp));
+            }
+        }
+        off += (tsize + 7) & !7;
+    }
+    None
+}
 
 #[no_mangle]
 pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
@@ -71,6 +104,24 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
     // We need PMM-allocated frames (above 2 MiB) to be reachable.
     vmm::extend_identity_map(64);  // identity-map 0–64 MiB
     vga::write_str("  [VMM] identity map extended to 64 MiB\n", vga::Color::Green);
+
+    // Switch to framebuffer if GRUB provided one (Multiboot2 tag type 8).
+    // map_mmio_range maps the VRAM pages; term::init() paints the dark background.
+    if let Some((addr, w, h, pitch, bpp)) = unsafe { parse_mb2_framebuffer(mb2) } {
+        fb::init(addr, w, h, pitch, bpp);
+        term::init();
+        vga::write_str("  [FB] ", vga::Color::Green);
+        vga::write_i32(w as i32);
+        vga::write_str("x", vga::Color::White);
+        vga::write_i32(h as i32);
+        vga::write_str("x", vga::Color::White);
+        vga::write_i32(bpp as i32);
+        vga::write_str("bpp @ 0x", vga::Color::White);
+        vga::write_hex(addr, vga::Color::Cyan);
+        vga::write_byte(b'\n', vga::Color::White);
+    } else {
+        vga::write_str("  [FB] not provided by GRUB — VGA text mode\n", vga::Color::Amber);
+    }
 
     // SYSCALL / SYSRET setup
     syscall::init();

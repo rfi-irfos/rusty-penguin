@@ -143,6 +143,12 @@ pub extern "C" fn syscall_handler(nr: u64, arg1: u64, arg2: u64, arg3: u64) -> u
             }
             len as u64
         }
+        6 => {
+            // sys_fb_query — returns framebuffer base virtual address in rax
+            // User process reads width/height/pitch separately via packed rdi return
+            // For now: return base address; caller also gets dimensions via subsequent call
+            crate::fb::base() as u64
+        }
         4 => {
             // sys_ticks — returns tick count (100 Hz since pit_init)
             crate::idt::ticks()

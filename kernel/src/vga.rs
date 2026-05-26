@@ -1,4 +1,5 @@
 // VGA text mode driver — 80×25, direct write to physical 0xB8000
+// Once fb::init() is called, all writes dispatch to term:: instead.
 // No allocator, no runtime — pure unsafe pointer writes.
 
 const VGA_BASE: usize = 0xB8000;
@@ -65,8 +66,25 @@ fn scroll_up() {
     }
 }
 
+fn color_to_rgb(color: Color) -> u32 {
+    match color {
+        Color::Black   => 0x000000,
+        Color::Blue    => 0x4488FF,
+        Color::Green   => 0x33FF66,
+        Color::Cyan    => 0x00EEFF,
+        Color::Red     => 0xFF3333,
+        Color::Amber   => 0xFFBB00,
+        Color::White   => 0xEEEEEE,
+        Color::DimGray => 0x555566,
+    }
+}
+
 pub fn write_byte(b: u8, color: Color) {
     crate::serial::write_byte(b);
+    if crate::fb::is_live() {
+        crate::term::write_byte_rgb(b, color_to_rgb(color));
+        return;
+    }
     unsafe {
         if b == b'\n' {
             CUR_COL = 0;

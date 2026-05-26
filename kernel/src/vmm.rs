@@ -61,6 +61,19 @@ pub unsafe fn map_page(virt: u64, phys: u64, flags: u64) -> bool {
     true
 }
 
+/// Map an arbitrary physical MMIO range as identity-mapped (virt == phys), 4 KiB pages.
+/// Used for the framebuffer and other device memory that lives above the identity-mapped range.
+pub fn map_mmio_range(phys_start: u64, size: u64) {
+    const PAGE: u64 = 4096;
+    let start = phys_start & !(PAGE - 1);
+    let end   = (phys_start + size + PAGE - 1) & !(PAGE - 1);
+    let mut addr = start;
+    while addr < end {
+        unsafe { map_page(addr, addr, PTE_PRESENT | PTE_WRITABLE); }
+        addr += PAGE;
+    }
+}
+
 /// Extend the boot identity map from 2 MiB up to `limit_mib` MiB (max 1022).
 /// Boot.s sets PML4[0]/PDPT[0]/PD[0] with only PRESENT|WRITABLE — no USER bit.
 /// The x86 page table walk checks U/S at EVERY level, so all three levels must
