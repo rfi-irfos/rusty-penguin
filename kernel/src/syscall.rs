@@ -143,6 +143,17 @@ pub extern "C" fn syscall_handler(nr: u64, arg1: u64, arg2: u64, arg3: u64) -> u
             }
             len as u64
         }
+        4 => {
+            // sys_ticks — returns tick count (100 Hz since pit_init)
+            crate::idt::ticks()
+        }
+        5 => {
+            // sys_meminfo — returns (free_mib << 32) | total_mib
+            let (free, total) = crate::pmm::stats();
+            let free_mib  = (free  / 256) as u64;
+            let total_mib = (total / 256) as u64;
+            (free_mib << 32) | (total_mib & 0xFFFF_FFFF)
+        }
         60 => {
             // sys_exit(code)
             vga::write_str("\n  [psh exited]\n", vga::Color::Green);

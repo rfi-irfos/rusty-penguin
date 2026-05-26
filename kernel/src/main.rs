@@ -48,7 +48,7 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
     vga::write_str("  [GDT+TSS: OK]\n", vga::Color::Green);
 
     // PIC + IDT
-    unsafe { pic::init(); }
+    unsafe { pic::init(); pic::pit_init(); }
     idt::init();
     idt::enable();
     vga::write_str("  [interrupts: OK]\n", vga::Color::Green);

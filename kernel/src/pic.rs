@@ -32,6 +32,14 @@ pub unsafe fn init() {
     outb(PIC2_DATA, m2);
 }
 
+/// Set PIT channel 0 to ~100 Hz so ticks / 100 == seconds.
+pub unsafe fn pit_init() {
+    const DIVISOR: u16 = 11932; // 1_193_182 / 100 ≈ 11932
+    outb(0x43, 0x36);                         // ch0, lo/hi, mode 3
+    outb(0x40, (DIVISOR & 0xFF) as u8);
+    outb(0x40, (DIVISOR >> 8) as u8);
+}
+
 // Call at the end of every IRQ handler. irq = 0-15.
 pub unsafe fn eoi(irq: u8) {
     if irq >= 8 {
