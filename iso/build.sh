@@ -10,10 +10,11 @@ OUT_ISO="$REPO_ROOT/rusty-penguin.iso"
 
 echo "[build] Rusty Penguin ISO builder"
 
-# 1. Compile init binary (statically linked where possible)
-echo "[build] Compiling init crate..."
-cargo build --release -p init --manifest-path "$REPO_ROOT/Cargo.toml" 2>&1
+# 1. Compile init and shell binaries
+echo "[build] Compiling init and shell crates..."
+cargo build --release -p init -p shell --manifest-path "$REPO_ROOT/Cargo.toml" 2>&1
 INIT_BIN="$REPO_ROOT/target/release/init"
+PSH_BIN="$REPO_ROOT/target/release/shell"
 
 # 2. Locate host kernel vmlinuz
 VMLINUZ=""
@@ -38,14 +39,36 @@ fi
 
 echo "[build] Using kernel: $VMLINUZ"
 
-# 3. Build initramfs: only our init binary as /init
+# 3. Build initramfs: init binary + required shared libraries
 echo "[build] Building initramfs..."
 INITRAMFS_DIR="$(mktemp -d)"
 trap "rm -rf $INITRAMFS_DIR" EXIT
 
-mkdir -p "$INITRAMFS_DIR"
+mkdir -p "$INITRAMFS_DIR/lib/x86_64-linux-gnu"
+mkdir -p "$INITRAMFS_DIR/lib64"
+mkdir -p "$INITRAMFS_DIR/proc" "$INITRAMFS_DIR/sys" "$INITRAMFS_DIR/dev" "$INITRAMFS_DIR/tmp"
+mkdir -p "$INITRAMFS_DIR/bin" "$INITRAMFS_DIR/usr/local/bin"
+
 cp "$INIT_BIN" "$INITRAMFS_DIR/init"
 chmod +x "$INITRAMFS_DIR/init"
+
+# psh (Penguin Shell) — both locations init looks for
+cp "$PSH_BIN" "$INITRAMFS_DIR/bin/psh"
+cp "$PSH_BIN" "$INITRAMFS_DIR/usr/local/bin/psh"
+chmod +x "$INITRAMFS_DIR/bin/psh" "$INITRAMFS_DIR/usr/local/bin/psh"
+
+# Bundle shared libraries required by the dynamically-linked init binary
+for lib in libc.so.6 libgcc_s.so.1; do
+    src=$(ldconfig -p 2>/dev/null | awk "/$lib/"'{print $NF}' | head -1)
+    [ -z "$src" ] && src=$(find /lib /lib64 /usr/lib -name "$lib" 2>/dev/null | head -1)
+    if [ -n "$src" ]; then
+        cp "$src" "$INITRAMFS_DIR/lib/x86_64-linux-gnu/$lib"
+    fi
+done
+# Copy the dynamic linker
+LD_SRC=$(readlink -f /lib64/ld-linux-x86-64.so.2 2>/dev/null || echo "/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2")
+cp "$LD_SRC" "$INITRAMFS_DIR/lib64/ld-linux-x86-64.so.2"
+ln -sf /lib64/ld-linux-x86-64.so.2 "$INITRAMFS_DIR/lib/ld-linux-x86-64.so.2" 2>/dev/null || true
 
 INITRD="$ISO_DIR/initrd.img"
 (cd "$INITRAMFS_DIR" && find . | cpio -o -H newc 2>/dev/null | gzip -9 > "$INITRD")
@@ -61,7 +84,7 @@ cp "$ISO_DIR/grub/grub.cfg" "$ISO_DIR/boot/grub/grub.cfg"
 
 # 5. Build ISO
 echo "[build] Running grub-mkrescue..."
-grub-mkrescue -o "$OUT_ISO" "$ISO_DIR" -- -quiet 2>&1
+grub-mkrescue -o "$OUT_ISO" "$ISO_DIR" 2>&1
 
 echo ""
 echo "[build] Done: $OUT_ISO ($(du -sh "$OUT_ISO" | cut -f1))"

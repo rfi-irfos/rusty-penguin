@@ -3,4 +3,7 @@
 *.img
 *.vmdk
 *.vbox
-**/*.iso
+# Generated ISO content (kernels, built initrd — not source)
+iso/boot/
+iso/initrd.img
+iso/vmlinuz-netboot
