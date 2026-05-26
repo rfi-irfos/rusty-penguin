@@ -119,6 +119,8 @@ pub extern "C" fn _start() -> ! {
         } else if line == b"reboot" {
             write(b"rebooting...\n");
             sys_reboot();
+        } else if line == b"echo" {
+            write(b"\n");
         } else if line.starts_with(b"echo ") {
             write(&line[5..]);
             write(b"\n");
