@@ -43,7 +43,7 @@ impl Window {
         }
     }
 
-    pub fn toggle_maximize(&mut self, sw: i32, sh: i32) {
+    pub fn toggle_maximize(&mut self, sw: i32, sh: i32, topbar_h: i32) {
         if self.maximized {
             self.x = self.restore_x; self.y = self.restore_y;
             self.w = self.restore_w; self.h = self.restore_h;
@@ -51,8 +51,8 @@ impl Window {
         } else {
             self.restore_x = self.x; self.restore_y = self.y;
             self.restore_w = self.w; self.restore_h = self.h;
-            self.x = 0; self.y = 0;
-            self.w = sw; self.h = sh - 28;
+            self.x = 0; self.y = topbar_h;
+            self.w = sw; self.h = sh - 28 - topbar_h;
             self.maximized = true;
         }
     }

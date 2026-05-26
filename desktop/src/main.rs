@@ -195,32 +195,33 @@ fn launcher_hit(fw: u32, fh: u32, mx: i32, my: i32) -> Option<usize> {
     None
 }
 
-// ---- Taskbar minimized restore buttons ----
-fn tbmin_rect(fw: u32, fh: u32, slot: usize) -> (i32, i32, i32, i32) {
+// ---- Taskbar window buttons (all open windows, not just minimized) ----
+fn tbwin_rect(fw: u32, fh: u32, slot: usize) -> (i32, i32, i32, i32) {
     (160 + slot as i32 * 100, (fh - 22) as i32, 92, 18)
 }
 
-fn draw_taskbar_min_btns(fb: &mut Framebuffer, term_wins: &[TermWin]) {
+fn draw_taskbar_win_btns(fb: &mut Framebuffer, term_wins: &[TermWin]) {
     let fw = fb.width; let fh = fb.height;
-    let mut slot = 0;
-    for tw in term_wins { if !tw.win.minimized { continue; }
-        let (x, y, w, h) = tbmin_rect(fw, fh, slot);
+    let n = term_wins.len();
+    for (slot, tw) in term_wins.iter().enumerate() {
+        let (x, y, w, h) = tbwin_rect(fw, fh, slot);
         if x + w >= fw as i32 { break; }
-        fb.fill_rect(x as u32, y as u32, w as u32, h as u32, 0x1E293B);
-        fb.fill_rect(x as u32, y as u32, w as u32, 1, BORDER);
+        let is_focused  = slot == n - 1;
+        let is_minimized = tw.win.minimized;
+        let bg  = if is_minimized { 0x111827u32 } else { 0x1E293Bu32 };
+        let txt = if is_minimized { DIM } else { WHITE };
+        let top = if is_focused { BLUE } else { BORDER };
+        fb.fill_rect(x as u32, y as u32, w as u32, h as u32, bg);
+        fb.fill_rect(x as u32, y as u32, w as u32, 1, top);
         let lbl: String = tw.win.title.chars().take(((w - 4) / 8) as usize).collect();
-        fb.draw_str((x + 2) as u32, (y + 5) as u32, &lbl, WHITE, 0x1E293B);
-        slot += 1;
+        fb.draw_str((x + 2) as u32, (y + 5) as u32, &lbl, txt, bg);
     }
 }
 
-fn tbmin_hit(fw: u32, fh: u32, wins: &[TermWin], mx: i32, my: i32) -> Option<usize> {
-    let mut slot = 0;
-    for (i, tw) in wins.iter().enumerate() {
-        if !tw.win.minimized { continue; }
-        let (x, y, w, h) = tbmin_rect(fw, fh, slot);
-        if mx >= x && mx < x + w && my >= y && my < y + h { return Some(i); }
-        slot += 1;
+fn tbwin_hit(fw: u32, fh: u32, wins: &[TermWin], mx: i32, my: i32) -> Option<usize> {
+    for (slot, _) in wins.iter().enumerate() {
+        let (x, y, w, h) = tbwin_rect(fw, fh, slot);
+        if mx >= x && mx < x + w && my >= y && my < y + h { return Some(slot); }
     }
     None
 }
@@ -421,7 +422,7 @@ fn start_menu_bounds_hit(fh: u32, mx: i32, my: i32) -> bool {
 fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, stats: &SysStats) {
     draw_scene_static(fb);
     draw_launchers(fb);
-    draw_taskbar_min_btns(fb, wins);
+    draw_taskbar_win_btns(fb, wins);
     let n = wins.len();
     for (i, tw) in wins.iter_mut().enumerate() {
         if tw.win.minimized { continue; }
@@ -444,7 +445,7 @@ fn open_term(w: i32, h: i32, n: usize, l: &Launcher) -> Option<TermWin> {
         Ok(t) => {
             let off = n as i32 * 20;
             let wx = ((w - wm::WINDOW_W) / 2 + off).max(0).min(w - wm::WINDOW_W);
-            let wy = ((h - wm::WINDOW_H - 28) / 2 + off).max(0).min(h - wm::WINDOW_H - 28);
+            let wy = ((h - wm::WINDOW_H - 28) / 2 + off).max(TOPBAR_H as i32).min(h - wm::WINDOW_H - 28);
             slog(&format!("terminal '{}' opened at {}x{}", l.title, wx, wy));
             Some(TermWin {
                 win: wm::Window::new(wx, wy, l.title),
@@ -612,7 +613,7 @@ fn main() {
                         tw.win.minimized = true;
                         scene_dirty = true;
                     } else if wm::max_btn_hit(&tw.win, cx, cy) {
-                        tw.win.toggle_maximize(w, h);
+                        tw.win.toggle_maximize(w, h, TOPBAR_H as i32);
                         scene_dirty = true;
                     } else if wm::titlebar_hit(&tw.win, cx, cy) {
                         tw.win.dragging = true;
@@ -621,7 +622,7 @@ fn main() {
                     }
                 } else {
                     // Taskbar minimized button?
-                    if let Some(mi) = tbmin_hit(fb.width, fb.height, &wins, cx, cy) {
+                    if let Some(mi) = tbwin_hit(fb.width, fb.height, &wins, cx, cy) {
                         wins[mi].win.minimized = false;
                         let tw = wins.remove(mi); wins.push(tw);
                         scene_dirty = true;
@@ -640,7 +641,7 @@ fn main() {
             if let Some(tw) = wins.last_mut() {
                 if tw.win.dragging {
                     let nx2 = (cx - tw.win.drag_ox).max(0).min(w - tw.win.w);
-                    let ny2 = (cy - tw.win.drag_oy).max(0).min(h - tw.win.h - 28);
+                    let ny2 = (cy - tw.win.drag_oy).max(TOPBAR_H as i32).min(h - tw.win.h - 28);
                     if nx2 != tw.win.x || ny2 != tw.win.y {
                         tw.win.x = nx2; tw.win.y = ny2;
                         scene_dirty = true;
