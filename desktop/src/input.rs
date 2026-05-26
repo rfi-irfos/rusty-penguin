@@ -31,15 +31,23 @@ const BTN_RIGHT: u16 = 0x111;
 const TABLET_MAX: i32 = 32767;
 
 fn open_event_device() -> Option<File> {
-    for i in 0..8 {
-        let path = format!("/dev/input/event{}", i);
-        if let Ok(f) = OpenOptions::new().read(true).open(&path) {
+    // In QEMU: event0 = PS/2 keyboard, event1 = PS/2 mouse (psmouse built-in).
+    // Try event1 first so we don't get stuck reading keyboard events.
+    let candidates = [
+        "/dev/input/event1",
+        "/dev/input/event2",
+        "/dev/input/event3",
+        "/dev/input/event0",
+        "/dev/input/mice",   // fallback: requires mousedev module
+    ];
+    for path in &candidates {
+        if let Ok(f) = OpenOptions::new().read(true).open(path) {
             eprintln!("[desktop] input: opened {}", path);
             return Some(f);
         }
     }
-    // Also try /dev/input/mice as last resort (requires mousedev module)
-    OpenOptions::new().read(true).open("/dev/input/mice").ok()
+    eprintln!("[desktop] input: no device found");
+    None
 }
 
 pub fn mouse_thread(state: Arc<Mutex<MouseState>>, width: i32, height: i32) {
