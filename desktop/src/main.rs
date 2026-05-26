@@ -70,31 +70,44 @@ const CURSOR_SHAPE: [[bool; 12]; 20] = [
     [false, false, false, false, false, false, false, false, false, false, false, false],
 ];
 
+// Save pixels under cursor bounding box before drawing.
+fn save_cursor_bg(fb: &Framebuffer, x: i32, y: i32, buf: &mut [u32]) {
+    for row in 0..CURSOR_H as i32 {
+        for col in 0..CURSOR_W as i32 {
+            let idx = (row * CURSOR_W as i32 + col) as usize;
+            let px = x + col;
+            let py = y + row;
+            buf[idx] = if px >= 0 && py >= 0 && (px as u32) < fb.width && (py as u32) < fb.height {
+                fb.get_pixel(px as u32, py as u32)
+            } else {
+                BG
+            };
+        }
+    }
+}
+
+// Restore saved pixels to erase cursor without destroying content underneath.
+fn restore_cursor_bg(fb: &mut Framebuffer, x: i32, y: i32, buf: &[u32]) {
+    for row in 0..CURSOR_H as i32 {
+        for col in 0..CURSOR_W as i32 {
+            let px = x + col;
+            let py = y + row;
+            if px >= 0 && py >= 0 && (px as u32) < fb.width && (py as u32) < fb.height {
+                fb.set_pixel(px as u32, py as u32, buf[(row * CURSOR_W as i32 + col) as usize]);
+            }
+        }
+    }
+}
+
 fn draw_cursor(fb: &mut Framebuffer, x: i32, y: i32) {
     for row in 0..CURSOR_H as i32 {
         for col in 0..CURSOR_W as i32 {
             if CURSOR_SHAPE[row as usize][col as usize] {
                 let px = x + col;
                 let py = y + row;
-                if px >= 0 && py >= 0 {
+                if px >= 0 && py >= 0 && (px as u32) < fb.width && (py as u32) < fb.height {
                     fb.set_pixel(px as u32, py as u32, CURSOR);
                 }
-            }
-        }
-    }
-}
-
-fn erase_cursor(fb: &mut Framebuffer, x: i32, y: i32, height: u32) {
-    // Erase by filling cursor bounding box with BG.
-    // Rows in taskbar area get TASKBAR color instead.
-    let taskbar_y = height as i32 - 28;
-    for row in 0..CURSOR_H as i32 {
-        for col in 0..CURSOR_W as i32 {
-            let px = x + col;
-            let py = y + row;
-            if px >= 0 && py >= 0 && (px as u32) < fb.width && (py as u32) < fb.height {
-                let color = if py >= taskbar_y { TASKBAR } else { BG };
-                fb.set_pixel(px as u32, py as u32, color);
             }
         }
     }
@@ -250,6 +263,10 @@ fn main() {
     // Initial desktop draw
     draw_initial_desktop(&mut fb);
 
+    // Save/restore buffer for cursor — stores pixels under the cursor shape
+    let cursor_buf_len = (CURSOR_W * CURSOR_H) as usize;
+    let mut cursor_bg = vec![BG as u32; cursor_buf_len];
+
     // Draw initial cursor
     let mut cur_x;
     let mut cur_y;
@@ -258,6 +275,7 @@ fn main() {
         cur_x = s.x;
         cur_y = s.y;
     }
+    save_cursor_bg(&fb, cur_x, cur_y, &mut cursor_bg);
     draw_cursor(&mut fb, cur_x, cur_y);
 
     // PSH button rect for hit testing
@@ -277,18 +295,21 @@ fn main() {
 
         // Redraw cursor if moved
         if new_x != cur_x || new_y != cur_y {
-            let fh = fb.height;
-            erase_cursor(&mut fb, cur_x, cur_y, fh);
+            restore_cursor_bg(&mut fb, cur_x, cur_y, &cursor_bg);
             cur_x = new_x;
             cur_y = new_y;
+            save_cursor_bg(&fb, cur_x, cur_y, &mut cursor_bg);
             draw_cursor(&mut fb, cur_x, cur_y);
         }
 
         // Update clock roughly once per second (~60 frames)
         if tick % 60 == 0 {
+            // Restore before clock draw (clock area won't overlap cursor usually,
+            // but if it does this keeps content clean)
+            restore_cursor_bg(&mut fb, cur_x, cur_y, &cursor_bg);
             let t = read_rtc_time();
             draw_taskbar_clock(&mut fb, &t);
-            // Redraw cursor if clock area overlapped (unlikely but safe)
+            save_cursor_bg(&fb, cur_x, cur_y, &mut cursor_bg);
             draw_cursor(&mut fb, cur_x, cur_y);
         }
         tick = tick.wrapping_add(1);

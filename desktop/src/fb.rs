@@ -103,6 +103,23 @@ impl Framebuffer {
     }
 
     #[inline]
+    pub fn get_pixel(&self, x: u32, y: u32) -> u32 {
+        if x >= self.width || y >= self.height { return 0; }
+        let offset = (y * self.stride + x * (self.bpp / 8)) as usize;
+        unsafe {
+            match self.bpp {
+                32 | 24 => {
+                    let b = *self.data.add(offset)     as u32;
+                    let g = *self.data.add(offset + 1) as u32;
+                    let r = *self.data.add(offset + 2) as u32;
+                    (r << 16) | (g << 8) | b
+                }
+                _ => 0,
+            }
+        }
+    }
+
+    #[inline]
     pub fn set_pixel(&mut self, x: u32, y: u32, color: u32) {
         if x >= self.width || y >= self.height { return; }
         let bpp = self.bpp;
