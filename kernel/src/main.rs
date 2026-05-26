@@ -131,22 +131,22 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
     vga::write_byte(b'\n', vga::Color::White);
 
     // IRETQ into ring-3 — stack + code both live in PTE_USER huge pages
+    // Pin entry→r8 and user_rsp→r9 so the compiler never aliases them to
+    // rax, which we clobber during the RFLAGS pushfq/pop/or sequence.
     unsafe {
         let user_rsp: u64 = vmm::USER_STACK_TOP - 8;
         core::arch::asm!(
-            "mov rax, 0x1B",    // SS = UDATA_SEL | 3
-            "push rax",
-            "push {rsp}",
+            "push 0x1B",    // SS  = UDATA_SEL | 3
+            "push r9",      // user RSP
             "pushfq",
             "pop rax",
             "or  rax, 0x202",   // RFLAGS: IF=1, reserved=1
             "push rax",
-            "mov rax, 0x23",    // CS = UCODE_SEL | 3
-            "push rax",
-            "push {rip}",
+            "push 0x23",    // CS  = UCODE_SEL | 3
+            "push r8",      // user RIP
             "iretq",
-            rsp = in(reg) user_rsp,
-            rip = in(reg) entry,
+            in("r8") entry,
+            in("r9") user_rsp,
             options(noreturn),
         );
     }

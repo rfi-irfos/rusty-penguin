@@ -70,13 +70,17 @@ extern "x86-interrupt" fn exc_gpf(_f: InterruptFrame, err: u64) {
     loop {}
 }
 
-extern "x86-interrupt" fn exc_page_fault(_f: InterruptFrame, err: u64) {
+extern "x86-interrupt" fn exc_page_fault(f: InterruptFrame, err: u64) {
     let cr2: u64;
     unsafe { core::arch::asm!("mov {}, cr2", out(reg) cr2, options(nomem, nostack)) };
     vga::write_str("\nEXCEPTION: #PF addr=0x", vga::Color::Red);
     vga::write_hex(cr2, vga::Color::Red);
     vga::write_str(" err=0x", vga::Color::Red);
     vga::write_hex(err, vga::Color::Red);
+    vga::write_str(" rip=0x", vga::Color::Red);
+    vga::write_hex(f.ip, vga::Color::Red);
+    vga::write_str(" rsp=0x", vga::Color::Red);
+    vga::write_hex(f.sp, vga::Color::Red);
     vga::write_byte(b'\n', vga::Color::Red);
     loop {}
 }
