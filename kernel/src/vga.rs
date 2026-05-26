@@ -81,6 +81,32 @@ pub fn write_str(s: &str, color: Color) {
     }
 }
 
+pub fn backspace() {
+    unsafe {
+        if CUR_COL > 0 {
+            CUR_COL -= 1;
+        } else if CUR_ROW > 0 {
+            CUR_ROW -= 1;
+            CUR_COL = COLS - 1;
+        } else {
+            return;
+        }
+        vga().add(CUR_ROW * COLS + CUR_COL).write_volatile(cell(b' ', Color::Black));
+    }
+}
+
+pub fn write_hex(val: u64, color: Color) {
+    let digits = b"0123456789ABCDEF";
+    let mut started = false;
+    for i in (0..16).rev() {
+        let nibble = ((val >> (i * 4)) & 0xF) as usize;
+        if nibble != 0 || started || i == 0 {
+            write_byte(digits[nibble], color);
+            started = true;
+        }
+    }
+}
+
 pub fn write_i32(n: i32) {
     if n < 0 {
         write_byte(b'-', Color::Cyan);
