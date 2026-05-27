@@ -20,6 +20,8 @@ mod syscall;
 mod elf;
 mod serial;
 mod sched;
+mod input;
+mod ps2mouse;
 
 use ternary_core::{Trit, Tryte};
 use mathematics::{mul_tryte, consensus, scale};
@@ -131,6 +133,11 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
     // Process table: PID 0 = idle, PID 1 = psh (registered before IRETQ)
     sched::init();
     vga::write_str("  [sched: OK]\n", vga::Color::Green);
+
+    // PS/2 mouse: init, then unmask IRQ12 on the PIC
+    ps2mouse::init();
+    unsafe { pic::unmask_mouse(); }
+    vga::write_str("  [PS/2 mouse: OK]\n", vga::Color::Green);
 
     // Ternary math demo
     vga::write_str("  [mathematics]\n", vga::Color::Cyan);

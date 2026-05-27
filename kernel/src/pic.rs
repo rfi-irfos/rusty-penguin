@@ -40,6 +40,14 @@ pub unsafe fn pit_init() {
     outb(0x40, (DIVISOR >> 8) as u8);
 }
 
+/// Unmask IRQ12 (PS/2 mouse on slave PIC) + IRQ2 cascade on master.
+pub unsafe fn unmask_mouse() {
+    let m1 = inb(PIC1_DATA) & !0x04;  // clear bit 2 = unmask IRQ2 (cascade)
+    let m2 = inb(PIC2_DATA) & !0x10;  // clear bit 4 = unmask IRQ12 (slave bit 4)
+    outb(PIC1_DATA, m1);
+    outb(PIC2_DATA, m2);
+}
+
 // Call at the end of every IRQ handler. irq = 0-15.
 pub unsafe fn eoi(irq: u8) {
     if irq >= 8 {

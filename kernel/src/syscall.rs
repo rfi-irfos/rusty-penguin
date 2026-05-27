@@ -160,6 +160,14 @@ pub extern "C" fn syscall_handler(nr: u64, arg1: u64, arg2: u64, arg3: u64) -> u
             let total_mib = (total / 256) as u64;
             (free_mib << 32) | (total_mib & 0xFFFF_FFFF)
         }
+        7 => {
+            // sys_input_poll — non-blocking; returns event or 0 if empty
+            crate::input::poll().unwrap_or(0)
+        }
+        8 => {
+            // sys_input_wait — blocks until an event is available
+            crate::input::wait()
+        }
         9 => {
             // sys_ps(buf, max_count) → records written
             let max = (arg2 as usize).min(16);

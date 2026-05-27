@@ -120,6 +120,11 @@ static mut ALTGR_DOWN: bool = false;
 static mut CAPS_LOCK:  bool = false;
 static mut E0_PREFIX:  bool = false;
 
+extern "x86-interrupt" fn irq_mouse(_f: InterruptFrame) {
+    crate::ps2mouse::handle_irq();
+    unsafe { pic::eoi(12); }
+}
+
 extern "x86-interrupt" fn irq_keyboard(_f: InterruptFrame) {
     let sc = unsafe { port::inb(0x60) };
 
@@ -161,6 +166,7 @@ extern "x86-interrupt" fn irq_keyboard(_f: InterruptFrame) {
             let caps  = unsafe { CAPS_LOCK };
             if let Some(ch) = sc_to_char(sc, shift, altgr, caps) {
                 vga::write_byte(ch, vga::Color::White);
+                // Push to legacy KBD_BUF (used by sys_read) AND unified input queue
                 unsafe {
                     let next = (KBD_HEAD + 1) % KBD_BUF_SIZE;
                     if next != KBD_TAIL {
@@ -168,6 +174,7 @@ extern "x86-interrupt" fn irq_keyboard(_f: InterruptFrame) {
                         KBD_HEAD = next;
                     }
                 }
+                crate::input::push_key(ch, sc);
             }
         }
     }
@@ -249,6 +256,7 @@ pub fn init() {
         IDT[14] = IdtEntry::gate(exc_page_fault   as *const () as u64);
         IDT[32] = IdtEntry::gate(irq_timer        as *const () as u64);
         IDT[33] = IdtEntry::gate(irq_keyboard     as *const () as u64);
+        IDT[44] = IdtEntry::gate(irq_mouse        as *const () as u64);
 
         let ptr = IdtPtr {
             limit: (size_of::<[IdtEntry; 256]>() - 1) as u16,
