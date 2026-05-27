@@ -160,6 +160,20 @@ pub extern "C" fn syscall_handler(nr: u64, arg1: u64, arg2: u64, arg3: u64) -> u
             let total_mib = (total / 256) as u64;
             (free_mib << 32) | (total_mib & 0xFFFF_FFFF)
         }
+        9 => {
+            // sys_ps(buf, max_count) → records written
+            let max = (arg2 as usize).min(16);
+            crate::sched::fill_ps(arg1 as *mut u8, max) as u64
+        }
+        24 => {
+            // sys_yield — cooperative yield (no-op: single process)
+            crate::sched::yield_();
+            0
+        }
+        39 => {
+            // sys_getpid → current PID
+            crate::sched::current_pid()
+        }
         60 => {
             // sys_exit(code)
             vga::write_str("\n  [psh exited]\n", vga::Color::Green);

@@ -87,6 +87,38 @@ fn sys_meminfo() -> (u32, u32) {
     ((n >> 32) as u32, (n & 0xFFFF_FFFF) as u32)
 }
 
+fn sys_getpid() -> u64 {
+    let n: u64;
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            inout("rax") 39u64 => n,
+            in("rdi") 0u64,
+            out("rcx") _,
+            out("r11") _,
+            options(nostack),
+        );
+    }
+    n
+}
+
+fn sys_ps(buf: *mut u8, max: usize) -> usize {
+    let n: u64;
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            inout("rax") 9u64 => n,
+            in("rdi") buf,
+            in("rsi") max,
+            in("rdx") 0u64,
+            out("rcx") _,
+            out("r11") _,
+            options(nostack),
+        );
+    }
+    n as usize
+}
+
 fn sys_exit(code: u64) -> ! {
     unsafe {
         core::arch::asm!(
@@ -220,6 +252,29 @@ fn cmd_trit(args: &[u8]) {
     write_i64(r); sys_write(b"  ("); write_ternary(r); sys_write(b")\n");
 }
 
+// ── ps command ───────────────────────────────────────────────────────────────
+// Record: [u64 pid][u8 state][7 pad][16 name]  (32 bytes each)
+
+fn cmd_ps() {
+    let mut buf = [0u8; 32 * 16];
+    let count = sys_ps(buf.as_mut_ptr(), 16);
+    write(b"PID  ST  NAME\n");
+    for i in 0..count {
+        let off = i * 32;
+        let mut pid: u64 = 0;
+        for j in 0..8usize { pid |= (buf[off + j] as u64) << (j * 8); }
+        let state_ch = match buf[off + 8] { 1 => b'+', 2 => b'-', _ => b'0' };
+        let name_slice = &buf[off + 16..off + 32];
+        let nlen = name_slice.iter().position(|&b| b == 0).unwrap_or(16);
+        write_u64(pid);
+        write(b"    ");
+        sys_write(&[state_ch]);
+        write(b"   ");
+        write(&name_slice[..nlen]);
+        write(b"\n");
+    }
+}
+
 // ── Shell ─────────────────────────────────────────────────────────────────────
 
 #[no_mangle]
@@ -237,7 +292,11 @@ pub extern "C" fn _start() -> ! {
         let n = sys_read(&mut buf);
         if n == 0 { continue; }
 
-        let line = if buf[n - 1] == b'\n' { &buf[..n - 1] } else { &buf[..n] };
+        let raw = &buf[..n];
+        let mut end = n;
+        if end > 0 && raw[end - 1] == b'\n' { end -= 1; }
+        if end > 0 && raw[end - 1] == b'\r' { end -= 1; }
+        let line = &raw[..end];
 
         if line == b"exit" || line == b"quit" {
             write(b"bye\n");
@@ -246,7 +305,8 @@ pub extern "C" fn _start() -> ! {
             write(b"commands:\n");
             write(b"  echo <text>       print text\n");
             write(b"  uname             kernel info\n");
-            write(b"  whoami            current context\n");
+            write(b"  whoami            current context + pid\n");
+            write(b"  ps                process table (ternary states)\n");
             write(b"  clear             clear screen\n");
             write(b"  reboot            reboot machine\n");
             write(b"  uptime            seconds since boot\n");
@@ -259,7 +319,11 @@ pub extern "C" fn _start() -> ! {
         } else if line == b"uname -a" {
             write(b"RustyPenguin 1.0.0 psh x86_64 GNU/Trit\n");
         } else if line == b"whoami" {
-            write(b"ring3\n");
+            write(b"ring3  pid=");
+            write_u64(sys_getpid());
+            write(b"\n");
+        } else if line == b"ps" {
+            cmd_ps();
         } else if line == b"version" {
             write(b"Rusty Penguin v1.0.0 -- Binary hardware. Ternary mind.\n");
         } else if line == b"uptime" {

@@ -19,6 +19,7 @@ mod vmm;
 mod syscall;
 mod elf;
 mod serial;
+mod sched;
 
 use ternary_core::{Trit, Tryte};
 use mathematics::{mul_tryte, consensus, scale};
@@ -127,6 +128,10 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
     syscall::init();
     vga::write_str("  [SYSCALL: OK]\n", vga::Color::Green);
 
+    // Process table: PID 0 = idle, PID 1 = psh (registered before IRETQ)
+    sched::init();
+    vga::write_str("  [sched: OK]\n", vga::Color::Green);
+
     // Ternary math demo
     vga::write_str("  [mathematics]\n", vga::Color::Cyan);
     let a = Tryte::from_i32(42);
@@ -172,6 +177,9 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
 
     // ── Ring-3 launch ────────────────────────────────────────────────────────
     vga::write_str("  [ring-3 launch]\n", vga::Color::Cyan);
+
+    // Register psh as PID 1 in the process table before entering ring-3
+    sched::register(b"psh");
 
     // Load user-psh ELF into identity-mapped address space (virt == phys)
     let entry = elf::load(USER_PSH_ELF).expect("ELF parse failed");
