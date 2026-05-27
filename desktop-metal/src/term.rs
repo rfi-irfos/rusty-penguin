@@ -42,6 +42,7 @@ pub struct Terminal {
     // Input line
     line_buf:        [u8; 256],
     line_len:        usize,
+    line_cursor:     usize,   // insertion point within line_buf, 0..=line_len
     // Command history
     history:         Vec<Vec<u8>>,
     hist_pos:        usize,   // 0 = browsing oldest, history.len() = live input
@@ -108,6 +109,7 @@ impl Terminal {
             wants_close: false,
             line_buf:    [0u8; 256],
             line_len:    0,
+            line_cursor: 0,
             history:     Vec::new(),
             hist_pos:    0,
             saved_line:  Vec::new(),
@@ -222,17 +224,17 @@ impl Terminal {
                 for c in self.cells.iter_mut() { *c = blank; }
                 self.cur_col = 0; self.cur_row = 0;
             }
-            b'H' | b'f' => {
+            // Absolute cursor position (with params) — used by shell output, not line editing
+            b'H' | b'f' if !p.is_empty() && p != ";" => {
                 let mut parts = p.splitn(2, ';');
                 let r = parts.next().and_then(|s| s.parse::<usize>().ok()).unwrap_or(1).max(1) - 1;
                 let c = parts.next().and_then(|s| s.parse::<usize>().ok()).unwrap_or(1).max(1) - 1;
                 self.cur_row = r.min(ROWS - 1); self.cur_col = c.min(COLS - 1);
             }
-            // Arrow keys with no params → history navigation (input context)
+            // Up/Down with no params → history navigation
             b'A' if p.is_empty() => {
                 if !self.history.is_empty() {
                     if self.hist_pos == self.history.len() {
-                        // Save current live input before browsing
                         self.saved_line = self.line_buf[..self.line_len].to_vec();
                     }
                     if self.hist_pos > 0 {
@@ -253,12 +255,75 @@ impl Terminal {
                     self.load_history_line(&line);
                 }
             }
+            // Left arrow — move cursor back in input line
+            b'D' if p.is_empty() => {
+                if self.line_cursor > 0 {
+                    self.line_cursor -= 1;
+                    self.cur_col = self.cur_col.saturating_sub(1);
+                }
+            }
+            // Right arrow — move cursor forward in input line
+            b'C' if p.is_empty() => {
+                if self.line_cursor < self.line_len {
+                    self.line_cursor += 1;
+                    self.cur_col = (self.cur_col + 1).min(COLS - 1);
+                }
+            }
+            // Home — jump to start of input line
+            b'H' if p.is_empty() => {
+                let back = self.line_cursor;
+                self.line_cursor = 0;
+                self.cur_col = self.cur_col.saturating_sub(back);
+            }
+            // End — jump to end of input line
+            b'F' if p.is_empty() => {
+                let fwd = self.line_len - self.line_cursor;
+                self.line_cursor = self.line_len;
+                self.cur_col = (self.cur_col + fwd).min(COLS - 1);
+            }
+            // Delete key (ESC [ 3 ~) — forward delete at cursor
+            b'~' if p == "3" => {
+                if self.line_cursor < self.line_len {
+                    for i in self.line_cursor..self.line_len - 1 {
+                        self.line_buf[i] = self.line_buf[i + 1];
+                    }
+                    self.line_len -= 1;
+                    self.redraw_from(self.line_cursor);
+                }
+            }
+            // Parameterised cursor movement (used by output sequences, not line editing)
             b'A' => { self.cur_row = self.cur_row.saturating_sub(n1()); }
             b'B' => { self.cur_row = (self.cur_row + n1()).min(ROWS - 1); }
             b'C' => { self.cur_col = (self.cur_col + n1()).min(COLS - 1); }
             b'D' => { self.cur_col = self.cur_col.saturating_sub(n1()); }
             _ => {}
         }
+        self.dirty = true;
+    }
+
+    /// Redraw line_buf[from..line_len] starting at the current terminal cursor column,
+    /// append one blank to erase any leftover char (needed after deletion),
+    /// then reposition the terminal cursor to match line_cursor.
+    /// Invariant: call only when cur_col == prompt_col + from.
+    fn redraw_from(&mut self, from: usize) {
+        let start_col = self.cur_col;
+        for i in from..self.line_len {
+            if self.cur_col < COLS {
+                let ch = self.line_buf[i];
+                self.cells[self.cur_row * COLS + self.cur_col] =
+                    Cell { ch, fg: self.cur_fg, bg: self.cur_bg };
+                self.cur_col += 1;
+            }
+        }
+        // Erase one trailing cell (accounts for deletion making the line shorter)
+        if self.cur_col < COLS {
+            self.cells[self.cur_row * COLS + self.cur_col] = self.blank();
+            self.cur_col += 1;
+        }
+        // Reposition: we drew (line_len - from + 1) chars forward from start_col;
+        // desired position is start_col + (line_cursor - from).
+        let desired = start_col + self.line_cursor.saturating_sub(from);
+        if desired <= self.cur_col { self.cur_col = desired; }
         self.dirty = true;
     }
 
@@ -273,8 +338,14 @@ impl Terminal {
     }
 
     fn erase_line_input(&mut self) {
+        // Advance visual cursor to end of line before erasing backwards
+        while self.line_cursor < self.line_len {
+            self.cur_col = (self.cur_col + 1).min(COLS - 1);
+            self.line_cursor += 1;
+        }
         while self.line_len > 0 {
             self.line_len -= 1;
+            self.line_cursor = self.line_len;
             self.process_byte(0x08);
         }
     }
@@ -284,39 +355,112 @@ impl Terminal {
         let n = src.len().min(255);
         self.line_buf[..n].copy_from_slice(&src[..n]);
         self.line_len = n;
+        self.line_cursor = n;
         for &b in &src[..n] { self.process_byte(b); }
     }
 
     pub fn send_key(&mut self, b: u8) {
-        if b == b'\n' || b == b'\r' {
-            self.process_byte(b'\n');
-            let line_len = self.line_len;
-            let line: [u8; 256] = self.line_buf;
-            self.line_len = 0;
-            self.hist_pos = self.history.len();
-            self.saved_line.clear();
-            if line_len > 0 {
-                let entry: Vec<u8> = line[..line_len].to_vec();
-                if self.history.last().map(|e| e.as_slice()) != Some(&line[..line_len]) {
-                    if self.history.len() >= HISTORY_CAP { self.history.remove(0); }
-                    self.history.push(entry);
-                }
+        match b {
+            b'\n' | b'\r' => {
+                self.process_byte(b'\n');
+                let line_len = self.line_len;
+                let line: [u8; 256] = self.line_buf;
+                self.line_len = 0;
+                self.line_cursor = 0;
                 self.hist_pos = self.history.len();
+                self.saved_line.clear();
+                if line_len > 0 {
+                    let entry: Vec<u8> = line[..line_len].to_vec();
+                    if self.history.last().map(|e| e.as_slice()) != Some(&line[..line_len]) {
+                        if self.history.len() >= HISTORY_CAP { self.history.remove(0); }
+                        self.history.push(entry);
+                    }
+                    self.hist_pos = self.history.len();
+                }
+                self.exec_command(&line[..line_len]);
+                self.write_output(b"\x1b[32m>\x1b[0m ");
             }
-            self.exec_command(&line[..line_len]);
-            self.write_output(b"\x1b[32m>\x1b[0m ");
-        } else if b == 0x08 || b == 0x7F {
-            if self.line_len > 0 {
-                self.line_len -= 1;
-                self.process_byte(0x08);
+            0x08 | 0x7F => {
+                if self.line_cursor > 0 {
+                    if self.line_cursor == self.line_len {
+                        // Cursor at end: fast path
+                        self.line_len -= 1;
+                        self.line_cursor -= 1;
+                        self.process_byte(0x08);
+                    } else {
+                        // Cursor in middle: shift left, redraw suffix
+                        let from = self.line_cursor - 1;
+                        for i in from..self.line_len - 1 {
+                            self.line_buf[i] = self.line_buf[i + 1];
+                        }
+                        self.line_len -= 1;
+                        self.line_cursor -= 1;
+                        self.cur_col = self.cur_col.saturating_sub(1);
+                        self.redraw_from(self.line_cursor);
+                    }
+                }
             }
-        } else if b >= 0x20 && self.line_len < 255 {
-            self.line_buf[self.line_len] = b;
-            self.line_len += 1;
-            self.process_byte(b);
-        } else {
-            // ESC sequences (arrow keys) pass through to the VT100 parser
-            self.process_byte(b);
+            0x03 => {
+                // Ctrl+C — cancel current line
+                self.write_output(b"^C\r\n");
+                self.line_len = 0;
+                self.line_cursor = 0;
+                self.hist_pos = self.history.len();
+                self.saved_line.clear();
+                self.write_output(b"\x1b[32m>\x1b[0m ");
+            }
+            0x0C => {
+                // Ctrl+L — clear screen, redraw prompt and current line content
+                let blank = Cell::default();
+                for c in self.cells.iter_mut() { *c = blank; }
+                self.cur_col = 0; self.cur_row = 0;
+                self.write_output(b"\x1b[32m>\x1b[0m ");
+                // Replay current line up to line_len
+                for i in 0..self.line_len {
+                    let ch = self.line_buf[i];
+                    self.process_byte(ch);
+                }
+                // Reposition cursor to line_cursor
+                let back = self.line_len - self.line_cursor;
+                self.cur_col = self.cur_col.saturating_sub(back);
+                self.dirty = true;
+            }
+            0x01 => {
+                // Ctrl+A — go to start of line
+                let back = self.line_cursor;
+                self.line_cursor = 0;
+                self.cur_col = self.cur_col.saturating_sub(back);
+                self.dirty = true;
+            }
+            0x05 => {
+                // Ctrl+E — go to end of line
+                let fwd = self.line_len - self.line_cursor;
+                self.line_cursor = self.line_len;
+                self.cur_col = (self.cur_col + fwd).min(COLS - 1);
+                self.dirty = true;
+            }
+            b if b >= 0x20 && self.line_len < 255 => {
+                if self.line_cursor == self.line_len {
+                    // Append at end: fast path
+                    self.line_buf[self.line_len] = b;
+                    self.line_len += 1;
+                    self.line_cursor += 1;
+                    self.process_byte(b);
+                } else {
+                    // Insert in middle: shift right, redraw suffix
+                    let from = self.line_cursor;
+                    let mut i = self.line_len;
+                    while i > from { self.line_buf[i] = self.line_buf[i - 1]; i -= 1; }
+                    self.line_buf[from] = b;
+                    self.line_len += 1;
+                    self.line_cursor += 1;
+                    self.redraw_from(from);
+                }
+            }
+            _ => {
+                // ESC sequences (arrows, etc.) pass through to the VT100 parser
+                self.process_byte(b);
+            }
         }
     }
 
@@ -337,7 +481,9 @@ impl Terminal {
             self.write_output(b"  ps                 process table\r\n");
             self.write_output(b"  pwd  date  sysinfo  uname  whoami\r\n");
             self.write_output(b"  uptime  mem  echo  clear  exit\r\n");
-            self.write_output(b"  \x1b[90mUp/Down=history  Ctrl+T=new term  Ctrl+W=close\x1b[0m\r\n");
+            self.write_output(b"  \x1b[90mUp/Down=history  Left/Right=cursor  Home/End\x1b[0m\r\n");
+            self.write_output(b"  \x1b[90mCtrl+C=cancel  Ctrl+L=clear  Ctrl+A/E=line start/end\x1b[0m\r\n");
+            self.write_output(b"  \x1b[90mCtrl+T=new term  Ctrl+W=close term\x1b[0m\r\n");
         } else if line == b"uname" || line == b"uname -a" {
             self.write_output(b"RustyPenguin 1.0.0 psh x86_64 GNU/Trit\r\n");
         } else if line == b"whoami" {

@@ -65,8 +65,8 @@ fn sys_yield() {
 
 const BG:       u32 = 0x0B1220;
 const TOPBAR:   u32 = 0x080F1C;
-const TASKBAR:  u32 = 0x111827;
-const TOPBAR_H: u32 = 20;
+const TASKBAR:  u32 = 0x0B141A;
+const TOPBAR_H: u32 = 28;
 const BORDER:   u32 = 0x1E293B;
 const GREEN:    u32 = 0x4ADE80;
 const DIM:      u32 = 0x334155;
@@ -76,8 +76,8 @@ const AMBER:    u32 = 0xFBBF24;
 const BLUE:     u32 = 0x60A5FA;
 const CURSOR:   u32 = 0xF8FAFC;
 
-const CURSOR_W: u32 = 12;
-const CURSOR_H: u32 = 20;
+const CURSOR_W: u32 = 18;
+const CURSOR_H: u32 = 24;
 
 // Dingir — 8-pointed star, cuneiform divine determinative
 #[rustfmt::skip]
@@ -85,31 +85,9 @@ const DINGIR: [u8; 8] = [
     0x18, 0x5A, 0x3C, 0xFF, 0x3C, 0x5A, 0x18, 0x00,
 ];
 
-#[rustfmt::skip]
-const CURSOR_SHAPE: [[bool; 12]; 20] = [
-    [true,  false, false, false, false, false, false, false, false, false, false, false],
-    [true,  true,  false, false, false, false, false, false, false, false, false, false],
-    [true,  true,  true,  false, false, false, false, false, false, false, false, false],
-    [true,  true,  true,  true,  false, false, false, false, false, false, false, false],
-    [true,  true,  true,  true,  true,  false, false, false, false, false, false, false],
-    [true,  true,  true,  true,  true,  true,  false, false, false, false, false, false],
-    [true,  true,  true,  true,  true,  true,  true,  false, false, false, false, false],
-    [true,  true,  true,  true,  true,  true,  true,  true,  false, false, false, false],
-    [true,  true,  true,  true,  true,  true,  true,  true,  true,  false, false, false],
-    [true,  true,  true,  true,  true,  true,  true,  true,  true,  true,  false, false],
-    [true,  true,  true,  true,  true,  true,  false, false, false, false, false, false],
-    [true,  true,  true,  false, true,  true,  false, false, false, false, false, false],
-    [true,  true,  false, false, true,  false, false, false, false, false, false, false],
-    [true,  false, false, false, false, false, false, false, false, false, false, false],
-    [true,  false, false, false, false, false, false, false, false, false, false, false],
-    [true,  false, false, false, false, false, false, false, false, false, false, false],
-    [true,  false, false, false, false, false, false, false, false, false, false, false],
-    [true,  false, false, false, false, false, false, false, false, false, false, false],
-    [false, false, false, false, false, false, false, false, false, false, false, false],
-    [false, false, false, false, false, false, false, false, false, false, false, false],
-];
-
 // ---- Cursor helpers ─────────────────────────────────────────────────────────
+// Arrow cursor. Callers pass the hotspot in screen coordinates; the hotspot is
+// the pointer tip, so hit testing and drawing use the same point.
 
 fn save_cursor_bg(fb: &Framebuffer, x: i32, y: i32, buf: &mut [u32]) {
     for row in 0..CURSOR_H as i32 {
@@ -134,14 +112,40 @@ fn restore_cursor_bg(fb: &mut Framebuffer, x: i32, y: i32, buf: &[u32]) {
     }
 }
 
+fn cursor_mask(col: i32, row: i32) -> bool {
+    (row >= 0 && row <= 15 && col >= 0 && col <= row / 2)
+        || (row >= 11 && row <= 22 && col >= 5 && col <= 8)
+        || (row >= 15 && row <= 18 && col >= 8 && col <= 12)
+}
+
 fn draw_cursor(fb: &mut Framebuffer, x: i32, y: i32) {
+    let outline = 0x000000u32; // black — visible against any background
+    let put = |fb: &mut Framebuffer, px: i32, py: i32, c: u32| {
+        if px >= 0 && py >= 0 && (px as u32) < fb.width && (py as u32) < fb.height {
+            fb.set_pixel(px as u32, py as u32, c);
+        }
+    };
+
+    // Outline — clamped to [0, CURSOR_W) × [0, CURSOR_H) so all pixels stay
+    // inside the save/restore bounding box. Pixels at -1 offsets would never
+    // be restored and leave permanent trails.
     for row in 0..CURSOR_H as i32 {
         for col in 0..CURSOR_W as i32 {
-            if CURSOR_SHAPE[row as usize][col as usize] {
-                let px = x + col; let py = y + row;
-                if px >= 0 && py >= 0 && (px as u32) < fb.width && (py as u32) < fb.height {
-                    fb.set_pixel(px as u32, py as u32, CURSOR);
-                }
+            if !cursor_mask(col, row)
+                && (cursor_mask(col - 1, row)
+                    || cursor_mask(col + 1, row)
+                    || cursor_mask(col, row - 1)
+                    || cursor_mask(col, row + 1))
+            {
+                put(fb, x + col, y + row, outline);
+            }
+        }
+    }
+
+    for row in 0..CURSOR_H as i32 {
+        for col in 0..CURSOR_W as i32 {
+            if cursor_mask(col, row) {
+                put(fb, x + col, y + row, CURSOR);
             }
         }
     }
@@ -170,31 +174,45 @@ fn uptime_str() -> String {
 fn draw_scene_static(fb: &mut Framebuffer) {
     let w = fb.width; let h = fb.height;
     let tb_y = h - 28;
-    fb.fill_rect(0, 0, w, h, BG);
-    let mut gx = 0u32; while gx < w { fb.fill_rect(gx, TOPBAR_H, 1, tb_y.saturating_sub(TOPBAR_H), 0x0D1628); gx += 40; }
-    let mut gy = TOPBAR_H; while gy < tb_y { fb.fill_rect(0, gy, w, 1, 0x0D1628); gy += 40; }
-    let art = [
-        "   .--.   ",
-        "  |o_o |  ",
-        "  |:_/ |  ",
-        " //   \\ \\ ",
-        "(|     | )",
-        " \\'\\_._/'\\",
-        " \\___)=(_/",
-    ];
-    let art_w = 10u32 * 8; let art_h = 7u32 * 8;
-    let art_x = w.saturating_sub(art_w) / 2;
-    let canvas_h = tb_y.saturating_sub(TOPBAR_H);
-    let art_y = TOPBAR_H + canvas_h.saturating_sub(art_h + 80) / 2;
-    for (i, line) in art.iter().enumerate() {
-        fb.draw_str(art_x, art_y + i as u32 * 8, line, AMBER, BG);
+
+    fb.fill_rect(0, 0, w, h, 0x08131D);
+
+    let mid = TOPBAR_H + tb_y.saturating_sub(TOPBAR_H) / 2;
+    let mut y = TOPBAR_H;
+    while y < tb_y {
+        let band = if y < mid { 0x0A1B23 } else { 0x0B1724 };
+        fb.fill_rect(0, y, w, 1, band);
+        y += 1;
     }
+
+    let mut gx = 0u32;
+    while gx < w {
+        fb.fill_rect(gx, TOPBAR_H, 1, tb_y.saturating_sub(TOPBAR_H), 0x0E2530);
+        gx += 64;
+    }
+    let mut gy = TOPBAR_H;
+    while gy < tb_y {
+        fb.fill_rect(0, gy, w, 1, 0x0E2530);
+        gy += 64;
+    }
+
+    let logo_x = w.saturating_sub(96) / 2;
+    let logo_y = TOPBAR_H + tb_y.saturating_sub(TOPBAR_H).saturating_sub(104) / 2;
+    fb.fill_rect(logo_x, logo_y, 96, 58, 0x0C2028);
+    fb.fill_rect(logo_x, logo_y, 96, 1, 0x22C55E);
+    fb.fill_rect(logo_x, logo_y + 57, 96, 1, 0x14532D);
+    fb.fill_rect(logo_x, logo_y, 1, 58, 0x14532D);
+    fb.fill_rect(logo_x + 95, logo_y, 1, 58, 0x14532D);
+    fb.draw_bitmap_2x(logo_x + 40, logo_y + 8, &DINGIR, GREEN, 0x0C2028);
+    fb.draw_str(logo_x + 12, logo_y + 34, "RUSTY", WHITE, 0x0C2028);
+    fb.draw_str(logo_x + 12, logo_y + 44, "PENGUIN", GREEN, 0x0C2028);
+
     let tag = "Binary hardware. Ternary mind.";
-    fb.draw_str(w.saturating_sub(tag.len() as u32 * 8) / 2, art_y + art_h + 8, tag, DIM, BG);
+    fb.draw_str(w.saturating_sub(tag.len() as u32 * 8) / 2, logo_y + 70, tag, 0x8BC9A5, 0x0B1724);
     fb.fill_rect(0, tb_y, w, 28, TASKBAR);
-    fb.fill_rect(0, tb_y, w, 1, BORDER);
+    fb.fill_rect(0, tb_y, w, 1, 0x1F3B2D);
     fb.draw_bitmap_2x(4, tb_y + 6, &DINGIR, GREEN, TASKBAR);
-    fb.draw_str(28, tb_y + 10, "RUSTY PENGUIN", GREEN, TASKBAR);
+    fb.draw_str(28, tb_y + 10, "Menu", WHITE, TASKBAR);
     fb.fill_rect(0, 0, w, TOPBAR_H, TOPBAR);
     fb.fill_rect(0, TOPBAR_H - 1, w, 1, 0x1E293B);
 }
@@ -224,18 +242,18 @@ fn draw_topbar(fb: &mut Framebuffer, time: &str, s: &SysStats, ticks: u64) {
     let mib = format!("{}/{}M", s.used_mib, s.total_mib);
     let ty = (TOPBAR_H / 2).saturating_sub(4);
     rx -= mib.len() as i32 * 8;
-    fb.draw_str(rx as u32, ty, &mib, 0x60A5FA, TOPBAR);
+    if rx > 80 { fb.draw_str(rx as u32, ty, &mib, 0x60A5FA, TOPBAR); }
     rx -= 16;
 
     let mem = format!("M{}%", s.mem_pct);
     rx -= mem.len() as i32 * 8;
-    fb.draw_str(rx as u32, ty, &mem, 0x4ADE80, TOPBAR);
+    if rx > 80 { fb.draw_str(rx as u32, ty, &mem, 0x4ADE80, TOPBAR); }
     rx -= 16;
 
     let ind = trit_indicator(ticks);
     let ind_str = core::str::from_utf8(&ind).unwrap_or("T[+--+]");
     rx -= ind_str.len() as i32 * 8;
-    fb.draw_str(rx as u32, ty, ind_str, AMBER, TOPBAR);
+    if rx > 80 { fb.draw_str(rx as u32, ty, ind_str, AMBER, TOPBAR); }
 }
 
 // ---- Launcher buttons ───────────────────────────────────────────────────────
@@ -469,29 +487,33 @@ pub extern "C" fn _start() -> ! {
     draw_cursor(&mut fb, cx, cy);
 
     let mut prev_btn: u8 = 0;
-    let mut tick: u64 = 0;
+    let mut last_topbar_tick: u64 = 0;
     let mut wins: Vec<TermWin> = Vec::new();
     let mut scene_dirty = false;
     let mut start_menu_open = false;
     let mut ctx_menu: Option<(i32, i32)> = None;
 
+    // Auto-open one terminal on boot so the desktop is immediately interactive
+    if let Some(tw) = open_term(w, h, 0, &LAUNCHERS[0]) {
+        wins.push(tw);
+        scene_dirty = true;
+    }
+
     loop {
         sys_yield();
 
-        // Input
-        let key = input::poll(&mut mouse, w, h);
+        // Input — drain all events; ESC sequences need all bytes in order
+        let keys = input::poll(&mut mouse, w, h);
         let (nx, ny, btn) = (mouse.x, mouse.y, mouse.buttons);
 
         // Keyboard → global shortcuts first, then focused terminal
-        if let Some(k) = key {
-            let ctrl_t = k == 0x14; // Ctrl+T
-            let ctrl_w = k == 0x17; // Ctrl+W
-            if ctrl_t {
+        for &k in keys.iter() {
+            if k == 0x14 { // Ctrl+T — new terminal
                 if let Some(tw) = open_term(w, h, wins.len(), &LAUNCHERS[0]) {
                     wins.push(tw);
                     scene_dirty = true;
                 }
-            } else if ctrl_w {
+            } else if k == 0x17 { // Ctrl+W — close focused terminal
                 if !wins.is_empty() {
                     restore_cursor_bg(&mut fb, cx, cy, &cbuf);
                     wins.pop();
@@ -553,15 +575,16 @@ pub extern "C" fn _start() -> ! {
             draw_cursor(&mut fb, cx, cy);
         }
 
-        // Top bar: uptime + stats, update every ~2s (200 ticks @ ~100Hz kernel timer)
-        if tick % 200 == 0 {
+        // Top bar: uptime + stats, update every ~2s (200 real kernel ticks @ 100Hz)
+        let now_ticks = sys_ticks();
+        if now_ticks.wrapping_sub(last_topbar_tick) >= 200 {
+            last_topbar_tick = now_ticks;
             stats = sample_stats();
             restore_cursor_bg(&mut fb, cx, cy, &cbuf);
-            draw_topbar(&mut fb, &uptime_str(), &stats, sys_ticks());
+            draw_topbar(&mut fb, &uptime_str(), &stats, now_ticks);
             save_cursor_bg(&fb, cx, cy, &mut cbuf);
             draw_cursor(&mut fb, cx, cy);
         }
-        tick = tick.wrapping_add(1);
 
         // Click handling
         let left_down  = (btn & 0x01) != 0;

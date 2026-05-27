@@ -63,9 +63,13 @@ extern "x86-interrupt" fn exc_double_fault(_f: InterruptFrame, _e: u64) -> ! {
     loop {}
 }
 
-extern "x86-interrupt" fn exc_gpf(_f: InterruptFrame, err: u64) {
+extern "x86-interrupt" fn exc_gpf(f: InterruptFrame, err: u64) {
     vga::write_str("\nEXCEPTION: #GP (err=0x", vga::Color::Red);
     vga::write_hex(err, vga::Color::Red);
+    vga::write_str(" rip=0x", vga::Color::Red);
+    vga::write_hex(f.ip, vga::Color::Red);
+    vga::write_str(" cs=0x", vga::Color::Red);
+    vga::write_hex(f.cs, vga::Color::Red);
     vga::write_str(")\n", vga::Color::Red);
     loop {}
 }
@@ -117,6 +121,7 @@ extern "x86-interrupt" fn irq_timer(_f: InterruptFrame) {
 
 static mut SHIFT_DOWN: bool = false;
 static mut ALTGR_DOWN: bool = false;
+static mut CTRL_DOWN:  bool = false;
 static mut CAPS_LOCK:  bool = false;
 static mut E0_PREFIX:  bool = false;
 
@@ -155,6 +160,24 @@ extern "x86-interrupt" fn irq_keyboard(_f: InterruptFrame) {
                 crate::input::push_key(b'[', 0);
                 crate::input::push_key(dir, 0);
             }
+            // Home (ESC [ H) and End (ESC [ F)
+            0x47 => {
+                crate::input::push_key(0x1B, sc);
+                crate::input::push_key(b'[', 0);
+                crate::input::push_key(b'H', 0);
+            }
+            0x4F => {
+                crate::input::push_key(0x1B, sc);
+                crate::input::push_key(b'[', 0);
+                crate::input::push_key(b'F', 0);
+            }
+            // Delete → ESC [ 3 ~
+            0x53 => {
+                crate::input::push_key(0x1B, sc);
+                crate::input::push_key(b'[', 0);
+                crate::input::push_key(b'3', 0);
+                crate::input::push_key(b'~', 0);
+            }
             _ => {}
         }
         unsafe { pic::eoi(1); }
@@ -164,6 +187,8 @@ extern "x86-interrupt" fn irq_keyboard(_f: InterruptFrame) {
     match sc {
         0x2A | 0x36 => unsafe { SHIFT_DOWN = true; },
         0xAA | 0xB6 => unsafe { SHIFT_DOWN = false; },
+        0x1D => unsafe { CTRL_DOWN = true; },
+        0x9D => unsafe { CTRL_DOWN = false; },
         0x3A => unsafe { CAPS_LOCK ^= true; },
         0x0E => {
             // Backspace: deliver 0x08 to ring-3 via both queues; ring-3 handles echo
@@ -179,8 +204,17 @@ extern "x86-interrupt" fn irq_keyboard(_f: InterruptFrame) {
         _ => {
             let shift = unsafe { SHIFT_DOWN };
             let altgr = unsafe { ALTGR_DOWN };
+            let ctrl  = unsafe { CTRL_DOWN };
             let caps  = unsafe { CAPS_LOCK };
-            if let Some(ch) = sc_to_char(sc, shift, altgr, caps) {
+            // When Ctrl held: use bare lowercase letter then mask to control char
+            let effective_shift = if ctrl { false } else { shift };
+            let effective_caps  = if ctrl { false } else { caps };
+            if let Some(mut ch) = sc_to_char(sc, effective_shift, altgr, effective_caps) {
+                if ctrl {
+                    // Map a-z / A-Z → 0x01–0x1A; other chars pass through unchanged
+                    if ch >= b'a' && ch <= b'z' { ch &= 0x1F; }
+                    else if ch >= b'A' && ch <= b'Z' { ch &= 0x1F; }
+                }
                 // No kernel-side echo — ring-3 desktop handles all display output
                 unsafe {
                     let next = (KBD_HEAD + 1) % KBD_BUF_SIZE;
