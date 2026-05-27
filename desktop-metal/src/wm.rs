@@ -90,14 +90,19 @@ pub fn content_origin(win: &Window) -> (i32, i32) {
     (win.x + 1, win.y + 1 + TITLEBAR_H)
 }
 
-fn draw_btn(fb: &mut Framebuffer, x: i32, y: i32, color: u32, sym: char) {
+fn draw_btn(fb: &mut Framebuffer, x: i32, y: i32, color: u32, sym: char, bg: u32) {
     if x < 0 || y < 0 { return; }
-    fb.fill_rect(x as u32, y as u32, 10, 10, color);
-    // symbol in darkened version of button color
+    let xu = x as u32; let yu = y as u32;
+    fb.fill_rect(xu, yu, 10, 10, color);
+    // Clip corners to titlebar bg for a rounded look
+    fb.set_pixel(xu,     yu,     bg);
+    fb.set_pixel(xu + 9, yu,     bg);
+    fb.set_pixel(xu,     yu + 9, bg);
+    fb.set_pixel(xu + 9, yu + 9, bg);
     let dark = (((color >> 16) & 0xFF) / 2) << 16
              | (((color >> 8)  & 0xFF) / 2) << 8
              |  ((color        & 0xFF) / 2);
-    fb.draw_char((x + 1) as u32, (y + 1) as u32, sym, dark, color);
+    fb.draw_char(xu + 1, yu + 1, sym, dark, color);
 }
 
 pub fn draw_window(fb: &mut Framebuffer, win: &Window, focused: bool) {
@@ -136,7 +141,7 @@ pub fn draw_window(fb: &mut Framebuffer, win: &Window, focused: bool) {
 
     // Buttons
     let by = btn_y(win);
-    draw_btn(fb, close_x(win), by, BTN_CLOSE, 'x');
-    draw_btn(fb, min_x(win),   by, BTN_MIN,   '-');
-    draw_btn(fb, max_x(win),   by, BTN_MAX,   '+');
+    draw_btn(fb, close_x(win), by, BTN_CLOSE, 'x', tb_col);
+    draw_btn(fb, min_x(win),   by, BTN_MIN,   '-', tb_col);
+    draw_btn(fb, max_x(win),   by, BTN_MAX,   '+', tb_col);
 }

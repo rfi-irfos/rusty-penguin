@@ -188,6 +188,17 @@ pub fn handle_irq() {
             let dx = dx_raw as i16;
             let dy = -(dy_raw as i16);   // PS/2 Y is inverted vs screen
 
+            // Diagnostic: log significant mouse movements to serial so we can confirm
+            // which axis the hardware is reporting. Remove once mouse is confirmed working.
+            if dx.abs() > 1 || dy.abs() > 1 {
+                let xs = if dx > 1 { b'R' } else if dx < -1 { b'L' } else { b'-' };
+                let ys = if dy > 1 { b'D' } else if dy < -1 { b'U' } else { b'-' };
+                crate::serial::write_byte(b'[');
+                crate::serial::write_byte(xs);
+                crate::serial::write_byte(ys);
+                crate::serial::write_byte(b']');
+            }
+
             let w = fb::width() as i32;
             let h = fb::height() as i32;
             MOUSE_X = (MOUSE_X + dx as i32).clamp(0, if w > 0 { w - 1 } else { 639 });

@@ -49,6 +49,20 @@ fn sys_meminfo() -> (u32, u32) {
     ((n >> 32) as u32, (n & 0xFFFF_FFFF) as u32)
 }
 
+fn sys_rtc() -> u64 {
+    let n: u64;
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            inout("rax") 13u64 => n,
+            in("rdi") 0u64,
+            out("rcx") _, out("r11") _,
+            options(nostack),
+        );
+    }
+    n
+}
+
 fn sys_yield() {
     unsafe {
         core::arch::asm!(
@@ -90,8 +104,8 @@ const BLUE:     u32 = 0x60A5FA;
 const CURSOR:   u32 = 0xF8FAFC;
 const TEAL:     u32 = 0x2DD4BF;
 
-const CURSOR_W: u32 = 18;
-const CURSOR_H: u32 = 24;
+const CURSOR_W: u32 = 12;
+const CURSOR_H: u32 = 16;
 
 // ---- Desktop icon bitmaps ───────────────────────────────────────────────────
 // 8×8 bitmaps for desktop icon graphics
@@ -138,9 +152,12 @@ fn restore_cursor_bg(fb: &mut Framebuffer, x: i32, y: i32, buf: &[u32]) {
 }
 
 fn cursor_mask(col: i32, row: i32) -> bool {
-    (row >= 0 && row <= 15 && col >= 0 && col <= row / 2)
-        || (row >= 11 && row <= 22 && col >= 5 && col <= 8)
-        || (row >= 15 && row <= 18 && col >= 8 && col <= 12)
+    // Head: right triangle, tip at (0,0), 6px wide at base (row 10)
+    (row >= 0 && row <= 10 && col >= 0 && col <= row / 2)
+    // Shaft: 3px wide
+        || (row >= 7 && row <= 14 && col >= 3 && col <= 5)
+    // Cross-bar: 5px wide
+        || (row >= 10 && row <= 12 && col >= 5 && col <= 9)
 }
 
 fn draw_cursor(fb: &mut Framebuffer, x: i32, y: i32) {
@@ -185,6 +202,31 @@ fn sample_stats() -> SysStats {
     let used = total.saturating_sub(free);
     let mem_pct = if total > 0 { ((used as u64 * 100 / total as u64) as u8).min(100) } else { 0 };
     SysStats { mem_pct, used_mib: used, total_mib: total }
+}
+
+const MONTH_NAMES: [&str; 13] = ["",  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const DAY_FULL:    [&str; 8]  = ["",  "Sunday", "Monday", "Tuesday", "Wednesday",
+                                  "Thursday", "Friday", "Saturday"];
+
+fn rtc_str() -> String {
+    let rtc = sys_rtc();
+    let wday  = (rtc        & 0xFF) as u8;
+    let sec   = ((rtc >>  8) & 0xFF) as u8;
+    let min   = ((rtc >> 16) & 0xFF) as u8;
+    let hour  = ((rtc >> 24) & 0xFF) as u8;
+    let mday  = ((rtc >> 32) & 0xFF) as u8;
+    let month = ((rtc >> 40) & 0xFF) as u8;
+    // Sanity check — if RTC returned garbage, fall back to uptime
+    if month == 0 || month > 12 || mday == 0 || mday > 31 || hour > 23 || min > 59 || sec > 59 {
+        let ticks = sys_ticks();
+        let secs = ticks / 100;
+        let h = secs / 3600; let m = (secs % 3600) / 60; let s = secs % 60;
+        return format!("Up {:02}:{:02}:{:02}", h, m, s);
+    }
+    let day_s = if (wday as usize) < DAY_FULL.len()   { DAY_FULL[wday as usize]   } else { "???" };
+    let mon_s = if (month as usize) < MONTH_NAMES.len() { MONTH_NAMES[month as usize] } else { "???" };
+    format!("{} {} {:02}  {:02}:{:02}:{:02}", day_s, mon_s, mday, hour, min, sec)
 }
 
 fn uptime_str() -> String {
@@ -293,36 +335,27 @@ fn draw_topbar(fb: &mut Framebuffer, time: &str, s: &SysStats, ticks: u64) {
     let fw = fb.width;
     fb.fill_rect(0, 0, fw, TOPBAR_H, TOPBAR);
     fb.fill_rect(0, TOPBAR_H - 1, fw, 1, 0x1E293B);
-    // Left green accent bar
-    fb.fill_rect(0, 0, 3, TOPBAR_H, 0x22C55E);
+    fb.fill_rect(0, 0, 3, TOPBAR_H, 0x22C55E);  // green left accent
     let ty = (TOPBAR_H / 2).saturating_sub(4);
-    // Uptime left of Dingir + label
+
+    // LEFT: brand mark
     fb.draw_bitmap_2x(6, ty.saturating_sub(4), &DINGIR, GREEN, TOPBAR);
-    fb.draw_str(24, ty, time, WHITE, TOPBAR);
-    // Centered OS name
-    let lbl = "Rusty Penguin";
-    fb.draw_str((fw - lbl.len() as u32 * 8) / 2, ty, lbl, GREEN, TOPBAR);
+    fb.draw_str(24, ty, "Rusty Penguin", GREEN, TOPBAR);
 
-    // Right-aligned, mirrors Linux topbar colour scheme:
-    //   BLUE   74/512M   used / total MiB
-    //   GREEN  M74%      memory %
-    //   AMBER  T[+--+]   ternary engine live indicator
-    let mut rx = fw as i32 - 8;
+    // CENTER: uptime clock
+    let cx = (fw - time.len() as u32 * 8) / 2;
+    fb.draw_str(cx, ty, time, WHITE, TOPBAR);
 
-    let mib = format!("{}/{}M", s.used_mib, s.total_mib);
-    rx -= mib.len() as i32 * 8;
-    if rx > 80 { fb.draw_str(rx as u32, ty, &mib, 0x60A5FA, TOPBAR); }
-    rx -= 16;
-
-    let mem = format!("M{}%", s.mem_pct);
-    rx -= mem.len() as i32 * 8;
-    if rx > 80 { fb.draw_str(rx as u32, ty, &mem, 0x4ADE80, TOPBAR); }
-    rx -= 16;
-
+    // RIGHT: trit indicator + labeled memory
+    let mem_str = format!("MEM: {}/{}M", s.used_mib, s.total_mib);
     let ind = trit_indicator(ticks);
     let ind_str = core::str::from_utf8(&ind).unwrap_or("T[+--+]");
+    let mut rx = fw as i32 - 8;
+    rx -= mem_str.len() as i32 * 8;
+    if rx > 120 { fb.draw_str(rx as u32, ty, &mem_str, GREEN, TOPBAR); }
+    rx -= 16;
     rx -= ind_str.len() as i32 * 8;
-    if rx > 80 { fb.draw_str(rx as u32, ty, ind_str, AMBER, TOPBAR); }
+    if rx > 120 { fb.draw_str(rx as u32, ty, ind_str, AMBER, TOPBAR); }
 }
 
 // ---- Launcher buttons ───────────────────────────────────────────────────────
@@ -335,39 +368,6 @@ const LAUNCHERS: &[Launcher] = &[
     Launcher { label: " trit", cmd: Some("trit 42\n"),  title: "trit — Ternary",   color: 0xC084FC },
 ];
 
-fn launcher_rects(fw: u32, fh: u32) -> [(u32, u32, u32, u32); 4] {
-    let bw: u32 = 52; let bh: u32 = 20; let gap: u32 = 8;
-    let total = 4 * bw + 3 * gap;
-    let sx = fw.saturating_sub(total) / 2;
-    let y  = fh - 28 - bh - 10;
-    [
-        (sx,               y, bw, bh),
-        (sx + bw + gap,    y, bw, bh),
-        (sx + 2*(bw+gap),  y, bw, bh),
-        (sx + 3*(bw+gap),  y, bw, bh),
-    ]
-}
-
-fn draw_launchers(fb: &mut Framebuffer) {
-    let rects = launcher_rects(fb.width, fb.height);
-    for (l, (x, y, w, h)) in LAUNCHERS.iter().zip(rects.iter()) {
-        fb.fill_rect(*x, *y, *w, *h, DIMMER);
-        fb.fill_rect(*x, *y, *w, 1,  l.color);
-        fb.fill_rect(*x, *y, 1,  *h, l.color);
-        fb.fill_rect(*x + *w - 1, *y, 1, *h, l.color);
-        fb.fill_rect(*x, *y + *h - 1, *w, 1, l.color);
-        fb.draw_str(*x + 2, *y + 6, l.label, l.color, DIMMER);
-    }
-}
-
-fn launcher_hit(fw: u32, fh: u32, mx: i32, my: i32) -> Option<usize> {
-    for (i, (x, y, w, h)) in launcher_rects(fw, fh).iter().enumerate() {
-        if mx >= *x as i32 && mx < (*x + *w) as i32 && my >= *y as i32 && my < (*y + *h) as i32 {
-            return Some(i);
-        }
-    }
-    None
-}
 
 // ---- Desktop icon shortcuts ─────────────────────────────────────────────────
 // Fixed 4 icons. Each is 72×64px: 48px image area + 8px label + 8px margin.
@@ -430,19 +430,6 @@ fn desktop_icon_hit(mx: i32, my: i32) -> Option<usize> {
     None
 }
 
-// ---- Taskbar clock ──────────────────────────────────────────────────────────
-
-fn draw_taskbar_clock(fb: &mut Framebuffer, up: &str) {
-    let fh = fb.height;
-    let fw = fb.width;
-    let tb_y = fh - 28;
-    let ty = tb_y + (28 - 8) / 2;
-    let label_w = up.len() as u32 * 8 + 8;
-    let rx = fw.saturating_sub(label_w + 4);
-    // Clear clock area
-    fb.fill_rect(rx, tb_y + 1, label_w + 4, 26, TASKBAR);
-    fb.draw_str(rx + 4, ty, up, TEAL, TASKBAR);
-}
 
 // ---- Taskbar window buttons ─────────────────────────────────────────────────
 
@@ -587,10 +574,8 @@ fn open_term(w: i32, h: i32, n: usize, l: &Launcher) -> Option<TermWin> {
 fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, ctx_menu: Option<(i32,i32)>, stats: &SysStats) {
     draw_scene_static(fb);
     draw_desktop_icons(fb);
-    draw_launchers(fb);
     draw_taskbar_win_btns(fb, wins);
-    let up = uptime_str();
-    draw_taskbar_clock(fb, &up);
+    let up = rtc_str();
     let n = wins.len();
     for (i, tw) in wins.iter_mut().enumerate() {
         if tw.win.minimized { continue; }
@@ -620,9 +605,7 @@ pub extern "C" fn _start() -> ! {
     let mut stats = sample_stats();
     draw_scene_static(&mut fb);
     draw_desktop_icons(&mut fb);
-    draw_launchers(&mut fb);
-    let up0 = uptime_str();
-    draw_taskbar_clock(&mut fb, &up0);
+    let up0 = rtc_str();
     draw_topbar(&mut fb, &up0, &stats, sys_ticks());
 
     let cbl = (CURSOR_W * CURSOR_H) as usize;
@@ -725,10 +708,9 @@ pub extern "C" fn _start() -> ! {
         if now_ticks.wrapping_sub(last_topbar_tick) >= 200 {
             last_topbar_tick = now_ticks;
             stats = sample_stats();
-            let up = uptime_str();
+            let up = rtc_str();
             restore_cursor_bg(&mut fb, cx, cy, &cbuf);
             draw_topbar(&mut fb, &up, &stats, now_ticks);
-            draw_taskbar_clock(&mut fb, &up);
             save_cursor_bg(&fb, cx, cy, &mut cbuf);
             draw_cursor(&mut fb, cx, cy);
         }
@@ -816,11 +798,6 @@ pub extern "C" fn _start() -> ! {
                         wins[mi].win.minimized = false;
                         let tw = wins.remove(mi); wins.push(tw);
                         scene_dirty = true;
-                    } else if let Some(li) = launcher_hit(fb.width, fb.height, cx, cy) {
-                        if let Some(tw) = open_term(w, h, wins.len(), &LAUNCHERS[li]) {
-                            wins.push(tw);
-                            scene_dirty = true;
-                        }
                     } else if let Some(di) = desktop_icon_hit(cx, cy) {
                         let li = DESKTOP_ICONS[di].launcher_idx;
                         if let Some(tw) = open_term(w, h, wins.len(), &LAUNCHERS[li]) {

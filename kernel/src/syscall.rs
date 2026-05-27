@@ -201,6 +201,57 @@ pub extern "C" fn syscall_handler(nr: u64, arg1: u64, arg2: u64, arg3: u64) -> u
             // sys_input_poll — non-blocking; returns event or 0 if empty
             crate::input::poll().unwrap_or(0)
         }
+        13 => {
+            // sys_rtc — read CMOS real-time clock
+            // Returns packed u64:
+            //   [63:48] year (e.g. 2026)  [47:40] month  [39:32] mday
+            //   [31:24] hour              [23:16] min    [15:8]  sec
+            //   [7:0]   weekday (1=Sun … 7=Sat)
+            unsafe fn cmos_rd(reg: u8) -> u8 {
+                crate::port::outb(0x70, reg & 0x7F);
+                crate::port::inb(0x71)
+            }
+            unsafe {
+                // Wait until RTC update-in-progress bit clears
+                let mut tries = 0u32;
+                loop {
+                    crate::port::outb(0x70, 0x0A);
+                    if crate::port::inb(0x71) & 0x80 == 0 { break; }
+                    tries += 1;
+                    if tries > 200_000 { break; }
+                }
+                let sec   = cmos_rd(0x00);
+                let min   = cmos_rd(0x02);
+                let hour  = cmos_rd(0x04);
+                let wday  = cmos_rd(0x06);
+                let mday  = cmos_rd(0x07);
+                let month = cmos_rd(0x08);
+                let year  = cmos_rd(0x09);
+                let cent  = cmos_rd(0x32);
+                // Status register B bit 2: 0=BCD, 1=binary
+                crate::port::outb(0x70, 0x0B);
+                let regb  = crate::port::inb(0x71);
+                let bcd   = (regb & 0x04) == 0;
+                let cvt   = |v: u8| -> u8 { if bcd { (v >> 4) * 10 + (v & 0x0F) } else { v } };
+                let sec   = cvt(sec);
+                let min   = cvt(min);
+                let hour  = cvt(hour & 0x7F);
+                let wday  = cvt(wday);
+                let mday  = cvt(mday);
+                let month = cvt(month);
+                let year2 = cvt(year);
+                let cent2 = cvt(cent);
+                let century = if cent2 >= 19 && cent2 <= 21 { cent2 } else { 20 };
+                let year4 = century as u16 * 100 + year2 as u16;
+                ((year4 as u64) << 48)
+                    | ((month as u64) << 40)
+                    | ((mday  as u64) << 32)
+                    | ((hour  as u64) << 24)
+                    | ((min   as u64) << 16)
+                    | ((sec   as u64) <<  8)
+                    | (wday   as u64)
+            }
+        }
         8 => {
             // sys_input_wait — blocks until an event is available
             crate::input::wait()
