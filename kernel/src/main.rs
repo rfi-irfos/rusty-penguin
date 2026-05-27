@@ -241,9 +241,13 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
     vga::write_hex(vmm::USER_STACK_TOP, vga::Color::DimGray);
     vga::write_byte(b'\n', vga::Color::White);
 
-    // Clear VGA text buffer before ring-3 launch so ghost boot messages
-    // don't overlay the graphical framebuffer via the VGA text renderer.
+    // Clear VGA text buffer and framebuffer before ring-3 launch.
+    // The framebuffer fill removes all kernel boot text written via term.rs
+    // so ring-3 starts with a completely black canvas (it repaints immediately).
     vga::clear();
+    if fb::is_live() {
+        fb::fill(0, 0, fb::width(), fb::height(), 0x000000);
+    }
     serial::write_byte(b'\n');
 
     // IRETQ into ring-3 — stack + code both live in PTE_USER huge pages

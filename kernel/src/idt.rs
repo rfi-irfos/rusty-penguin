@@ -142,6 +142,19 @@ extern "x86-interrupt" fn irq_keyboard(_f: InterruptFrame) {
         match sc {
             0x38 => unsafe { ALTGR_DOWN = true; },
             0xB8 => unsafe { ALTGR_DOWN = false; },
+            // Arrow keys → push VT100 escape sequences (ESC [ A/B/C/D)
+            0x48 | 0x50 | 0x4B | 0x4D => {
+                let dir: u8 = match sc { 0x48 => b'A', 0x50 => b'B', 0x4D => b'C', _ => b'D' };
+                unsafe {
+                    for ch in [0x1Bu8, b'[', dir] {
+                        let next = (KBD_HEAD + 1) % KBD_BUF_SIZE;
+                        if next != KBD_TAIL { KBD_BUF[KBD_HEAD] = ch; KBD_HEAD = next; }
+                    }
+                }
+                crate::input::push_key(0x1B, sc);
+                crate::input::push_key(b'[', 0);
+                crate::input::push_key(dir, 0);
+            }
             _ => {}
         }
         unsafe { pic::eoi(1); }

@@ -441,9 +441,25 @@ pub extern "C" fn _start() -> ! {
         let key = input::poll(&mut mouse, w, h);
         let (nx, ny, btn) = (mouse.x, mouse.y, mouse.buttons);
 
-        // Keyboard → focused terminal
+        // Keyboard → global shortcuts first, then focused terminal
         if let Some(k) = key {
-            if let Some(tw) = wins.last_mut() {
+            let ctrl_t = k == 0x14; // Ctrl+T
+            let ctrl_w = k == 0x17; // Ctrl+W
+            if ctrl_t {
+                if let Some(tw) = open_term(w, h, wins.len(), &LAUNCHERS[0]) {
+                    wins.push(tw);
+                    scene_dirty = true;
+                }
+            } else if ctrl_w {
+                if !wins.is_empty() {
+                    restore_cursor_bg(&mut fb, cx, cy, &cbuf);
+                    wins.pop();
+                    recomposite(&mut fb, &mut wins, false, &stats);
+                    scene_dirty = false;
+                    save_cursor_bg(&fb, cx, cy, &mut cbuf);
+                    draw_cursor(&mut fb, cx, cy);
+                }
+            } else if let Some(tw) = wins.last_mut() {
                 tw.term.send_key(k);
                 tw.term.dirty = true;
             }

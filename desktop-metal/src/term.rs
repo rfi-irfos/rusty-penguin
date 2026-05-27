@@ -28,6 +28,8 @@ impl Default for Cell {
 
 enum EscState { Normal, Esc, Csi(String) }
 
+const HISTORY_CAP: usize = 32;
+
 pub struct Terminal {
     pub cells:       Vec<Cell>,
     pub cur_col:     usize,
@@ -40,6 +42,10 @@ pub struct Terminal {
     // Input line
     line_buf:        [u8; 256],
     line_len:        usize,
+    // Command history
+    history:         Vec<Vec<u8>>,
+    hist_pos:        usize,   // 0 = browsing oldest, history.len() = live input
+    saved_line:      Vec<u8>, // line saved when user starts browsing
 }
 
 // ── Syscall helpers ──────────────────────────────────────────────────────────
@@ -102,6 +108,9 @@ impl Terminal {
             wants_close: false,
             line_buf:    [0u8; 256],
             line_len:    0,
+            history:     Vec::new(),
+            hist_pos:    0,
+            saved_line:  Vec::new(),
         };
         t.write_output(b"Rusty Penguin psh 1.0\r\n");
         t.write_output(b"type 'help' for commands\r\n> ");
@@ -195,6 +204,31 @@ impl Terminal {
                 let c = parts.next().and_then(|s| s.parse::<usize>().ok()).unwrap_or(1).max(1) - 1;
                 self.cur_row = r.min(ROWS - 1); self.cur_col = c.min(COLS - 1);
             }
+            // Arrow keys with no params → history navigation (input context)
+            b'A' if p.is_empty() => {
+                if !self.history.is_empty() {
+                    if self.hist_pos == self.history.len() {
+                        // Save current live input before browsing
+                        self.saved_line = self.line_buf[..self.line_len].to_vec();
+                    }
+                    if self.hist_pos > 0 {
+                        self.hist_pos -= 1;
+                        let entry = self.history[self.hist_pos].clone();
+                        self.load_history_line(&entry);
+                    }
+                }
+            }
+            b'B' if p.is_empty() => {
+                if self.hist_pos < self.history.len() {
+                    self.hist_pos += 1;
+                    let line = if self.hist_pos == self.history.len() {
+                        self.saved_line.clone()
+                    } else {
+                        self.history[self.hist_pos].clone()
+                    };
+                    self.load_history_line(&line);
+                }
+            }
             b'A' => { self.cur_row = self.cur_row.saturating_sub(n1()); }
             b'B' => { self.cur_row = (self.cur_row + n1()).min(ROWS - 1); }
             b'C' => { self.cur_col = (self.cur_col + n1()).min(COLS - 1); }
@@ -214,12 +248,37 @@ impl Terminal {
         let _ = bytes;
     }
 
+    fn erase_line_input(&mut self) {
+        while self.line_len > 0 {
+            self.line_len -= 1;
+            self.process_byte(0x08);
+        }
+    }
+
+    fn load_history_line(&mut self, src: &[u8]) {
+        self.erase_line_input();
+        let n = src.len().min(255);
+        self.line_buf[..n].copy_from_slice(&src[..n]);
+        self.line_len = n;
+        for &b in &src[..n] { self.process_byte(b); }
+    }
+
     pub fn send_key(&mut self, b: u8) {
         if b == b'\n' || b == b'\r' {
             self.process_byte(b'\n');
             let line_len = self.line_len;
             let line: [u8; 256] = self.line_buf;
             self.line_len = 0;
+            self.hist_pos = self.history.len();
+            self.saved_line.clear();
+            if line_len > 0 {
+                let entry: Vec<u8> = line[..line_len].to_vec();
+                if self.history.last().map(|e| e.as_slice()) != Some(&line[..line_len]) {
+                    if self.history.len() >= HISTORY_CAP { self.history.remove(0); }
+                    self.history.push(entry);
+                }
+                self.hist_pos = self.history.len();
+            }
             self.exec_command(&line[..line_len]);
             self.write_output(b"> ");
         } else if b == 0x08 || b == 0x7F {
@@ -230,6 +289,9 @@ impl Terminal {
         } else if b >= 0x20 && self.line_len < 255 {
             self.line_buf[self.line_len] = b;
             self.line_len += 1;
+            self.process_byte(b);
+        } else {
+            // ESC sequences (arrow keys) pass through to the VT100 parser
             self.process_byte(b);
         }
     }
@@ -247,8 +309,10 @@ impl Terminal {
             self.write_output(b"  trit <n>           balanced ternary of n\r\n");
             self.write_output(b"  trit add|sub|mul <a> <b>\r\n");
             self.write_output(b"  ai [n]             sparse ternary inference (default 32)\r\n");
+            self.write_output(b"  ls                 list files\r\n");
             self.write_output(b"  ps                 process table\r\n");
             self.write_output(b"  uptime mem uname whoami echo clear exit\r\n");
+            self.write_output(b"  keys: Up/Down=history  Ctrl+T=new term  Ctrl+W=close\r\n");
         } else if line == b"uname" || line == b"uname -a" {
             self.write_output(b"RustyPenguin 1.0.0 psh x86_64 GNU/Trit\r\n");
         } else if line == b"whoami" {
@@ -284,6 +348,10 @@ impl Terminal {
             for c in self.cells.iter_mut() { *c = blank; }
             self.cur_col = 0; self.cur_row = 0;
             self.dirty = true;
+        } else if line == b"ls" || line == b"ls /" || line == b"ls /bin" {
+            self.write_output(b"bin/\r\n");
+            self.write_output(b"  psh\r\n");
+            self.write_output(b"  desktop\r\n");
         } else if line == b"echo" {
             self.write_output(b"\r\n");
         } else if line.starts_with(b"echo ") {
