@@ -166,10 +166,20 @@ pub extern "C" fn syscall_handler(nr: u64, arg1: u64, arg2: u64, arg3: u64) -> u
             loop {}
         }
         6 => {
-            // sys_fb_query — returns framebuffer base virtual address in rax
-            // User process reads width/height/pitch separately via packed rdi return
-            // For now: return base address; caller also gets dimensions via subsequent call
-            crate::fb::base() as u64
+            // sys_fb_query(out_ptr) → fills 24-byte struct, returns base virt addr
+            // Struct layout: [u64 base][u32 width][u32 height][u32 pitch][u32 bpp]
+            let base = crate::fb::base() as u64;
+            if arg1 != 0 {
+                let p = arg1 as *mut u8;
+                unsafe {
+                    p.cast::<u64>().write_unaligned(base);
+                    p.add(8).cast::<u32>().write_unaligned(crate::fb::width());
+                    p.add(12).cast::<u32>().write_unaligned(crate::fb::height());
+                    p.add(16).cast::<u32>().write_unaligned(crate::fb::pitch());
+                    p.add(20).cast::<u32>().write_unaligned(crate::fb::bpp() as u32);
+                }
+            }
+            base
         }
         4 => {
             // sys_ticks — returns tick count (100 Hz since pit_init)

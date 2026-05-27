@@ -221,12 +221,21 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
     // ── Ring-3 launch ────────────────────────────────────────────────────────
     vga::write_str("  [ring-3 launch]\n", vga::Color::Cyan);
 
-    // Register psh as PID 1 in the process table before entering ring-3
-    sched::register(b"psh");
+    // Prefer bin/desktop from VFS; fall back to embedded psh
+    let (elf_bytes, proc_name): (&[u8], &[u8]) =
+        if let Some(bytes) = ramfs::find(b"bin/desktop") {
+            vga::write_str("    launching desktop-metal from VFS\n", vga::Color::Green);
+            (bytes, b"desktop")
+        } else {
+            vga::write_str("    launching embedded psh\n", vga::Color::Amber);
+            (USER_PSH_ELF, b"psh")
+        };
 
-    // Load user-psh ELF into identity-mapped address space (virt == phys)
-    let entry = elf::load(USER_PSH_ELF).expect("ELF parse failed");
-    vga::write_str("    psh @ 0x", vga::Color::DimGray);
+    sched::register(proc_name);
+
+    // Load ring-3 ELF into identity-mapped address space (virt == phys)
+    let entry = elf::load(elf_bytes).expect("ELF parse failed");
+    vga::write_str("    entry @ 0x", vga::Color::DimGray);
     vga::write_hex(entry, vga::Color::DimGray);
     vga::write_str("  stack @ 0x", vga::Color::DimGray);
     vga::write_hex(vmm::USER_STACK_TOP, vga::Color::DimGray);

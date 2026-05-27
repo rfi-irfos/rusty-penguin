@@ -139,6 +139,17 @@ fi
 cp "$USER_PSH_ELF" "$REPO_ROOT/kernel/user-psh.elf"
 echo "[build] user-psh.elf: $(du -sh "$REPO_ROOT/kernel/user-psh.elf" | cut -f1)"
 
+# 3a1. Build desktop-metal (bare-metal graphical desktop — Phase 5)
+echo "[build] Building desktop-metal..."
+(cd "$REPO_ROOT/desktop-metal" && cargo +nightly build --release \
+    -Zjson-target-spec \
+    -Zbuild-std=core,alloc,compiler_builtins \
+    -Zbuild-std-features=compiler-builtins-mem 2>&1) || echo "[build] WARNING: desktop-metal build failed — skipping"
+DESKTOP_METAL_ELF="$REPO_ROOT/desktop-metal/target/x86_64-user-psh/release/desktop-metal"
+if [ -f "$DESKTOP_METAL_ELF" ]; then
+    echo "[build] desktop-metal: $(du -sh "$DESKTOP_METAL_ELF" | cut -f1)"
+fi
+
 # 3a2. Pack bare-metal initramfs (CPIO newc) for VFS
 # Contains: bin/psh  (and later bin/desktop when Phase 5 is ready)
 echo "[build] Building bare-metal CPIO initramfs..."

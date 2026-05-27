@@ -69,7 +69,7 @@ pub fn map_mmio_range(phys_start: u64, size: u64) {
     let end   = (phys_start + size + PAGE - 1) & !(PAGE - 1);
     let mut addr = start;
     while addr < end {
-        unsafe { map_page(addr, addr, PTE_PRESENT | PTE_WRITABLE); }
+        unsafe { map_page(addr, addr, PTE_PRESENT | PTE_WRITABLE | PTE_USER); }
         addr += PAGE;
     }
 }
@@ -92,16 +92,14 @@ pub fn extend_identity_map(limit_mib: usize) {
         write64(pdpt, 0, pdpt_e | PTE_USER);
         let pd = pdpt_e & !0xFFF;
 
-        // Fix PD[0]: boot.s set this huge page with 0x83 (no USER)
-        let pd0 = read64(pd, 0);
-        if pd0 & PTE_PRESENT != 0 {
-            write64(pd, 0, pd0 | PTE_USER);
-        }
-
-        // Fill PD[1..N] as new 2 MiB USER huge pages
+        // Fix PD[0..N]: boot.s maps these as huge pages without PTE_USER.
+        // Add PTE_USER to existing entries; create new entries for any gaps.
         let entries = (limit_mib / 2).min(511);
-        for i in 1..=entries {
-            if read64(pd, i) & PTE_PRESENT == 0 {
+        for i in 0..=entries {
+            let entry = read64(pd, i);
+            if entry & PTE_PRESENT != 0 {
+                write64(pd, i, entry | PTE_USER);
+            } else {
                 let phys = i as u64 * 2 * 1024 * 1024;
                 write64(pd, i, phys | PTE_HUGE | PTE_WRITABLE | PTE_USER | PTE_PRESENT);
             }

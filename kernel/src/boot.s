@@ -72,8 +72,20 @@ _start:
     orl     $0x3, %eax
     movl    %eax, pdpt_table
 
-    /* PD[0] → 2MB huge page at physical 0x000000 (present + writable + huge) */
-    movl    $0x83, pd_table     /* bits: huge=7, writable=1, present=0 */
+    /* PD[0..31] → 32 × 2MB huge pages = 64MB identity map
+     * GRUB can place the MB2 info struct past 2MB when a framebuffer tag is
+     * present, so we need more than the initial single 2MB page. */
+    xorl    %ecx, %ecx
+.Lmap_pd:
+    movl    %ecx, %eax
+    shll    $21, %eax           /* physical addr = index * 2MB */
+    orl     $0x83, %eax         /* present + writable + huge */
+    movl    %ecx, %edx
+    shll    $3, %edx            /* byte offset = index * 8 bytes/entry */
+    movl    %eax, pd_table(%edx) /* low 32 bits (high 32 bits already 0) */
+    incl    %ecx
+    cmpl    $32, %ecx           /* 32 entries × 2MB = 64MB */
+    jl      .Lmap_pd
 
     /* ── Enable PAE (Physical Address Extension) ── */
     movl    %cr4, %eax
