@@ -104,7 +104,7 @@ const BLUE:     u32 = 0x60A5FA;
 const CURSOR:   u32 = 0xF8FAFC;
 const TEAL:     u32 = 0x2DD4BF;
 
-const CURSOR_W: u32 = 12;
+const CURSOR_W: u32 = 10;
 const CURSOR_H: u32 = 16;
 
 // ---- Desktop icon bitmaps ───────────────────────────────────────────────────
@@ -152,12 +152,11 @@ fn restore_cursor_bg(fb: &mut Framebuffer, x: i32, y: i32, buf: &[u32]) {
 }
 
 fn cursor_mask(col: i32, row: i32) -> bool {
-    // Head: right triangle, tip at (0,0), 6px wide at base (row 10)
-    (row >= 0 && row <= 10 && col >= 0 && col <= row / 2)
-    // Shaft: 3px wide
-        || (row >= 7 && row <= 14 && col >= 3 && col <= 5)
-    // Cross-bar: 5px wide
-        || (row >= 10 && row <= 12 && col >= 5 && col <= 9)
+    if row < 0 || col < 0 { return false; }
+    // Arrow head: right triangle expanding 1px/row (0..=6 → 1..7px wide)
+    // Arrow shaft: 2px wide continuing down from left edge
+    if row <= 6 { col <= row }
+    else        { col <= 1 }
 }
 
 fn draw_cursor(fb: &mut Framebuffer, x: i32, y: i32) {
