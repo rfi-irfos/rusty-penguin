@@ -217,10 +217,10 @@ fn draw_topbar(fb: &mut Framebuffer, time: &str, s: &SysStats) {
 
 struct Launcher { label: &'static str, cmd: Option<&'static str>, title: &'static str, color: u32 }
 const LAUNCHERS: &[Launcher] = &[
-    Launcher { label: " psh ", cmd: None,              title: "psh — Terminal",    color: GREEN },
-    Launcher { label: " ps  ", cmd: Some("ps\n"),      title: "ps — Processes",    color: BLUE  },
-    Launcher { label: " mem ", cmd: Some("mem\n"),     title: "mem — Memory",      color: AMBER },
-    Launcher { label: " trit", cmd: Some("trit\n"),    title: "trit — Ternary",    color: 0xC084FC },
+    Launcher { label: " psh ", cmd: None,               title: "psh — Terminal",   color: GREEN },
+    Launcher { label: " ps  ", cmd: Some("ps\n"),       title: "ps — Processes",   color: BLUE  },
+    Launcher { label: " ai  ", cmd: Some("ai 32\n"),    title: "ai — Inference",   color: AMBER },
+    Launcher { label: " trit", cmd: Some("trit 42\n"),  title: "trit — Ternary",   color: 0xC084FC },
 ];
 
 fn launcher_rects(fw: u32, fh: u32) -> [(u32, u32, u32, u32); 4] {

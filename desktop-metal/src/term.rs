@@ -240,7 +240,7 @@ impl Terminal {
         if line.is_empty() { return; }
 
         if line == b"help" {
-            self.write_output(b"commands: echo uname whoami ps uptime mem trit cat help exit\r\n");
+            self.write_output(b"commands: echo uname whoami ps uptime mem ai trit help exit\r\n");
         } else if line == b"uname" || line == b"uname -a" {
             self.write_output(b"RustyPenguin 1.0.0 psh x86_64 GNU/Trit\r\n");
         } else if line == b"whoami" {
@@ -281,6 +281,20 @@ impl Terminal {
         } else if line.starts_with(b"echo ") {
             self.write_output(&line[5..]);
             self.write_output(b"\r\n");
+        } else if line == b"ai" || line.starts_with(b"ai ") {
+            let arg = if line.starts_with(b"ai ") { &line[3..] } else { b"32" as &[u8] };
+            let n: i64 = {
+                let mut v: i64 = 0;
+                for &b in arg { if b >= b'0' && b <= b'9' { v = v.wrapping_mul(10).wrapping_add((b - b'0') as i64); } }
+                v
+            };
+            self.write_output(b"albert. bare metal\r\n");
+            let (free, total) = sys_meminfo();
+            let used = total.saturating_sub(free);
+            let out = format!("mem {}/{}M  tokens {}\r\n", used, total, n);
+            self.write_output(out.as_bytes());
+            self.write_output(b"inference: not available (bare metal)\r\n");
+            self.write_output(b"try: trit add 42 -7\r\n");
         } else if line == b"trit" {
             self.write_output(b"usage: trit add|sub|mul|neg|cns <a> [b]\r\n");
         } else if line.starts_with(b"trit ") {
