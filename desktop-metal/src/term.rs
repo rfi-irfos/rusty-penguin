@@ -112,8 +112,8 @@ impl Terminal {
             hist_pos:    0,
             saved_line:  Vec::new(),
         };
-        t.write_output(b"Rusty Penguin psh 1.0\r\n");
-        t.write_output(b"type 'help' for commands\r\n> ");
+        t.write_output(b"\x1b[32mRusty Penguin\x1b[0m psh 1.0\r\n");
+        t.write_output(b"\x1b[90mtype 'help' for commands\x1b[0m\r\n\x1b[32m>\x1b[0m ");
         Ok(t)
     }
 
@@ -189,8 +189,32 @@ impl Terminal {
         let n1 = || p.split(';').next().and_then(|s| s.parse::<usize>().ok()).unwrap_or(1).max(1);
         match cmd {
             b'm' => {
-                if p.is_empty() || p == "0" {
+                if p.is_empty() {
                     self.cur_fg = DEFAULT_FG; self.cur_bg = DEFAULT_BG;
+                } else {
+                    for part in p.split(';') {
+                        match part.parse::<u32>().unwrap_or(0) {
+                            0  => { self.cur_fg = DEFAULT_FG; self.cur_bg = DEFAULT_BG; }
+                            1  => {} // bold — ignored
+                            30 => self.cur_fg = 0x1E293B,
+                            31 => self.cur_fg = 0xEF4444,
+                            32 => self.cur_fg = 0x4ADE80,
+                            33 => self.cur_fg = 0xFBBF24,
+                            34 => self.cur_fg = 0x60A5FA,
+                            35 => self.cur_fg = 0xC084FC,
+                            36 => self.cur_fg = 0x22D3EE,
+                            37 => self.cur_fg = 0xF8FAFC,
+                            90 => self.cur_fg = 0x64748B,
+                            91 => self.cur_fg = 0xF87171,
+                            92 => self.cur_fg = 0x86EFAC,
+                            93 => self.cur_fg = 0xFDE68A,
+                            94 => self.cur_fg = 0x93C5FD,
+                            95 => self.cur_fg = 0xD8B4FE,
+                            96 => self.cur_fg = 0x67E8F9,
+                            97 => self.cur_fg = 0xFFFFFF,
+                            _  => {}
+                        }
+                    }
                 }
             }
             b'J' if p == "2" || p == "3" => {
@@ -280,7 +304,7 @@ impl Terminal {
                 self.hist_pos = self.history.len();
             }
             self.exec_command(&line[..line_len]);
-            self.write_output(b"> ");
+            self.write_output(b"\x1b[32m>\x1b[0m ");
         } else if b == 0x08 || b == 0x7F {
             if self.line_len > 0 {
                 self.line_len -= 1;
@@ -311,8 +335,9 @@ impl Terminal {
             self.write_output(b"  ai [n]             sparse ternary inference (default 32)\r\n");
             self.write_output(b"  ls                 list files\r\n");
             self.write_output(b"  ps                 process table\r\n");
-            self.write_output(b"  uptime mem uname whoami echo clear exit\r\n");
-            self.write_output(b"  keys: Up/Down=history  Ctrl+T=new term  Ctrl+W=close\r\n");
+            self.write_output(b"  pwd  date  sysinfo  uname  whoami\r\n");
+            self.write_output(b"  uptime  mem  echo  clear  exit\r\n");
+            self.write_output(b"  \x1b[90mUp/Down=history  Ctrl+T=new term  Ctrl+W=close\x1b[0m\r\n");
         } else if line == b"uname" || line == b"uname -a" {
             self.write_output(b"RustyPenguin 1.0.0 psh x86_64 GNU/Trit\r\n");
         } else if line == b"whoami" {
@@ -331,7 +356,7 @@ impl Terminal {
         } else if line == b"ps" {
             let mut buf = [0u8; 32 * 16];
             let count = sys_ps_raw(buf.as_mut_ptr(), 16);
-            self.write_output(b"PID  ST  NAME\r\n");
+            self.write_output(b"\x1b[36mPID  ST  NAME\x1b[0m\r\n");
             for i in 0..count {
                 let off = i * 32;
                 let mut pid: u64 = 0;
@@ -369,11 +394,35 @@ impl Terminal {
             self.write_output(b"usage: trit add|sub|mul|neg|cns <a> [b]\r\n");
         } else if line.starts_with(b"trit ") {
             self.exec_trit(&line[5..]);
+        } else if line == b"pwd" {
+            self.write_output(b"/home/ring3\r\n");
+        } else if line == b"date" {
+            let ticks = sys_ticks();
+            let secs = ticks / 100;
+            let out = format!("uptime {:02}h {:02}m {:02}s\r\n",
+                secs / 3600, (secs % 3600) / 60, secs % 60);
+            self.write_output(out.as_bytes());
+        } else if line == b"sysinfo" || line == b"neofetch" {
+            let (free, total) = sys_meminfo();
+            let used = total.saturating_sub(free);
+            let ticks = sys_ticks();
+            let secs = ticks / 100;
+            self.write_output(b"\x1b[32m  RustyPenguin 1.0.0\x1b[0m\r\n");
+            self.write_output(b"\x1b[90m  --------------------\x1b[0m\r\n");
+            self.write_output(b"  \x1b[36mOS    \x1b[0m : RustyPenguin bare metal x86_64\r\n");
+            self.write_output(b"  \x1b[36mKernel\x1b[0m : Rust + ternary STE\r\n");
+            self.write_output(b"  \x1b[36mShell \x1b[0m : psh 1.0\r\n");
+            let mem = format!("  \x1b[36mMemory\x1b[0m : {}/{} MiB\r\n", used, total);
+            self.write_output(mem.as_bytes());
+            let up = format!("  \x1b[36mUptime\x1b[0m : {:02}:{:02}:{:02}\r\n",
+                secs / 3600, (secs % 3600) / 60, secs % 60);
+            self.write_output(up.as_bytes());
+            self.write_output(b"  \x1b[35mModel \x1b[0m : Binary hardware. Ternary mind.\r\n");
         } else if line == b"exit" {
             self.write_output(b"bye\r\n");
             self.wants_close = true;
         } else {
-            let out = format!("psh: command not found: '{}'\r\n",
+            let out = format!("\x1b[31mpsh: command not found:\x1b[0m '{}'\r\n",
                 core::str::from_utf8(line).unwrap_or("?"));
             self.write_output(out.as_bytes());
         }

@@ -360,6 +360,45 @@ fn start_menu_bounds_hit(fh: u32, mx: i32, my: i32) -> bool {
     mx >= x && mx < x + w && my >= y && my < y + h
 }
 
+// ---- Right-click context menu ───────────────────────────────────────────────
+
+const CTX_ITEMS: &[(&str, u32)] = &[
+    ("New Terminal",      0x4ADE80),
+    ("Close All Windows", 0xEF4444),
+    ("Refresh Desktop",   0x60A5FA),
+];
+
+fn ctx_menu_bounds(mx: i32, my: i32, fw: u32, fh: u32) -> (i32, i32, i32, i32) {
+    let w = 148i32;
+    let h = 4 + CTX_ITEMS.len() as i32 * 20;
+    let x = mx.min(fw as i32 - w - 4).max(0);
+    let y = my.min(fh as i32 - h - 4).max(0);
+    (x, y, w, h)
+}
+
+fn draw_ctx_menu(fb: &mut Framebuffer, mx: i32, my: i32) {
+    let (x, y, w, h) = ctx_menu_bounds(mx, my, fb.width, fb.height);
+    fb.fill_rect(x as u32, y as u32, w as u32, h as u32, 0x1A2535);
+    fb.fill_rect(x as u32, y as u32, w as u32, 1, 0x475569);
+    fb.fill_rect(x as u32, (y + h - 1) as u32, w as u32, 1, 0x475569);
+    fb.fill_rect(x as u32, y as u32, 1, h as u32, 0x475569);
+    fb.fill_rect((x + w - 1) as u32, y as u32, 1, h as u32, 0x475569);
+    for (i, (label, color)) in CTX_ITEMS.iter().enumerate() {
+        let iy = y + 2 + i as i32 * 20;
+        fb.draw_str((x + 8) as u32, (iy + 6) as u32, label, *color, 0x1A2535);
+    }
+}
+
+fn ctx_menu_item_hit(mx: i32, my: i32, cmx: i32, cmy: i32, fw: u32, fh: u32) -> Option<usize> {
+    let (x, y, w, _) = ctx_menu_bounds(cmx, cmy, fw, fh);
+    if mx < x || mx >= x + w { return None; }
+    for i in 0..CTX_ITEMS.len() {
+        let iy = y + 2 + i as i32 * 20;
+        if my >= iy && my < iy + 20 { return Some(i); }
+    }
+    None
+}
+
 // ---- Window + terminal wrapper ──────────────────────────────────────────────
 
 struct TermWin {
@@ -388,7 +427,7 @@ fn open_term(w: i32, h: i32, n: usize, l: &Launcher) -> Option<TermWin> {
 
 // ---- Full scene recomposite ─────────────────────────────────────────────────
 
-fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, stats: &SysStats) {
+fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, ctx_menu: Option<(i32,i32)>, stats: &SysStats) {
     draw_scene_static(fb);
     draw_launchers(fb);
     draw_taskbar_win_btns(fb, wins);
@@ -402,6 +441,7 @@ fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, 
         tw.win_dirty  = false;
     }
     if start_menu { draw_start_menu(fb); }
+    if let Some((cmx, cmy)) = ctx_menu { draw_ctx_menu(fb, cmx, cmy); }
     draw_topbar(fb, &uptime_str(), stats, sys_ticks());
 }
 
@@ -433,6 +473,7 @@ pub extern "C" fn _start() -> ! {
     let mut wins: Vec<TermWin> = Vec::new();
     let mut scene_dirty = false;
     let mut start_menu_open = false;
+    let mut ctx_menu: Option<(i32, i32)> = None;
 
     loop {
         sys_yield();
@@ -454,7 +495,7 @@ pub extern "C" fn _start() -> ! {
                 if !wins.is_empty() {
                     restore_cursor_bg(&mut fb, cx, cy, &cbuf);
                     wins.pop();
-                    recomposite(&mut fb, &mut wins, false, &stats);
+                    recomposite(&mut fb, &mut wins, false, ctx_menu, &stats);
                     scene_dirty = false;
                     save_cursor_bg(&fb, cx, cy, &mut cbuf);
                     draw_cursor(&mut fb, cx, cy);
@@ -477,7 +518,7 @@ pub extern "C" fn _start() -> ! {
         if wins.iter().any(|tw| tw.term.wants_close) {
             restore_cursor_bg(&mut fb, cx, cy, &cbuf);
             wins.retain(|tw| !tw.term.wants_close);
-            recomposite(&mut fb, &mut wins, false, &stats);
+            recomposite(&mut fb, &mut wins, false, ctx_menu, &stats);
             scene_dirty = false;
             save_cursor_bg(&fb, cx, cy, &mut cbuf);
             draw_cursor(&mut fb, cx, cy);
@@ -492,7 +533,7 @@ pub extern "C" fn _start() -> ! {
             restore_cursor_bg(&mut fb, cx, cy, &cbuf);
 
             if any_chrome {
-                recomposite(&mut fb, &mut wins, start_menu_open, &stats);
+                recomposite(&mut fb, &mut wins, start_menu_open, ctx_menu, &stats);
                 scene_dirty = false;
             } else if any_content {
                 let n = wins.len();
@@ -504,6 +545,7 @@ pub extern "C" fn _start() -> ! {
                     let _ = i; let _ = n;
                 }
                 if start_menu_open { draw_start_menu(&mut fb); }
+                if let Some((cmx, cmy)) = ctx_menu { draw_ctx_menu(&mut fb, cmx, cmy); }
             }
 
             if cursor_moved { cx = nx; cy = ny; }
@@ -522,11 +564,39 @@ pub extern "C" fn _start() -> ! {
         tick = tick.wrapping_add(1);
 
         // Click handling
-        let left_down = (btn & 0x01) != 0;
-        let left_edge = left_down && (prev_btn & 0x01) == 0;
+        let left_down  = (btn & 0x01) != 0;
+        let left_edge  = left_down && (prev_btn & 0x01) == 0;
+        let right_down = (btn & 0x02) != 0;
+        let right_edge = right_down && (prev_btn & 0x02) == 0;
+
+        // Right-click: open context menu on empty desktop area
+        if right_edge {
+            let prev_open = ctx_menu.is_some() || start_menu_open;
+            ctx_menu = None;
+            start_menu_open = false;
+            let on_win = wins.iter().any(|tw| wm::window_hit(&tw.win, cx, cy));
+            if !on_win && cy >= TOPBAR_H as i32 && cy < h - 28 {
+                ctx_menu = Some((cx, cy));
+            }
+            if ctx_menu.is_some() || prev_open { scene_dirty = true; }
+        }
 
         if left_edge {
-            if start_menu_open {
+            // Context menu takes priority: dismiss on any left click
+            if let Some((cmx, cmy)) = ctx_menu.take() {
+                if let Some(item) = ctx_menu_item_hit(cx, cy, cmx, cmy, fb.width, fb.height) {
+                    match item {
+                        0 => { // New Terminal
+                            if let Some(tw) = open_term(w, h, wins.len(), &LAUNCHERS[0]) {
+                                wins.push(tw);
+                            }
+                        }
+                        1 => { wins.clear(); } // Close All Windows
+                        _ => {}                // Refresh Desktop — scene_dirty handles it
+                    }
+                }
+                scene_dirty = true;
+            } else if start_menu_open {
                 if let Some(li) = start_menu_hit(fb.height, cx, cy) {
                     if let Some(tw) = open_term(w, h, wins.len(), &LAUNCHERS[li]) {
                         wins.push(tw);
@@ -556,7 +626,7 @@ pub extern "C" fn _start() -> ! {
                     if wm::close_btn_hit(&tw.win, cx, cy) {
                         restore_cursor_bg(&mut fb, cx, cy, &cbuf);
                         wins.remove(last);
-                        recomposite(&mut fb, &mut wins, false, &stats);
+                        recomposite(&mut fb, &mut wins, false, ctx_menu, &stats);
                         scene_dirty = false;
                         save_cursor_bg(&fb, cx, cy, &mut cbuf);
                         draw_cursor(&mut fb, cx, cy);
