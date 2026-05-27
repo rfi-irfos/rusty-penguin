@@ -153,20 +153,22 @@ extern "x86-interrupt" fn irq_keyboard(_f: InterruptFrame) {
         0xAA | 0xB6 => unsafe { SHIFT_DOWN = false; },
         0x3A => unsafe { CAPS_LOCK ^= true; },
         0x0E => {
+            // Backspace: deliver 0x08 to ring-3 via both queues; ring-3 handles echo
             unsafe {
-                if KBD_HEAD != KBD_TAIL {
-                    KBD_HEAD = (KBD_HEAD + KBD_BUF_SIZE - 1) % KBD_BUF_SIZE;
-                    vga::backspace();
+                let next = (KBD_HEAD + 1) % KBD_BUF_SIZE;
+                if next != KBD_TAIL {
+                    KBD_BUF[KBD_HEAD] = 0x08;
+                    KBD_HEAD = next;
                 }
             }
+            crate::input::push_key(0x08, 0x0E);
         }
         _ => {
             let shift = unsafe { SHIFT_DOWN };
             let altgr = unsafe { ALTGR_DOWN };
             let caps  = unsafe { CAPS_LOCK };
             if let Some(ch) = sc_to_char(sc, shift, altgr, caps) {
-                vga::write_byte(ch, vga::Color::White);
-                // Push to legacy KBD_BUF (used by sys_read) AND unified input queue
+                // No kernel-side echo — ring-3 desktop handles all display output
                 unsafe {
                     let next = (KBD_HEAD + 1) % KBD_BUF_SIZE;
                     if next != KBD_TAIL {
