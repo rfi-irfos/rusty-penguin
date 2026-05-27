@@ -29,9 +29,9 @@ static mut GRID: [[Cell; COLS]; ROWS] = [[Cell::blank(); COLS]; ROWS];
 static mut ROW: usize = 0;
 static mut COL: usize = 0;
 
-// Pixel position of the terminal origin (leave a small margin)
+// Pixel position of the terminal origin - start below the desktop topbar.
 const MARGIN_X: u32 = 8;
-const MARGIN_Y: u32 = 8;
+const MARGIN_Y: u32 = 28;
 
 pub fn init() {
     // Fill screen with desktop background

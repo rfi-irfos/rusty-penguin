@@ -47,7 +47,13 @@ pub fn current_pid() -> u64 {
 }
 
 pub fn yield_() {
-    // Cooperative: no-op until timer preemption is wired up in Phase 4
+    // Wait for the next hardware interrupt (100Hz timer, keyboard, or mouse).
+    // This throttles the ring-3 main loop to ≤100 iterations/second instead of
+    // spinning at full CPU speed, which caused topbar/cursor flickering.
+    unsafe {
+        core::arch::asm!("sti", options(nostack));
+        core::arch::asm!("hlt", options(nostack));
+    }
 }
 
 pub fn trit_of(state: u8) -> Trit {

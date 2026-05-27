@@ -165,6 +165,11 @@ pub extern "C" fn syscall_handler(nr: u64, arg1: u64, arg2: u64, arg3: u64) -> u
             }
             loop {}
         }
+        12 => {
+            // sys_serial_debug(byte)
+            crate::serial::write_byte(arg1 as u8);
+            0
+        }
         6 => {
             // sys_fb_query(out_ptr) → fills 24-byte struct, returns base virt addr
             // Struct layout: [u64 base][u32 width][u32 height][u32 pitch][u32 bpp]

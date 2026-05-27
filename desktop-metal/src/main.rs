@@ -61,6 +61,19 @@ fn sys_yield() {
     }
 }
 
+fn sys_serial_debug(b: u8) {
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            in("rax") 12u64,
+            in("rdi") b as u64,
+            out("rcx") _,
+            out("r11") _,
+            options(nostack),
+        );
+    }
+}
+
 // ---- Palette ────────────────────────────────────────────────────────────────
 
 const BG:       u32 = 0x0B1220;
@@ -700,4 +713,7 @@ pub extern "C" fn _start() -> ! {
 }
 
 #[panic_handler]
-fn panic(_: &core::panic::PanicInfo) -> ! { loop { unsafe { core::arch::asm!("hlt"); } } }
+fn panic(_: &core::panic::PanicInfo) -> ! {
+    sys_serial_debug(b'!'); // '!' = panic in serial log
+    loop {}
+}

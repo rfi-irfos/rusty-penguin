@@ -32,6 +32,25 @@ pub fn base()    -> *mut u8 { unsafe { FB_BASE } }
 pub fn bpp()     -> u8    { unsafe { FB_BPP } }
 
 #[inline(always)]
+pub fn read_pixel(x: u32, y: u32) -> u32 {
+    unsafe {
+        if x >= FB_WIDTH || y >= FB_HEIGHT { return 0; }
+        let off = (y * FB_PITCH + x * (FB_BPP as u32 / 8)) as usize;
+        let ptr = FB_BASE.add(off);
+        match FB_BPP {
+            32 => ptr.cast::<u32>().read_volatile() & 0x00FF_FFFF,
+            24 => {
+                let b = ptr.read_volatile() as u32;
+                let g = ptr.add(1).read_volatile() as u32;
+                let r = ptr.add(2).read_volatile() as u32;
+                (r << 16) | (g << 8) | b
+            }
+            _ => 0,
+        }
+    }
+}
+
+#[inline(always)]
 pub fn pixel(x: u32, y: u32, rgb: u32) {
     unsafe {
         if x >= FB_WIDTH || y >= FB_HEIGHT { return; }

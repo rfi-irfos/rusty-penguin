@@ -21,7 +21,7 @@ impl Keys {
     fn push(&mut self, b: u8) {
         if (self.len as usize) < 8 { self.buf[self.len as usize] = b; self.len += 1; }
     }
-    pub fn iter(&self) -> &[u8] { &self.buf[..self.len as usize] }
+    pub fn iter(&self) -> &[u8] { &self.buf[..(self.len as usize).min(8)] }
 }
 
 fn sys_input_poll() -> u64 {

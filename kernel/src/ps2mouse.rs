@@ -11,8 +11,91 @@ static mut PACKET_IDX: u8 = 0;
 static mut MOUSE_X: i32 = 0;
 static mut MOUSE_Y: i32 = 0;
 
+const CURSOR_W: i32 = 18;
+const CURSOR_H: i32 = 24;
+const CURSOR_PIXELS: usize = (CURSOR_W as usize) * (CURSOR_H as usize);
+
+static mut CURSOR_BG: [u32; CURSOR_PIXELS] = [0; CURSOR_PIXELS];
+static mut CURSOR_DRAWN: bool = false;
+static mut CURSOR_X: i32 = 0;
+static mut CURSOR_Y: i32 = 0;
+
 pub fn mouse_x() -> i32 { unsafe { MOUSE_X } }
 pub fn mouse_y() -> i32 { unsafe { MOUSE_Y } }
+
+fn cursor_mask(col: i32, row: i32) -> bool {
+    (row >= 0 && row <= 15 && col >= 0 && col <= row / 2)
+        || (row >= 11 && row <= 22 && col >= 5 && col <= 8)
+        || (row >= 15 && row <= 18 && col >= 8 && col <= 12)
+}
+
+unsafe fn restore_cursor() {
+    if !CURSOR_DRAWN || !fb::is_live() { return; }
+    for row in 0..CURSOR_H {
+        for col in 0..CURSOR_W {
+            let px = CURSOR_X + col;
+            let py = CURSOR_Y + row;
+            if px >= 0 && py >= 0 && (px as u32) < fb::width() && (py as u32) < fb::height() {
+                let idx = (row * CURSOR_W + col) as usize;
+                fb::pixel(px as u32, py as u32, CURSOR_BG[idx]);
+            }
+        }
+    }
+    CURSOR_DRAWN = false;
+}
+
+unsafe fn draw_cursor_at(x: i32, y: i32) {
+    if !fb::is_live() { return; }
+
+    restore_cursor();
+    CURSOR_X = x;
+    CURSOR_Y = y;
+
+    for row in 0..CURSOR_H {
+        for col in 0..CURSOR_W {
+            let px = x + col;
+            let py = y + row;
+            let idx = (row * CURSOR_W + col) as usize;
+            CURSOR_BG[idx] =
+                if px >= 0 && py >= 0 && (px as u32) < fb::width() && (py as u32) < fb::height() {
+                    fb::read_pixel(px as u32, py as u32)
+                } else {
+                    0
+                };
+        }
+    }
+
+    for row in -1..=CURSOR_H {
+        for col in -1..=CURSOR_W {
+            if !cursor_mask(col, row)
+                && (cursor_mask(col - 1, row)
+                    || cursor_mask(col + 1, row)
+                    || cursor_mask(col, row - 1)
+                    || cursor_mask(col, row + 1))
+            {
+                let px = x + col;
+                let py = y + row;
+                if px >= 0 && py >= 0 && (px as u32) < fb::width() && (py as u32) < fb::height() {
+                    fb::pixel(px as u32, py as u32, 0x000000);
+                }
+            }
+        }
+    }
+
+    for row in 0..CURSOR_H {
+        for col in 0..CURSOR_W {
+            if cursor_mask(col, row) {
+                let px = x + col;
+                let py = y + row;
+                if px >= 0 && py >= 0 && (px as u32) < fb::width() && (py as u32) < fb::height() {
+                    fb::pixel(px as u32, py as u32, 0xFFFFFF);
+                }
+            }
+        }
+    }
+
+    CURSOR_DRAWN = true;
+}
 
 // Wait until PS/2 controller input buffer is empty (bit 1 clear)
 unsafe fn ps2_wait_write() {
@@ -50,8 +133,8 @@ pub fn init() {
         ps2_wait_write();
         port::outb(0x64, 0x20);         // read current command byte
         let mut cfg = ps2_read();
-        cfg |= 0x02;                    // bit 1 = enable IRQ12
-        cfg &= !0x20;                   // bit 5 = disable mouse clock (clear = enable mouse)
+        cfg |= 0x03;                    // bits 0+1: enable keyboard IRQ1 + mouse IRQ12
+        cfg &= !0x30;                   // bits 4+5: clear port-disable (enable both clocks)
         ps2_wait_write();
         port::outb(0x64, 0x60);
         ps2_wait_write();
@@ -76,6 +159,7 @@ pub fn init() {
         let h = fb::height() as i32;
         MOUSE_X = if w > 0 { w / 2 } else { 320 };
         MOUSE_Y = if h > 0 { h / 2 } else { 200 };
+        // Ring-3 desktop owns cursor rendering; kernel only decodes packets.
     }
 }
 
