@@ -37,7 +37,7 @@ fn sys_clear() {
     unsafe {
         core::arch::asm!(
             "syscall",
-            inout("rax") 2u64 => _,
+            inout("rax") 10u64 => _,
             in("rdi") 0u64,
             out("rcx") _,
             out("r11") _,
@@ -50,11 +50,58 @@ fn sys_reboot() -> ! {
     unsafe {
         core::arch::asm!(
             "syscall",
-            in("rax") 3u64,
+            in("rax") 11u64,
             in("rdi") 0u64,
             options(noreturn, nostack),
         );
     }
+}
+
+fn sys_open(path: &[u8]) -> u64 {
+    let n: u64;
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            inout("rax") 2u64 => n,
+            in("rdi") path.as_ptr(),
+            in("rsi") path.len(),
+            in("rdx") 0u64,
+            out("rcx") _,
+            out("r11") _,
+            options(nostack),
+        );
+    }
+    n
+}
+
+fn sys_close(fd: u64) {
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            inout("rax") 3u64 => _,
+            in("rdi") fd,
+            out("rcx") _,
+            out("r11") _,
+            options(nostack),
+        );
+    }
+}
+
+fn sys_read_fd(fd: u64, buf: &mut [u8]) -> usize {
+    let n: u64;
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            inout("rax") 0u64 => n,
+            in("rdi") fd,
+            in("rsi") buf.as_mut_ptr(),
+            in("rdx") buf.len(),
+            out("rcx") _,
+            out("r11") _,
+            options(nostack),
+        );
+    }
+    n as usize
 }
 
 fn sys_ticks() -> u64 {
@@ -252,6 +299,22 @@ fn cmd_trit(args: &[u8]) {
     write_i64(r); sys_write(b"  ("); write_ternary(r); sys_write(b")\n");
 }
 
+// ── cat command (read file from VFS) ─────────────────────────────────────────
+
+fn cmd_cat(path: &[u8]) {
+    if path.is_empty() { write(b"usage: cat <path>\n"); return; }
+    let fd = sys_open(path);
+    if fd == u64::MAX { write(b"cat: not found\n"); return; }
+    let mut buf = [0u8; 256];
+    loop {
+        let n = sys_read_fd(fd, &mut buf);
+        if n == 0 { break; }
+        write(&buf[..n]);
+    }
+    sys_close(fd);
+    write(b"\n");
+}
+
 // ── ps command ───────────────────────────────────────────────────────────────
 // Record: [u64 pid][u8 state][7 pad][16 name]  (32 bytes each)
 
@@ -307,6 +370,7 @@ pub extern "C" fn _start() -> ! {
             write(b"  uname             kernel info\n");
             write(b"  whoami            current context + pid\n");
             write(b"  ps                process table (ternary states)\n");
+            write(b"  cat <path>        print file from VFS\n");
             write(b"  clear             clear screen\n");
             write(b"  reboot            reboot machine\n");
             write(b"  uptime            seconds since boot\n");
@@ -347,6 +411,10 @@ pub extern "C" fn _start() -> ! {
         } else if line == b"reboot" {
             write(b"rebooting...\n");
             sys_reboot();
+        } else if line.starts_with(b"cat ") {
+            cmd_cat(&line[4..]);
+        } else if line == b"cat" {
+            write(b"usage: cat <path>\n");
         } else if line == b"echo" {
             write(b"\n");
         } else if line.starts_with(b"echo ") {

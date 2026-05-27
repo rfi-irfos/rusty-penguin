@@ -98,42 +98,36 @@ core::arch::global_asm!(
 #[no_mangle]
 pub extern "C" fn syscall_handler(nr: u64, arg1: u64, arg2: u64, arg3: u64) -> u64 {
     match nr {
-        2 => {
-            // sys_clear — clear VGA screen
-            crate::vga::clear();
-            0
-        }
-        3 => {
-            // sys_reboot — pulse keyboard controller reset line
-            unsafe {
-                loop { if crate::port::inb(0x64) & 0x02 == 0 { break; } }
-                crate::port::outb(0x64, 0xFE);
-            }
-            loop {}
-        }
         0 => {
-            // sys_read(fd, buf_virt, len) — blocks with sti+hlt until '\n'
-            let len = (arg3 as usize).min(256);
-            if len == 0 { return 0; }
+            // sys_read(fd, buf, len)
+            let fd  = arg1;
             let buf = arg2 as *mut u8;
-            let mut i = 0;
-            while i < len {
-                let ch = loop {
-                    unsafe {
-                        core::arch::asm!("sti", options(nostack));
-                        core::arch::asm!("hlt", options(nostack));
-                    }
-                    if let Some(c) = crate::idt::kbd_get() { break c; }
-                };
-                unsafe { *buf.add(i) = ch; }
-                i += 1;
-                if ch == b'\n' { break; }
+            let len = arg3 as usize;
+            if fd == 0 {
+                // stdin: block on keyboard
+                let maxlen = len.min(256);
+                if maxlen == 0 { return 0; }
+                let mut i = 0;
+                while i < maxlen {
+                    let ch = loop {
+                        unsafe {
+                            core::arch::asm!("sti", options(nostack));
+                            core::arch::asm!("hlt", options(nostack));
+                        }
+                        if let Some(c) = crate::idt::kbd_get() { break c; }
+                    };
+                    unsafe { *buf.add(i) = ch; }
+                    i += 1;
+                    if ch == b'\n' { break; }
+                }
+                i as u64
+            } else {
+                crate::vfs::read(fd, buf, len)
             }
-            i as u64
         }
         1 => {
-            // sys_write(fd, buf_virt, len)
-            let len = (arg3 as usize).min(256);
+            // sys_write(fd, buf, len) — fd 1/2 go to terminal
+            let len = (arg3 as usize).min(4096);
             if len == 0 { return 0; }
             let ptr = arg2 as *const u8;
             let bytes = unsafe { core::slice::from_raw_parts(ptr, len) };
@@ -142,6 +136,34 @@ pub extern "C" fn syscall_handler(nr: u64, arg1: u64, arg2: u64, arg3: u64) -> u
                 vga::write_byte(b, vga::Color::White);
             }
             len as u64
+        }
+        2 => {
+            // sys_open(path_ptr, path_len) → fd or MAX
+            let ptr = arg1 as *const u8;
+            let pathlen = (arg2 as usize).min(256);
+            let path = unsafe { core::slice::from_raw_parts(ptr, pathlen) };
+            // strip leading '/'
+            let path = if path.starts_with(b"/") { &path[1..] } else { path };
+            crate::vfs::open(path)
+        }
+        3 => {
+            // sys_close(fd)
+            crate::vfs::close(arg1)
+        }
+        // Kept at old numbers for backwards compat:
+        // sys_clear=10, sys_reboot=11 (renumbered to avoid overlap)
+        10 => {
+            // sys_clear
+            crate::vga::clear();
+            0
+        }
+        11 => {
+            // sys_reboot
+            unsafe {
+                loop { if crate::port::inb(0x64) & 0x02 == 0 { break; } }
+                crate::port::outb(0x64, 0xFE);
+            }
+            loop {}
         }
         6 => {
             // sys_fb_query — returns framebuffer base virtual address in rax

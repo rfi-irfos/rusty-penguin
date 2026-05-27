@@ -139,6 +139,23 @@ fi
 cp "$USER_PSH_ELF" "$REPO_ROOT/kernel/user-psh.elf"
 echo "[build] user-psh.elf: $(du -sh "$REPO_ROOT/kernel/user-psh.elf" | cut -f1)"
 
+# 3a2. Pack bare-metal initramfs (CPIO newc) for VFS
+# Contains: bin/psh  (and later bin/desktop when Phase 5 is ready)
+echo "[build] Building bare-metal CPIO initramfs..."
+BARE_INITRAMFS_DIR="$(mktemp -d)"
+trap "rm -rf $BARE_INITRAMFS_DIR $INITRAMFS_DIR" EXIT
+mkdir -p "$BARE_INITRAMFS_DIR/bin"
+cp "$USER_PSH_ELF" "$BARE_INITRAMFS_DIR/bin/psh"
+# Add desktop-metal ELF if it exists
+DESKTOP_METAL_ELF="$REPO_ROOT/desktop-metal/target/x86_64-user-psh/release/desktop-metal"
+if [ -f "$DESKTOP_METAL_ELF" ]; then
+    cp "$DESKTOP_METAL_ELF" "$BARE_INITRAMFS_DIR/bin/desktop"
+    echo "[build]   + bin/desktop (desktop-metal)"
+fi
+BARE_INITRD="$ISO_DIR/initrd-bare.img"
+(cd "$BARE_INITRAMFS_DIR" && find . | cpio -o -H newc 2>/dev/null > "$BARE_INITRD")
+echo "[build] initrd-bare.img: $(du -sh "$BARE_INITRD" | cut -f1)"
+
 # 3b. Build bare-metal kernel ELF
 echo "[build] Building bare-metal kernel..."
 (cd "$REPO_ROOT/kernel" && cargo +nightly build --release \
@@ -159,6 +176,8 @@ mkdir -p "$ISO_DIR/boot/grub"
 cp "$VMLINUZ" "$ISO_DIR/boot/vmlinuz"
 cp "$INITRD"  "$ISO_DIR/boot/initrd.img"
 cp "$KERNEL_ELF" "$ISO_DIR/boot/kernel.elf"
+# bare-metal CPIO module (already at ISO_DIR/initrd-bare.img)
+cp "$BARE_INITRD" "$ISO_DIR/boot/initrd-bare.img"
 # grub.cfg is already at iso/grub/grub.cfg
 cp "$ISO_DIR/grub/grub.cfg" "$ISO_DIR/boot/grub/grub.cfg"
 

@@ -22,6 +22,8 @@ mod serial;
 mod sched;
 mod input;
 mod ps2mouse;
+mod ramfs;
+mod vfs;
 
 use ternary_core::{Trit, Tryte};
 use mathematics::{mul_tryte, consensus, scale};
@@ -33,6 +35,28 @@ extern "C" { static kernel_end: u8; }
 
 // user-psh ELF — built by iso/build.sh, embedded at compile time
 static USER_PSH_ELF: &[u8] = include_bytes!("../user-psh.elf");
+
+/// Walk the Multiboot2 info structure looking for the first module tag (type=3).
+/// Returns (mod_start, mod_end) if found.
+unsafe fn parse_mb2_module(mb2: u32) -> Option<(u32, u32)> {
+    if mb2 == 0 { return None; }
+    let total = *(mb2 as *const u32);
+    let mut off: u32 = 8;
+    while off < total {
+        let tag_ptr = (mb2 + off) as *const u32;
+        let ttype = *tag_ptr;
+        let tsize = *tag_ptr.add(1);
+        if ttype == 0 { break; }
+        if ttype == 3 && tsize >= 16 {
+            // struct multiboot_tag_module: u32 type, u32 size, u32 mod_start, u32 mod_end, char cmdline[]
+            let mod_start = *((mb2 + off + 8)  as *const u32);
+            let mod_end   = *((mb2 + off + 12) as *const u32);
+            return Some((mod_start, mod_end));
+        }
+        off += (tsize + 7) & !7;
+    }
+    None
+}
 
 /// Walk the Multiboot2 info structure looking for the framebuffer tag (type=8).
 /// Returns (phys_addr, width, height, pitch, bpp) if found.
@@ -107,6 +131,18 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
     // We need PMM-allocated frames (above 2 MiB) to be reachable.
     vmm::extend_identity_map(64);  // identity-map 0–64 MiB
     vga::write_str("  [VMM] identity map extended to 64 MiB\n", vga::Color::Green);
+
+    // Parse initramfs CPIO from GRUB module (Multiboot2 tag type=3)
+    if let Some((mod_start, mod_end)) = unsafe { parse_mb2_module(mb2) } {
+        let size = (mod_end - mod_start) as usize;
+        ramfs::init(mod_start as *const u8, size);
+        let count = ramfs::inode_count();
+        vga::write_str("  [ramfs] ", vga::Color::Green);
+        vga::write_i32(count as i32);
+        vga::write_str(" files loaded\n", vga::Color::Green);
+    } else {
+        vga::write_str("  [ramfs] no module — VFS unavailable\n", vga::Color::Amber);
+    }
 
     // Switch to framebuffer if GRUB provided one (Multiboot2 tag type 8).
     // map_mmio_range maps the VRAM pages; term::init() paints the dark background.
