@@ -241,6 +241,11 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
     vga::write_hex(vmm::USER_STACK_TOP, vga::Color::DimGray);
     vga::write_byte(b'\n', vga::Color::White);
 
+    // Clear VGA text buffer before ring-3 launch so ghost boot messages
+    // don't overlay the graphical framebuffer via the VGA text renderer.
+    vga::clear();
+    serial::write_byte(b'\n');
+
     // IRETQ into ring-3 — stack + code both live in PTE_USER huge pages
     // Pin entry→r8 and user_rsp→r9 so the compiler never aliases them to
     // rax, which we clobber during the RFLAGS pushfq/pop/or sequence.

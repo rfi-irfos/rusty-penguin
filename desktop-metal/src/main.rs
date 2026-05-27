@@ -66,7 +66,7 @@ fn sys_yield() {
 const BG:       u32 = 0x0B1220;
 const TOPBAR:   u32 = 0x080F1C;
 const TASKBAR:  u32 = 0x111827;
-const TOPBAR_H: u32 = 16;
+const TOPBAR_H: u32 = 20;
 const BORDER:   u32 = 0x1E293B;
 const GREEN:    u32 = 0x4ADE80;
 const DIM:      u32 = 0x334155;
@@ -213,7 +213,7 @@ fn draw_topbar(fb: &mut Framebuffer, time: &str, s: &SysStats, ticks: u64) {
     let fw = fb.width;
     fb.fill_rect(0, 0, fw, TOPBAR_H, TOPBAR);
     fb.fill_rect(0, TOPBAR_H - 1, fw, 1, 0x1E293B);
-    fb.draw_str(8, 4, time, WHITE, TOPBAR);
+    fb.draw_str(8, (TOPBAR_H / 2).saturating_sub(4), time, WHITE, TOPBAR);
 
     // Right-aligned, mirrors Linux topbar colour scheme:
     //   BLUE   74/512M   used / total MiB
@@ -222,19 +222,20 @@ fn draw_topbar(fb: &mut Framebuffer, time: &str, s: &SysStats, ticks: u64) {
     let mut rx = fw as i32 - 8;
 
     let mib = format!("{}/{}M", s.used_mib, s.total_mib);
+    let ty = (TOPBAR_H / 2).saturating_sub(4);
     rx -= mib.len() as i32 * 8;
-    fb.draw_str(rx as u32, 4, &mib, 0x60A5FA, TOPBAR);
+    fb.draw_str(rx as u32, ty, &mib, 0x60A5FA, TOPBAR);
     rx -= 16;
 
     let mem = format!("M{}%", s.mem_pct);
     rx -= mem.len() as i32 * 8;
-    fb.draw_str(rx as u32, 4, &mem, 0x4ADE80, TOPBAR);
+    fb.draw_str(rx as u32, ty, &mem, 0x4ADE80, TOPBAR);
     rx -= 16;
 
     let ind = trit_indicator(ticks);
     let ind_str = core::str::from_utf8(&ind).unwrap_or("T[+--+]");
     rx -= ind_str.len() as i32 * 8;
-    fb.draw_str(rx as u32, 4, ind_str, AMBER, TOPBAR);
+    fb.draw_str(rx as u32, ty, ind_str, AMBER, TOPBAR);
 }
 
 // ---- Launcher buttons ───────────────────────────────────────────────────────

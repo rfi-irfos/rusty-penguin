@@ -85,6 +85,9 @@ pub fn handle_irq() {
     let byte = unsafe { port::inb(0x60) };
     unsafe {
         let idx = PACKET_IDX as usize;
+        // First byte of every PS/2 mouse packet always has bit 3 set.
+        // Resync the accumulator if we're out of phase.
+        if idx == 0 && (byte & 0x08) == 0 { return; }
         PACKET[idx] = byte;
         PACKET_IDX += 1;
 
