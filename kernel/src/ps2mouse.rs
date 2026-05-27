@@ -185,26 +185,22 @@ pub fn handle_irq() {
             if flags & 0xC0 != 0 { return; }
 
             let buttons = flags & 0x07;
-            let dx = dx_raw as i16;
-            let dy = -(dy_raw as i16);   // PS/2 Y is inverted vs screen
 
-            // Diagnostic: log significant mouse movements to serial so we can confirm
-            // which axis the hardware is reporting. Remove once mouse is confirmed working.
-            if dx.abs() > 1 || dy.abs() > 1 {
-                let xs = if dx > 1 { b'R' } else if dx < -1 { b'L' } else { b'-' };
-                let ys = if dy > 1 { b'D' } else if dy < -1 { b'U' } else { b'-' };
-                crate::serial::write_byte(b'[');
-                crate::serial::write_byte(xs);
-                crate::serial::write_byte(ys);
-                crate::serial::write_byte(b']');
-            }
+            // Correct 9-bit PS/2 signed delta: sign bit lives in the flags byte,
+            // not in the data byte. Casting to i8 gives wrong sign for values 128-255.
+            let x_neg = (flags & 0x10) != 0;
+            let y_neg = (flags & 0x20) != 0;
+            let dx = if x_neg { (dx_raw as i32) - 256 } else { dx_raw as i32 };
+            let dy_raw9 = if y_neg { (dy_raw as i32) - 256 } else { dy_raw as i32 };
+            let dy = -dy_raw9;  // PS/2 Y is inverted vs screen coords
 
             let w = fb::width() as i32;
             let h = fb::height() as i32;
-            MOUSE_X = (MOUSE_X + dx as i32).clamp(0, if w > 0 { w - 1 } else { 639 });
-            MOUSE_Y = (MOUSE_Y + dy as i32).clamp(0, if h > 0 { h - 1 } else { 479 });
+            MOUSE_X = (MOUSE_X + dx).clamp(0, if w > 0 { w - 1 } else { 639 });
+            MOUSE_Y = (MOUSE_Y + dy).clamp(0, if h > 0 { h - 1 } else { 479 });
 
-            crate::input::push_mouse(dx, dy, buttons);
+            // Send absolute position so desktop doesn't re-accumulate potentially-wrong deltas.
+            crate::input::push_mouse(MOUSE_X as u16, MOUSE_Y as u16, buttons);
         }
     }
 }

@@ -1,7 +1,8 @@
 // Input via sys_input_poll (nr=7) — non-blocking drain of the kernel event ring.
 // Event encoding: bits[63:56]=type  0x01=Key  0x02=Mouse
 //   Key:   bits[7:0]=ascii  [15:8]=scancode
-//   Mouse: bits[15:0]=dx i16  [31:16]=dy i16  [39:32]=buttons
+//   Mouse: bits[15:0]=abs_x u16  [31:16]=abs_y u16  [39:32]=buttons
+//   Mouse coords are absolute, clamped by kernel to [0, fb_w-1] × [0, fb_h-1].
 
 pub struct MouseState {
     pub x: i32,
@@ -41,7 +42,8 @@ fn sys_input_poll() -> u64 {
 
 /// Drain all pending input events. Updates mouse state. Returns all ASCII key bytes.
 /// Multiple bytes per call is essential for ESC sequences (3–4 bytes each).
-pub fn poll(mouse: &mut MouseState, width: i32, height: i32) -> Keys {
+/// width/height kept for API compatibility but mouse coords are already clamped by kernel.
+pub fn poll(mouse: &mut MouseState, _width: i32, _height: i32) -> Keys {
     let mut keys = Keys::new();
     loop {
         let ev = sys_input_poll();
@@ -52,11 +54,10 @@ pub fn poll(mouse: &mut MouseState, width: i32, height: i32) -> Keys {
                 if ascii != 0 { keys.push(ascii); }
             }
             0x02 => {
-                let dx = (ev & 0xFFFF) as u16 as i16 as i32;
-                let dy = ((ev >> 16) & 0xFFFF) as u16 as i16 as i32;
+                // Absolute position from kernel-tracked MOUSE_X / MOUSE_Y
+                mouse.x = (ev & 0xFFFF) as u16 as i32;
+                mouse.y = ((ev >> 16) & 0xFFFF) as u16 as i32;
                 mouse.buttons = ((ev >> 32) & 0xFF) as u8;
-                mouse.x = (mouse.x + dx).max(0).min(width  - 1);
-                mouse.y = (mouse.y + dy).max(0).min(height - 1);
             }
             _ => {}
         }

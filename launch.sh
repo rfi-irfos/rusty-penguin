@@ -14,5 +14,5 @@ exec qemu-system-x86_64 \
     -cdrom rusty-penguin.iso \
     -m 512M \
     -vga std \
-    -display sdl,show-cursor=off \
+    -display sdl,show-cursor=off,grab-on-hover=on \
     -serial file:/tmp/rusty-penguin.log

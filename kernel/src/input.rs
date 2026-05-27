@@ -55,10 +55,11 @@ pub fn push_key(ascii: u8, scancode: u8) {
 }
 
 /// Called from PS/2 mouse ISR after a complete 3-byte packet.
-pub fn push_mouse(dx: i16, dy: i16, buttons: u8) {
+/// Sends absolute cursor position so the desktop doesn't re-accumulate deltas.
+pub fn push_mouse(abs_x: u16, abs_y: u16, buttons: u8) {
     let ev: u64 = (0x02u64 << 56)
                | ((buttons as u64) << 32)
-               | (((dy as u16) as u64) << 16)
-               | ((dx as u16) as u64);
+               | ((abs_y as u64) << 16)
+               | (abs_x as u64);
     push(ev);
 }
