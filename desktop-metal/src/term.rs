@@ -5,6 +5,7 @@ use alloc::vec::Vec;
 use alloc::string::String;
 use alloc::format;
 use crate::fb::Framebuffer;
+use crate::trit::{Trit, linear_layer, seed_trits};
 
 pub const COLS: usize = 80;
 pub const ROWS: usize = 24;
@@ -240,7 +241,9 @@ impl Terminal {
         if line.is_empty() { return; }
 
         if line == b"help" {
-            self.write_output(b"commands: echo uname whoami ps uptime mem ai trit help exit\r\n");
+            self.write_output(b"commands: echo uname whoami ps uptime mem ai <n> trit help exit\r\n");
+            self.write_output(b"  ai <n>   sparse ternary inference (n tokens, default 32)\r\n");
+            self.write_output(b"  trit     balanced ternary arithmetic\r\n");
         } else if line == b"uname" || line == b"uname -a" {
             self.write_output(b"RustyPenguin 1.0.0 psh x86_64 GNU/Trit\r\n");
         } else if line == b"whoami" {
@@ -283,18 +286,12 @@ impl Terminal {
             self.write_output(b"\r\n");
         } else if line == b"ai" || line.starts_with(b"ai ") {
             let arg = if line.starts_with(b"ai ") { &line[3..] } else { b"32" as &[u8] };
-            let n: i64 = {
-                let mut v: i64 = 0;
-                for &b in arg { if b >= b'0' && b <= b'9' { v = v.wrapping_mul(10).wrapping_add((b - b'0') as i64); } }
-                v
+            let n_tokens: usize = {
+                let mut v: usize = 0;
+                for &b in arg { if b >= b'0' && b <= b'9' { v = v.wrapping_mul(10).wrapping_add((b - b'0') as usize); } }
+                v.max(1).min(256)
             };
-            self.write_output(b"albert. bare metal\r\n");
-            let (free, total) = sys_meminfo();
-            let used = total.saturating_sub(free);
-            let out = format!("mem {}/{}M  tokens {}\r\n", used, total, n);
-            self.write_output(out.as_bytes());
-            self.write_output(b"inference: not available (bare metal)\r\n");
-            self.write_output(b"try: trit add 42 -7\r\n");
+            self.run_ai_inference(n_tokens);
         } else if line == b"trit" {
             self.write_output(b"usage: trit add|sub|mul|neg|cns <a> [b]\r\n");
         } else if line.starts_with(b"trit ") {
@@ -309,10 +306,96 @@ impl Terminal {
         }
     }
 
+    fn run_ai_inference(&mut self, n_tokens: usize) {
+        const DIM: usize = 8;
+        const LAYERS: usize = 4;
+
+        self.write_output(b"albert. [bare metal]\r\n");
+        let s_line = format!("sparse ternary inference -- {} layers x {} tokens\r\n", LAYERS, n_tokens);
+        self.write_output(s_line.as_bytes());
+        self.write_output(b"\r\n");
+
+        let seed = sys_ticks().wrapping_add(n_tokens as u64 * 7);
+
+        // Weight matrices for all layers (stack-allocated: 4 * 8 * 8 = 256 trits)
+        let mut w_all = [Trit::Zero; LAYERS * DIM * DIM];
+        seed_trits(&mut w_all, seed ^ 0xCAFE_BABE_DEAD_BEEF);
+
+        // Initial activation vector, seeded from n_tokens + ticks
+        let mut act = [Trit::Zero; DIM];
+        seed_trits(&mut act, seed);
+
+        // Show input
+        self.write_output(b"  input  [");
+        for t in &act { self.process_byte(t.to_byte()); }
+        self.write_output(b"]\r\n");
+
+        let mut total_total = 0usize;
+        let mut total_skip  = 0usize;
+
+        for l in 0..LAYERS {
+            let in_act = act;
+            let w = &w_all[l * DIM * DIM..(l + 1) * DIM * DIM];
+            let mut out_act = [Trit::Zero; DIM];
+            let (t, sk) = linear_layer(w, DIM, DIM, &in_act, &mut out_act);
+            total_total += t;
+            total_skip  += sk;
+            let dorm = if t > 0 { sk * 100 / t } else { 0 };
+
+            let prefix = format!("  L{}     [", l);
+            self.write_output(prefix.as_bytes());
+            for t in &in_act  { self.process_byte(t.to_byte()); }
+            self.write_output(b"] -> [");
+            for t in &out_act { self.process_byte(t.to_byte()); }
+            let suffix = format!("]  dormancy {}%\r\n", dorm);
+            self.write_output(suffix.as_bytes());
+
+            act = out_act;
+        }
+
+        let avg_dorm = if total_total > 0 { total_skip * 100 / total_total } else { 0 };
+        self.write_output(b"\r\n");
+        let summary = format!("{} tokens  avg dormancy {}%  skipped {}/{} ops\r\n",
+            n_tokens, avg_dorm, total_skip, total_total);
+        self.write_output(summary.as_bytes());
+        self.write_output(b"ACTIVE -- Binary hardware. Ternary mind.\r\n");
+    }
+
+    fn to_tern(n: i64) -> String {
+        if n == 0 { return String::from("0"); }
+        let flip = n < 0;
+        let mut v = if n < 0 { -n } else { n };
+        let mut digits = [0i8; 40];
+        let mut len = 0;
+        while v != 0 {
+            let rem = (v % 3) as i8; v /= 3;
+            if rem == 2 { digits[len] = -1; v += 1; } else { digits[len] = rem; }
+            len += 1;
+        }
+        let mut s = String::new();
+        for k in 0..len {
+            let d = if flip { -digits[len-1-k] } else { digits[len-1-k] };
+            s.push(match d { 1 => '+', -1 => '-', _ => '0' });
+        }
+        s
+    }
+
+    fn parse_i64(s: &[u8]) -> Option<i64> {
+        if s.is_empty() { return None; }
+        let (neg, d) = if s[0] == b'-' { (true, &s[1..]) } else { (false, s) };
+        if d.is_empty() { return None; }
+        let mut n: i64 = 0;
+        for &b in d {
+            if b < b'0' || b > b'9' { return None; }
+            n = n.wrapping_mul(10).wrapping_add((b - b'0') as i64);
+        }
+        Some(if neg { -n } else { n })
+    }
+
     fn exec_trit(&mut self, args: &[u8]) {
         let mut parts = [b"" as &[u8]; 3];
-        let mut count = 0;
-        let mut start = 0;
+        let mut count = 0usize;
+        let mut start = 0usize;
         let mut in_word = false;
         for i in 0..=args.len() {
             let at_sp = i == args.len() || args[i] == b' ';
@@ -324,50 +407,38 @@ impl Terminal {
             }
         }
         if count == 0 { self.write_output(b"usage: trit add|sub|mul|neg|cns <a> [b]\r\n"); return; }
+
         let op = parts[0];
-        let parse = |s: &[u8]| -> Option<i64> {
-            if s.is_empty() { return None; }
-            let (neg, d) = if s[0] == b'-' { (true, &s[1..]) } else { (false, s) };
-            let mut n: i64 = 0;
-            for &b in d { if b < b'0' || b > b'9' { return None; } n = n.wrapping_mul(10).wrapping_add((b-b'0') as i64); }
-            Some(if neg { -n } else { n })
-        };
-        let to_tern = |mut n: i64| -> String {
-            if n == 0 { return String::from("0"); }
-            let flip = n < 0; if n < 0 { n = -n; }
-            let mut digits = [0i8; 40]; let mut len = 0; let mut v = n;
-            while v != 0 {
-                let rem = (v % 3) as i8; v /= 3;
-                if rem == 2 { digits[len] = -1; v += 1; } else { digits[len] = rem; }
-                len += 1;
+
+        // Plain number: "trit 42" → show balanced ternary representation
+        let is_keyword = matches!(op, b"add" | b"sub" | b"mul" | b"neg" | b"cns");
+        if !is_keyword && count == 1 {
+            match Self::parse_i64(op) {
+                Some(n) => self.write_output(format!("{}  ({})\r\n", n, Self::to_tern(n)).as_bytes()),
+                None    => self.write_output(b"usage: trit add|sub|mul|neg|cns <a> [b]\r\n"),
             }
-            let mut s = String::new();
-            for k in 0..len {
-                let d = if flip { -digits[len-1-k] } else { digits[len-1-k] };
-                s.push(match d { 1 => '+', -1 => '-', _ => '0' });
-            }
-            s
-        };
+            return;
+        }
 
         if op == b"neg" {
             if count < 2 { self.write_output(b"usage: trit neg <a>\r\n"); return; }
-            if let Some(a) = parse(parts[1]) {
+            if let Some(a) = Self::parse_i64(parts[1]) {
                 let r = -a;
-                self.write_output(format!("{}  ({})\r\n", r, to_tern(r)).as_bytes());
+                self.write_output(format!("{}  ({})\r\n", r, Self::to_tern(r)).as_bytes());
             }
             return;
         }
         if count < 3 { self.write_output(b"usage: trit <op> <a> <b>\r\n"); return; }
-        let (a, b_val) = match (parse(parts[1]), parse(parts[2])) {
+        let (a, bv) = match (Self::parse_i64(parts[1]), Self::parse_i64(parts[2])) {
             (Some(a), Some(b)) => (a, b),
             _ => { self.write_output(b"bad number\r\n"); return; }
         };
-        let r: i64 = if op == b"add" { a + b_val }
-            else if op == b"sub" { a - b_val }
-            else if op == b"mul" { a * b_val }
-            else if op == b"cns" { if a > 0 && b_val > 0 { 1 } else if a < 0 && b_val < 0 { -1 } else { 0 } }
+        let r: i64 = if op == b"add" { a + bv }
+            else if op == b"sub" { a - bv }
+            else if op == b"mul" { a * bv }
+            else if op == b"cns" { if a > 0 && bv > 0 { 1 } else if a < 0 && bv < 0 { -1 } else { 0 } }
             else { self.write_output(b"unknown op\r\n"); return; };
-        self.write_output(format!("{}  ({})\r\n", r, to_tern(r)).as_bytes());
+        self.write_output(format!("{}  ({})\r\n", r, Self::to_tern(r)).as_bytes());
     }
 
     pub fn render(&self, fb: &mut Framebuffer, x: u32, y: u32) {

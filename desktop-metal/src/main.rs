@@ -8,6 +8,7 @@ mod fb;
 mod font;
 mod input;
 mod term;
+mod trit;
 mod wm;
 
 use alloc::vec;
@@ -198,19 +199,42 @@ fn draw_scene_static(fb: &mut Framebuffer) {
     fb.fill_rect(0, TOPBAR_H - 1, w, 1, 0x1E293B);
 }
 
-fn draw_topbar(fb: &mut Framebuffer, time: &str, s: &SysStats) {
+fn trit_indicator(ticks: u64) -> [u8; 7] {
+    // 4-trit cycling indicator: T[+--+], changes ~every 300ms (30 ticks)
+    let phase = ticks / 30;
+    let mut out = *b"T[+--+]";
+    for i in 0..4u64 {
+        out[2 + i as usize] = match (phase + i) % 3 { 0 => b'-', 1 => b'0', _ => b'+' };
+    }
+    out
+}
+
+fn draw_topbar(fb: &mut Framebuffer, time: &str, s: &SysStats, ticks: u64) {
     let fw = fb.width;
     fb.fill_rect(0, 0, fw, TOPBAR_H, TOPBAR);
     fb.fill_rect(0, TOPBAR_H - 1, fw, 1, 0x1E293B);
     fb.draw_str(8, 4, time, WHITE, TOPBAR);
+
+    // Right-aligned, mirrors Linux topbar colour scheme:
+    //   BLUE   74/512M   used / total MiB
+    //   GREEN  M74%      memory %
+    //   AMBER  T[+--+]   ternary engine live indicator
     let mut rx = fw as i32 - 8;
+
+    let mib = format!("{}/{}M", s.used_mib, s.total_mib);
+    rx -= mib.len() as i32 * 8;
+    fb.draw_str(rx as u32, 4, &mib, 0x60A5FA, TOPBAR);
+    rx -= 16;
+
     let mem = format!("M{}%", s.mem_pct);
     rx -= mem.len() as i32 * 8;
     fb.draw_str(rx as u32, 4, &mem, 0x4ADE80, TOPBAR);
     rx -= 16;
-    let mib = format!("{}/{}M", s.used_mib, s.total_mib);
-    rx -= mib.len() as i32 * 8;
-    fb.draw_str(rx as u32, 4, &mib, 0x60A5FA, TOPBAR);
+
+    let ind = trit_indicator(ticks);
+    let ind_str = core::str::from_utf8(&ind).unwrap_or("T[+--+]");
+    rx -= ind_str.len() as i32 * 8;
+    fb.draw_str(rx as u32, 4, ind_str, AMBER, TOPBAR);
 }
 
 // ---- Launcher buttons ───────────────────────────────────────────────────────
@@ -377,7 +401,7 @@ fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, 
         tw.win_dirty  = false;
     }
     if start_menu { draw_start_menu(fb); }
-    draw_topbar(fb, &uptime_str(), stats);
+    draw_topbar(fb, &uptime_str(), stats, sys_ticks());
 }
 
 // ── Entry point ──────────────────────────────────────────────────────────────
@@ -395,7 +419,7 @@ pub extern "C" fn _start() -> ! {
     let mut stats = sample_stats();
     draw_scene_static(&mut fb);
     draw_launchers(&mut fb);
-    draw_topbar(&mut fb, &uptime_str(), &stats);
+    draw_topbar(&mut fb, &uptime_str(), &stats, sys_ticks());
 
     let cbl = (CURSOR_W * CURSOR_H) as usize;
     let mut cbuf = vec![BG; cbl];
@@ -464,7 +488,7 @@ pub extern "C" fn _start() -> ! {
         if tick % 200 == 0 {
             stats = sample_stats();
             restore_cursor_bg(&mut fb, cx, cy, &cbuf);
-            draw_topbar(&mut fb, &uptime_str(), &stats);
+            draw_topbar(&mut fb, &uptime_str(), &stats, sys_ticks());
             save_cursor_bg(&fb, cx, cy, &mut cbuf);
             draw_cursor(&mut fb, cx, cy);
         }

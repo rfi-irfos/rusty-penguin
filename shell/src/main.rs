@@ -4,6 +4,92 @@ use scheduler::{ProcessController, TernaryState};
 use ai_runtime::{TernaryLinear, TernaryTensor};
 use mathematics::{mul_tryte, div_tryte, scale};
 
+fn to_tern(mut n: i64) -> String {
+    if n == 0 { return "0".to_string(); }
+    let flip = n < 0;
+    if n < 0 { n = -n; }
+    let mut digits = [0i8; 40];
+    let mut len = 0;
+    let mut v = n;
+    while v != 0 {
+        let rem = (v % 3) as i8; v /= 3;
+        if rem == 2 { digits[len] = -1; v += 1; } else { digits[len] = rem; }
+        len += 1;
+    }
+    let mut s = String::new();
+    for k in 0..len {
+        let d = if flip { -digits[len-1-k] } else { digits[len-1-k] };
+        s.push(match d { 1 => '+', -1 => '-', _ => '0' });
+    }
+    s
+}
+
+fn lcg(s: u64) -> u64 {
+    s.wrapping_mul(6_364_136_223_846_793_005)
+     .wrapping_add(1_442_695_040_888_963_407)
+}
+
+fn seed_trits(buf: &mut Vec<Trit>, seed: u64) {
+    let mut s = seed;
+    for t in buf.iter_mut() {
+        s = lcg(s);
+        *t = match (s >> 33) % 3 { 0 => Trit::Neg, 1 => Trit::Zero, _ => Trit::Pos };
+    }
+}
+
+fn run_ai_inference(n_tokens: usize) {
+    const DIM: usize = 8;
+    const LAYERS: usize = 4;
+
+    let seed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() as u64)
+        .unwrap_or(42)
+        .wrapping_add(n_tokens as u64 * 7);
+
+    println!("albert. [inference]");
+    println!("sparse ternary inference -- {} layers x {} tokens\n", LAYERS, n_tokens);
+
+    // Build weight matrices
+    let mut w_all = vec![Trit::Zero; LAYERS * DIM * DIM];
+    seed_trits(&mut w_all, seed ^ 0xCAFE_BABE_DEAD_BEEF_u64);
+
+    let mut act = vec![Trit::Zero; DIM];
+    seed_trits(&mut act, seed);
+
+    // Show input
+    let input_str: String = act.iter().map(|t| match t {
+        Trit::Pos => '+', Trit::Zero => '0', Trit::Neg => '-',
+    }).collect();
+    println!("  input  [{}]", input_str);
+
+    let mut total_total = 0usize;
+    let mut total_skip  = 0usize;
+
+    for l in 0..LAYERS {
+        let in_act = act.clone();
+        let w = &w_all[l * DIM * DIM..(l + 1) * DIM * DIM];
+
+        let mut layer = TernaryLinear::new(DIM, DIM);
+        layer.weights.data = w.to_vec();
+        let inp_tensor = TernaryTensor::new(in_act.clone(), vec![DIM]);
+        let (out_tensor, t, sk) = layer.forward(&inp_tensor);
+        total_total += t;
+        total_skip  += sk;
+        let dorm = if t > 0 { sk * 100 / t } else { 0 };
+
+        act = out_tensor.data.clone();
+
+        let in_str:  String = in_act.iter().map(|t| match t { Trit::Pos=>'+', Trit::Zero=>'0', Trit::Neg=>'-' }).collect();
+        let out_str: String = act.iter().map(|t| match t { Trit::Pos=>'+', Trit::Zero=>'0', Trit::Neg=>'-' }).collect();
+        println!("  L{}     [{}] -> [{}]  dormancy {}%", l, in_str, out_str, dorm);
+    }
+
+    let avg_dorm = if total_total > 0 { total_skip * 100 / total_total } else { 0 };
+    println!("\n{} tokens  avg dormancy {}%  skipped {}/{} ops", n_tokens, avg_dorm, total_skip, total_total);
+    println!("ACTIVE -- Binary hardware. Ternary mind.");
+}
+
 fn main() {
     println!("Rusty Penguin Shell (psh) v0.1.0");
     println!("  \"Binary hardware. Ternary mind.\"");
@@ -26,7 +112,7 @@ fn main() {
         match command {
             "help" => {
                 println!("Commands:");
-                println!("  trit <int>         Convert integer to balanced ternary Tryte");
+                println!("  trit <n>           Convert integer to balanced ternary");
                 println!("  mul <a> <b>        Multiply two integers in balanced ternary");
                 println!("  div <a> <b>        Divide a by b (quotient + remainder)");
                 println!("  scale <n> <-1|0|1> Scale integer by a trit");
@@ -34,17 +120,13 @@ fn main() {
                 println!("  activate <pid>     SIGCONT → ACTIVE  (+1)");
                 println!("  dormant  <pid>     SIGSTOP → DORMANT  (0)");
                 println!("  suppress <pid>     SIGTERM → SUPPRESSED (-1)");
-                println!("  ai [neurons]       Run sparse ternary inference layer");
+                println!("  ai [n]             Sparse ternary inference (n tokens, default 32)");
                 println!("  exit | quit        Exit psh");
             }
 
             "trit" => {
-                if let Some(val) = parts.get(1).and_then(|s| s.parse::<i32>().ok()) {
-                    let tryte = Tryte::from_i32(val);
-                    let trits: Vec<i8> = tryte.trits().iter().map(|t| t.to_i8()).collect();
-                    println!("  decimal : {}", val);
-                    println!("  trits   : {:?}", trits);
-                    println!("  verify  : {}", tryte.to_i32());
+                if let Some(val) = parts.get(1).and_then(|s| s.parse::<i64>().ok()) {
+                    println!("{}  ({})", val, to_tern(val));
                 } else {
                     println!("Usage: trit <integer>");
                 }
@@ -129,23 +211,9 @@ fn main() {
             }
 
             "ai" => {
-                let n = parts.get(1).and_then(|s| s.parse::<usize>().ok()).unwrap_or(12);
-                println!("  Ternary inference layer: {}x{} weights", n, n);
-                let mut layer = TernaryLinear::new(n, n);
-                for i in 0..(n * n) {
-                    layer.weights.data[i] = match i % 3 {
-                        0 => Trit::Pos,
-                        1 => Trit::Neg,
-                        _ => Trit::Zero,
-                    };
-                }
-                let inp = TernaryTensor::new(vec![Trit::Pos; n], vec![n]);
-                let (out, total, skipped) = layer.forward(&inp);
-                let out_vals: Vec<i8> = out.data.iter().map(|t| t.to_i8()).collect();
-                println!("  output       : {:?}", out_vals);
-                println!("  total ops    : {}", total);
-                println!("  skipped ops  : {} (Zero-dormant)", skipped);
-                println!("  sparsity     : {:.1}%", skipped as f64 / total as f64 * 100.0);
+                let n_tokens = parts.get(1).and_then(|s| s.parse::<usize>().ok())
+                    .unwrap_or(32).max(1).min(256);
+                run_ai_inference(n_tokens);
             }
 
             "exit" | "quit" => {
