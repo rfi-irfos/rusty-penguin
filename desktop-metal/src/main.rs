@@ -456,6 +456,16 @@ pub extern "C" fn _start() -> ! {
             }
         }
 
+        // Close windows that typed `exit`
+        if wins.iter().any(|tw| tw.term.wants_close) {
+            restore_cursor_bg(&mut fb, cx, cy, &cbuf);
+            wins.retain(|tw| !tw.term.wants_close);
+            recomposite(&mut fb, &mut wins, false, &stats);
+            scene_dirty = false;
+            save_cursor_bg(&fb, cx, cy, &mut cbuf);
+            draw_cursor(&mut fb, cx, cy);
+        }
+
         // Rendering
         let cursor_moved = nx != cx || ny != cy;
         let any_chrome   = scene_dirty || wins.iter().any(|tw| tw.win_dirty);

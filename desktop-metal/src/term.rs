@@ -29,16 +29,17 @@ impl Default for Cell {
 enum EscState { Normal, Esc, Csi(String) }
 
 pub struct Terminal {
-    pub cells:   Vec<Cell>,
-    pub cur_col: usize,
-    pub cur_row: usize,
-    cur_fg:      u32,
-    cur_bg:      u32,
-    esc:         EscState,
-    pub dirty:   bool,
+    pub cells:       Vec<Cell>,
+    pub cur_col:     usize,
+    pub cur_row:     usize,
+    cur_fg:          u32,
+    cur_bg:          u32,
+    esc:             EscState,
+    pub dirty:       bool,
+    pub wants_close: bool,
     // Input line
-    line_buf:    [u8; 256],
-    line_len:    usize,
+    line_buf:        [u8; 256],
+    line_len:        usize,
 }
 
 // ── Syscall helpers ──────────────────────────────────────────────────────────
@@ -93,13 +94,14 @@ impl Terminal {
     pub fn spawn() -> Result<Self, String> {
         let blank = Cell::default();
         let mut t = Terminal {
-            cells:   alloc::vec![blank; COLS * ROWS],
-            cur_col: 0, cur_row: 0,
-            cur_fg:  DEFAULT_FG, cur_bg: DEFAULT_BG,
-            esc:     EscState::Normal,
-            dirty:   true,
-            line_buf: [0u8; 256],
-            line_len: 0,
+            cells:       alloc::vec![blank; COLS * ROWS],
+            cur_col:     0, cur_row: 0,
+            cur_fg:      DEFAULT_FG, cur_bg: DEFAULT_BG,
+            esc:         EscState::Normal,
+            dirty:       true,
+            wants_close: false,
+            line_buf:    [0u8; 256],
+            line_len:    0,
         };
         t.write_output(b"Rusty Penguin psh 1.0\r\n");
         t.write_output(b"type 'help' for commands\r\n> ");
@@ -241,9 +243,12 @@ impl Terminal {
         if line.is_empty() { return; }
 
         if line == b"help" {
-            self.write_output(b"commands: echo uname whoami ps uptime mem ai <n> trit help exit\r\n");
-            self.write_output(b"  ai <n>   sparse ternary inference (n tokens, default 32)\r\n");
-            self.write_output(b"  trit     balanced ternary arithmetic\r\n");
+            self.write_output(b"commands:\r\n");
+            self.write_output(b"  trit <n>           balanced ternary of n\r\n");
+            self.write_output(b"  trit add|sub|mul <a> <b>\r\n");
+            self.write_output(b"  ai [n]             sparse ternary inference (default 32)\r\n");
+            self.write_output(b"  ps                 process table\r\n");
+            self.write_output(b"  uptime mem uname whoami echo clear exit\r\n");
         } else if line == b"uname" || line == b"uname -a" {
             self.write_output(b"RustyPenguin 1.0.0 psh x86_64 GNU/Trit\r\n");
         } else if line == b"whoami" {
@@ -297,8 +302,8 @@ impl Terminal {
         } else if line.starts_with(b"trit ") {
             self.exec_trit(&line[5..]);
         } else if line == b"exit" {
-            // Signal to close this window — main loop handles it
-            self.write_output(b"[closing terminal]\r\n");
+            self.write_output(b"bye\r\n");
+            self.wants_close = true;
         } else {
             let out = format!("psh: command not found: '{}'\r\n",
                 core::str::from_utf8(line).unwrap_or("?"));
