@@ -203,10 +203,22 @@ fn sample_stats() -> SysStats {
     SysStats { mem_pct, used_mib: used, total_mib: total }
 }
 
-const MONTH_NAMES: [&str; 13] = ["",  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                                  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const DAY_FULL:    [&str; 8]  = ["",  "Sunday", "Monday", "Tuesday", "Wednesday",
-                                  "Thursday", "Friday", "Saturday"];
+// Month abbreviations as individual chars (avoids &str args in format! which
+// triggers a different allocator code path that panics in this bare-metal env).
+fn month_abbr(m: u8) -> [u8; 3] {
+    match m {
+        1  => *b"Jan",  2  => *b"Feb",  3  => *b"Mar",  4  => *b"Apr",
+        5  => *b"May",  6  => *b"Jun",  7  => *b"Jul",  8  => *b"Aug",
+        9  => *b"Sep",  10 => *b"Oct",  11 => *b"Nov",  12 => *b"Dec",
+        _  => *b"???",
+    }
+}
+fn day_abbr(d: u8) -> [u8; 3] {
+    match d {
+        1 => *b"Sun", 2 => *b"Mon", 3 => *b"Tue", 4 => *b"Wed",
+        5 => *b"Thu", 6 => *b"Fri", 7 => *b"Sat", _ => *b"???",
+    }
+}
 
 fn rtc_str() -> String {
     let rtc = sys_rtc();
@@ -221,11 +233,15 @@ fn rtc_str() -> String {
         let ticks = sys_ticks();
         let secs = ticks / 100;
         let h = secs / 3600; let m = (secs % 3600) / 60; let s = secs % 60;
-        return format!("Up {:02}:{:02}:{:02}", h, m, s);
+        return format!("{:02}:{:02}:{:02}", h, m, s);
     }
-    let day_s = if (wday as usize) < DAY_FULL.len()   { DAY_FULL[wday as usize]   } else { "???" };
-    let mon_s = if (month as usize) < MONTH_NAMES.len() { MONTH_NAMES[month as usize] } else { "???" };
-    format!("{} {} {:02}  {:02}:{:02}:{:02}", day_s, mon_s, mday, hour, min, sec)
+    // Use only char/numeric args in format! — &str args cause a GP in our env
+    let d = day_abbr(wday);
+    let mo = month_abbr(month);
+    format!("{}{}{} {}{}{} {:02}  {:02}:{:02}:{:02}",
+        d[0] as char, d[1] as char, d[2] as char,
+        mo[0] as char, mo[1] as char, mo[2] as char,
+        mday, hour, min, sec)
 }
 
 fn uptime_str() -> String {
