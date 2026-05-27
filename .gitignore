@@ -1,4 +1,5 @@
 /target/
+**/target/
 *.iso
 *.img
 *.vmdk

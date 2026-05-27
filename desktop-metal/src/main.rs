@@ -88,9 +88,21 @@ const WHITE:    u32 = 0xF8FAFC;
 const AMBER:    u32 = 0xFBBF24;
 const BLUE:     u32 = 0x60A5FA;
 const CURSOR:   u32 = 0xF8FAFC;
+const TEAL:     u32 = 0x2DD4BF;
 
 const CURSOR_W: u32 = 18;
 const CURSOR_H: u32 = 24;
+
+// ---- Desktop icon bitmaps ───────────────────────────────────────────────────
+// 8×8 bitmaps for desktop icon graphics
+#[rustfmt::skip]
+const ICON_TERM: [u8; 8] = [0x7E, 0x42, 0x5A, 0x4E, 0x42, 0x42, 0x42, 0x7E];  // terminal box
+#[rustfmt::skip]
+const ICON_PROC: [u8; 8] = [0x00, 0x3C, 0x42, 0x5A, 0x5A, 0x42, 0x3C, 0x00];  // process ring
+#[rustfmt::skip]
+const ICON_AI:   [u8; 8] = [0x18, 0x24, 0x42, 0xFF, 0x42, 0x24, 0x18, 0x00];  // diamond/AI
+#[rustfmt::skip]
+const ICON_TRIT: [u8; 8] = [0x08, 0x1C, 0x36, 0x63, 0x63, 0x36, 0x1C, 0x08];  // ternary ring
 
 // Dingir — 8-pointed star, cuneiform divine determinative
 #[rustfmt::skip]
@@ -188,46 +200,83 @@ fn draw_scene_static(fb: &mut Framebuffer) {
     let w = fb.width; let h = fb.height;
     let tb_y = h - 28;
 
+    // Base fill — single dark tone, then subtle gradient bands
     fb.fill_rect(0, 0, w, h, 0x08131D);
-
-    let mid = TOPBAR_H + tb_y.saturating_sub(TOPBAR_H) / 2;
+    let total_rows = tb_y.saturating_sub(TOPBAR_H);
     let mut y = TOPBAR_H;
     while y < tb_y {
-        let band = if y < mid { 0x0A1B23 } else { 0x0B1724 };
-        fb.fill_rect(0, y, w, 1, band);
+        let frac = (y - TOPBAR_H) as u64 * 8 / total_rows.max(1) as u64; // 0..8
+        let r = (0x0Au64 + frac / 2) as u8;
+        let g = (0x18u64 + frac / 3) as u8;
+        let b = (0x22u64 + frac / 2) as u8;
+        let col = ((r as u32) << 16) | ((g as u32) << 8) | b as u32;
+        fb.fill_rect(0, y, w, 1, col);
         y += 1;
     }
 
-    let mut gx = 0u32;
-    while gx < w {
-        fb.fill_rect(gx, TOPBAR_H, 1, tb_y.saturating_sub(TOPBAR_H), 0x0E2530);
-        gx += 64;
-    }
-    let mut gy = TOPBAR_H;
+    // Subtle dot-grid every 32px — much softer than full grid lines
+    let mut gy = TOPBAR_H + 32;
     while gy < tb_y {
-        fb.fill_rect(0, gy, w, 1, 0x0E2530);
-        gy += 64;
+        let mut gx = 32u32;
+        while gx < w {
+            fb.fill_rect(gx, gy, 1, 1, 0x132030);
+            gx += 32;
+        }
+        gy += 32;
     }
 
-    let logo_x = w.saturating_sub(96) / 2;
-    let logo_y = TOPBAR_H + tb_y.saturating_sub(TOPBAR_H).saturating_sub(104) / 2;
-    fb.fill_rect(logo_x, logo_y, 96, 58, 0x0C2028);
-    fb.fill_rect(logo_x, logo_y, 96, 1, 0x22C55E);
-    fb.fill_rect(logo_x, logo_y + 57, 96, 1, 0x14532D);
-    fb.fill_rect(logo_x, logo_y, 1, 58, 0x14532D);
-    fb.fill_rect(logo_x + 95, logo_y, 1, 58, 0x14532D);
-    fb.draw_bitmap_2x(logo_x + 40, logo_y + 8, &DINGIR, GREEN, 0x0C2028);
-    fb.draw_str(logo_x + 12, logo_y + 34, "RUSTY", WHITE, 0x0C2028);
-    fb.draw_str(logo_x + 12, logo_y + 44, "PENGUIN", GREEN, 0x0C2028);
+    // Centered logo widget — 160×80px, prominent
+    const LW: u32 = 160; const LH: u32 = 80;
+    let logo_x = w.saturating_sub(LW) / 2;
+    let logo_y = TOPBAR_H + tb_y.saturating_sub(TOPBAR_H).saturating_sub(LH + 24) / 2;
+    // Outer shadow
+    fb.fill_rect(logo_x + 4, logo_y + 4, LW, LH, 0x040A10);
+    // Background
+    fb.fill_rect(logo_x, logo_y, LW, LH, 0x0C1E2A);
+    // Green top accent bar
+    fb.fill_rect(logo_x, logo_y, LW, 3, 0x22C55E);
+    // Subtle inner gradient fill rows
+    let mut ly = logo_y + 3;
+    while ly < logo_y + LH - 1 {
+        let bright = if ly < logo_y + LH / 2 { 0x0D2030u32 } else { 0x0B1C2Au32 };
+        fb.fill_rect(logo_x + 1, ly, LW - 2, 1, bright);
+        ly += 1;
+    }
+    // Side borders
+    fb.fill_rect(logo_x, logo_y + 3, 1, LH - 4, 0x1A3040);
+    fb.fill_rect(logo_x + LW - 1, logo_y + 3, 1, LH - 4, 0x1A3040);
+    fb.fill_rect(logo_x, logo_y + LH - 1, LW, 1, 0x1A3040);
+    // Dingir icon 2x — centred
+    fb.draw_bitmap_2x(logo_x + (LW - 16) / 2, logo_y + 10, &DINGIR, GREEN, 0x0D2030);
+    // Name text
+    fb.draw_str(logo_x + (LW - 5 * 8) / 2, logo_y + 38, "RUSTY", WHITE, 0x0D2030);
+    fb.draw_str(logo_x + (LW - 7 * 8) / 2, logo_y + 50, "PENGUIN", GREEN, 0x0D2030);
+    // Version
+    fb.draw_str(logo_x + (LW - 9 * 8) / 2, logo_y + 64, "v1.0.0-bm", DIM, 0x0B1C2A);
 
-    let tag = "Binary hardware. Ternary mind.";
-    fb.draw_str(w.saturating_sub(tag.len() as u32 * 8) / 2, logo_y + 70, tag, 0x8BC9A5, 0x0B1724);
+    // Tagline below logo
+    let tag = "Binary hardware.  Ternary mind.";
+    let tag_y = logo_y + LH + 12;
+    if tag_y < tb_y.saturating_sub(8) {
+        fb.draw_str(w.saturating_sub(tag.len() as u32 * 8) / 2, tag_y, tag, 0x2DD4BF, 0x08131D);
+    }
+
+    // ── Taskbar ──
     fb.fill_rect(0, tb_y, w, 28, TASKBAR);
-    fb.fill_rect(0, tb_y, w, 1, 0x1F3B2D);
-    fb.draw_bitmap_2x(4, tb_y + 6, &DINGIR, GREEN, TASKBAR);
+    // Top separator with green tint
+    fb.fill_rect(0, tb_y, w, 1, 0x1A3028);
+    // Menu button
+    fb.draw_bitmap_2x(6, tb_y + 6, &DINGIR, GREEN, TASKBAR);
     fb.draw_str(28, tb_y + 10, "Menu", WHITE, TASKBAR);
+    // Vertical separator after menu
+    fb.fill_rect(70, tb_y + 4, 1, 20, 0x1E3030);
+
+    // ── Topbar ──
     fb.fill_rect(0, 0, w, TOPBAR_H, TOPBAR);
-    fb.fill_rect(0, TOPBAR_H - 1, w, 1, 0x1E293B);
+    // Bottom edge of topbar
+    fb.fill_rect(0, TOPBAR_H - 1, w, 1, 0x1A2F3A);
+    // Small decorative left accent on topbar
+    fb.fill_rect(0, 0, 3, TOPBAR_H, 0x22C55E);
 }
 
 fn trit_indicator(ticks: u64) -> [u8; 7] {
@@ -244,7 +293,15 @@ fn draw_topbar(fb: &mut Framebuffer, time: &str, s: &SysStats, ticks: u64) {
     let fw = fb.width;
     fb.fill_rect(0, 0, fw, TOPBAR_H, TOPBAR);
     fb.fill_rect(0, TOPBAR_H - 1, fw, 1, 0x1E293B);
-    fb.draw_str(8, (TOPBAR_H / 2).saturating_sub(4), time, WHITE, TOPBAR);
+    // Left green accent bar
+    fb.fill_rect(0, 0, 3, TOPBAR_H, 0x22C55E);
+    let ty = (TOPBAR_H / 2).saturating_sub(4);
+    // Uptime left of Dingir + label
+    fb.draw_bitmap_2x(6, ty.saturating_sub(4), &DINGIR, GREEN, TOPBAR);
+    fb.draw_str(24, ty, time, WHITE, TOPBAR);
+    // Centered OS name
+    let lbl = "Rusty Penguin";
+    fb.draw_str((fw - lbl.len() as u32 * 8) / 2, ty, lbl, GREEN, TOPBAR);
 
     // Right-aligned, mirrors Linux topbar colour scheme:
     //   BLUE   74/512M   used / total MiB
@@ -253,7 +310,6 @@ fn draw_topbar(fb: &mut Framebuffer, time: &str, s: &SysStats, ticks: u64) {
     let mut rx = fw as i32 - 8;
 
     let mib = format!("{}/{}M", s.used_mib, s.total_mib);
-    let ty = (TOPBAR_H / 2).saturating_sub(4);
     rx -= mib.len() as i32 * 8;
     if rx > 80 { fb.draw_str(rx as u32, ty, &mib, 0x60A5FA, TOPBAR); }
     rx -= 16;
@@ -311,6 +367,81 @@ fn launcher_hit(fw: u32, fh: u32, mx: i32, my: i32) -> Option<usize> {
         }
     }
     None
+}
+
+// ---- Desktop icon shortcuts ─────────────────────────────────────────────────
+// Fixed 4 icons. Each is 72×64px: 48px image area + 8px label + 8px margin.
+
+struct DesktopIcon {
+    label: &'static str,
+    bitmap: &'static [u8; 8],
+    color: u32,
+    launcher_idx: usize,
+}
+
+const DESKTOP_ICONS: &[DesktopIcon] = &[
+    DesktopIcon { label: "Term",  bitmap: &ICON_TERM, color: GREEN,    launcher_idx: 0 },
+    DesktopIcon { label: "Procs", bitmap: &ICON_PROC, color: BLUE,     launcher_idx: 1 },
+    DesktopIcon { label: "AI",    bitmap: &ICON_AI,   color: AMBER,    launcher_idx: 2 },
+    DesktopIcon { label: "Trit",  bitmap: &ICON_TRIT, color: 0xC084FC, launcher_idx: 3 },
+];
+
+// 56px wide keeps icons safely left of the default window start (x=79)
+const DICON_W: u32 = 56;
+const DICON_H: u32 = 60;   // 48px image area + 8px label + 4px gap below label
+const DICON_X: u32 = 10;   // left margin → right edge at 66px
+const DICON_GAP: u32 = 8;  // vertical gap between icons
+
+fn dicon_rect(i: usize) -> (u32, u32, u32, u32) {
+    let y = TOPBAR_H + 16 + i as u32 * (DICON_H + DICON_GAP);
+    (DICON_X, y, DICON_W, DICON_H)
+}
+
+fn draw_desktop_icons(fb: &mut Framebuffer) {
+    for (i, icon) in DESKTOP_ICONS.iter().enumerate() {
+        let (x, y, w, h) = dicon_rect(i);
+        let img_h: u32 = h - 12;  // image area (48px for DICON_H=60: 60-12=48)
+        // Icon image background box
+        fb.fill_rect(x, y, w, img_h, 0x0D1E2C);
+        fb.fill_rect(x, y,         w, 1, icon.color);
+        fb.fill_rect(x, y,         1, img_h, icon.color);
+        fb.fill_rect(x + w - 1, y, 1, img_h, icon.color);
+        fb.fill_rect(x, y + img_h - 1, w, 1, icon.color);
+        // 2x bitmap centered in image area (16px rendered at 2x scale)
+        let bx = x + (w - 16) / 2;
+        let by = y + (img_h - 16) / 2;
+        fb.draw_bitmap_2x(bx, by, icon.bitmap, icon.color, 0x0D1E2C);
+        // Label centered below image
+        let lw = icon.label.len() as u32 * 8;
+        let lx = if lw < w { x + (w - lw) / 2 } else { x };
+        fb.draw_str(lx, y + img_h + 4, icon.label, icon.color, BG);
+    }
+}
+
+fn desktop_icon_hit(mx: i32, my: i32) -> Option<usize> {
+    for i in 0..DESKTOP_ICONS.len() {
+        let (x, y, w, h) = dicon_rect(i);
+        if mx >= x as i32 && mx < (x + w) as i32
+            && my >= y as i32 && my < (y + h) as i32
+        {
+            return Some(i);
+        }
+    }
+    None
+}
+
+// ---- Taskbar clock ──────────────────────────────────────────────────────────
+
+fn draw_taskbar_clock(fb: &mut Framebuffer, up: &str) {
+    let fh = fb.height;
+    let fw = fb.width;
+    let tb_y = fh - 28;
+    let ty = tb_y + (28 - 8) / 2;
+    let label_w = up.len() as u32 * 8 + 8;
+    let rx = fw.saturating_sub(label_w + 4);
+    // Clear clock area
+    fb.fill_rect(rx, tb_y + 1, label_w + 4, 26, TASKBAR);
+    fb.draw_str(rx + 4, ty, up, TEAL, TASKBAR);
 }
 
 // ---- Taskbar window buttons ─────────────────────────────────────────────────
@@ -386,11 +517,6 @@ fn start_menu_hit(fh: u32, mx: i32, my: i32) -> Option<usize> {
     None
 }
 
-fn start_menu_bounds_hit(fh: u32, mx: i32, my: i32) -> bool {
-    let (x, y, w, h) = start_menu_bounds(fh);
-    mx >= x && mx < x + w && my >= y && my < y + h
-}
-
 // ---- Right-click context menu ───────────────────────────────────────────────
 
 const CTX_ITEMS: &[(&str, u32)] = &[
@@ -460,8 +586,11 @@ fn open_term(w: i32, h: i32, n: usize, l: &Launcher) -> Option<TermWin> {
 
 fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, ctx_menu: Option<(i32,i32)>, stats: &SysStats) {
     draw_scene_static(fb);
+    draw_desktop_icons(fb);
     draw_launchers(fb);
     draw_taskbar_win_btns(fb, wins);
+    let up = uptime_str();
+    draw_taskbar_clock(fb, &up);
     let n = wins.len();
     for (i, tw) in wins.iter_mut().enumerate() {
         if tw.win.minimized { continue; }
@@ -473,7 +602,7 @@ fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, 
     }
     if start_menu { draw_start_menu(fb); }
     if let Some((cmx, cmy)) = ctx_menu { draw_ctx_menu(fb, cmx, cmy); }
-    draw_topbar(fb, &uptime_str(), stats, sys_ticks());
+    draw_topbar(fb, &up, stats, sys_ticks());
 }
 
 // ── Entry point ──────────────────────────────────────────────────────────────
@@ -490,8 +619,11 @@ pub extern "C" fn _start() -> ! {
 
     let mut stats = sample_stats();
     draw_scene_static(&mut fb);
+    draw_desktop_icons(&mut fb);
     draw_launchers(&mut fb);
-    draw_topbar(&mut fb, &uptime_str(), &stats, sys_ticks());
+    let up0 = uptime_str();
+    draw_taskbar_clock(&mut fb, &up0);
+    draw_topbar(&mut fb, &up0, &stats, sys_ticks());
 
     let cbl = (CURSOR_W * CURSOR_H) as usize;
     let mut cbuf = vec![BG; cbl];
@@ -588,13 +720,15 @@ pub extern "C" fn _start() -> ! {
             draw_cursor(&mut fb, cx, cy);
         }
 
-        // Top bar: uptime + stats, update every ~2s (200 real kernel ticks @ 100Hz)
+        // Top bar + taskbar clock: update every ~2s (200 real kernel ticks @ 100Hz)
         let now_ticks = sys_ticks();
         if now_ticks.wrapping_sub(last_topbar_tick) >= 200 {
             last_topbar_tick = now_ticks;
             stats = sample_stats();
+            let up = uptime_str();
             restore_cursor_bg(&mut fb, cx, cy, &cbuf);
-            draw_topbar(&mut fb, &uptime_str(), &stats, now_ticks);
+            draw_topbar(&mut fb, &up, &stats, now_ticks);
+            draw_taskbar_clock(&mut fb, &up);
             save_cursor_bg(&fb, cx, cy, &mut cbuf);
             draw_cursor(&mut fb, cx, cy);
         }
@@ -683,6 +817,12 @@ pub extern "C" fn _start() -> ! {
                         let tw = wins.remove(mi); wins.push(tw);
                         scene_dirty = true;
                     } else if let Some(li) = launcher_hit(fb.width, fb.height, cx, cy) {
+                        if let Some(tw) = open_term(w, h, wins.len(), &LAUNCHERS[li]) {
+                            wins.push(tw);
+                            scene_dirty = true;
+                        }
+                    } else if let Some(di) = desktop_icon_hit(cx, cy) {
+                        let li = DESKTOP_ICONS[di].launcher_idx;
                         if let Some(tw) = open_term(w, h, wins.len(), &LAUNCHERS[li]) {
                             wins.push(tw);
                             scene_dirty = true;

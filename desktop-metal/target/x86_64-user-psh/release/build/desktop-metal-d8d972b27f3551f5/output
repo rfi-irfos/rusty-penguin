@@ -1,3 +1,0 @@
-cargo:rustc-link-arg=-T/home/eri-irfos/projects/rusty-penguin/desktop-metal/linker.ld
-cargo:rerun-if-changed=linker.ld
-cargo:rerun-if-changed=src/main.rs

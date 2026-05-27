@@ -18,7 +18,7 @@ const TXT_ACT:     u32 = 0xE2E8F0;
 const BTN_CLOSE:   u32 = 0xEF4444;
 const BTN_MIN:     u32 = 0xF59E0B;
 const BTN_MAX:     u32 = 0x22C55E;
-const BTN_SYM:     u32 = 0x00000000; // rendered as half-brightness of btn color
+// BTN_SYM color is computed inline in draw_btn (half-brightness of button color)
 
 pub struct Window {
     pub x: i32, pub y: i32,

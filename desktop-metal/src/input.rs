@@ -56,7 +56,9 @@ pub fn poll(mouse: &mut MouseState, width: i32, height: i32) -> Keys {
                 let dy = ((ev >> 16) & 0xFFFF) as u16 as i16 as i32;
                 mouse.buttons = ((ev >> 32) & 0xFF) as u8;
                 mouse.x = (mouse.x + dx).max(0).min(width  - 1);
-                mouse.y = (mouse.y + dy).max(0).min(height - 1);
+                // Keep cursor below topbar and high enough that the sprite doesn't vanish.
+                // Topbar is 28px; CURSOR_H=24, so max y keeps the sprite inside the screen.
+                mouse.y = (mouse.y + dy).max(28).min(height - 1);
             }
             _ => {}
         }
