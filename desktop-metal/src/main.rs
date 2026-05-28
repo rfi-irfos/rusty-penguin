@@ -974,7 +974,6 @@ pub extern "C" fn _start() -> ! {
     let mut last_topbar_tick: u64 = 0;
     let mut last_blink_tick: u64 = 0;
     let mut blink_on: bool = true;
-    let mut drag_tick: u64 = 0;
     let mut wins: Vec<TermWin> = Vec::new();
     let mut scene_dirty = false;
     let mut start_menu_open = false;
@@ -1143,10 +1142,12 @@ pub extern "C" fn _start() -> ! {
                         wins.remove(last);
                         scene_dirty = true;
                     } else if wm::min_btn_hit(&tw.win, cx, cy) {
-                        tw.win.toggle_maximize(w, h, TOPBAR_H as i32);
+                        // Yellow button: minimize.
+                        tw.win.minimized = true;
                         scene_dirty = true;
                     } else if wm::max_btn_hit(&tw.win, cx, cy) {
-                        tw.win.minimized = true;
+                        // Green button: toggle maximize.
+                        tw.win.toggle_maximize(w, h, TOPBAR_H as i32);
                         scene_dirty = true;
                     } else if wm::resize_corner_hit(&tw.win, cx, cy) {
                         tw.win.resizing  = true;
@@ -1210,7 +1211,9 @@ pub extern "C" fn _start() -> ! {
             }
         }
 
-        // Drag / resize
+        // Drag / resize. No rate limit — if the position changed we want
+        // the recomposite this frame, otherwise dragging looks like the
+        // window is stuck while the cursor moves smoothly past it.
         if left_down {
             if let Some(tw) = wins.last_mut() {
                 if tw.win.dragging {
@@ -1218,13 +1221,7 @@ pub extern "C" fn _start() -> ! {
                     let ny2 = (cy - tw.win.drag_oy).max(TOPBAR_H as i32).min(h - tw.win.h - 28);
                     if nx2 != tw.win.x || ny2 != tw.win.y {
                         tw.win.x = nx2; tw.win.y = ny2;
-                        // Rate-limit drag recomposites to ~25Hz (4 ticks @ 100Hz) for smooth motion.
-                        // Cursor still updates every frame; only the window position
-                        // repaints are throttled to cut framebuffer write pressure.
-                        if now_ticks.wrapping_sub(drag_tick) >= 4 {
-                            drag_tick = now_ticks;
-                            scene_dirty = true;
-                        }
+                        scene_dirty = true;
                     }
                 } else if tw.win.resizing {
                     let nw = (tw.win.resize_ow + cx - tw.win.resize_mx).max(wm::WIN_MIN_W);
@@ -1233,10 +1230,7 @@ pub extern "C" fn _start() -> ! {
                     let nh = nh.min(h - tw.win.y - 28);
                     if nw != tw.win.w || nh != tw.win.h {
                         tw.win.w = nw; tw.win.h = nh;
-                        if now_ticks.wrapping_sub(drag_tick) >= 4 {
-                            drag_tick = now_ticks;
-                            scene_dirty = true;
-                        }
+                        scene_dirty = true;
                     }
                 }
             }
@@ -1310,7 +1304,25 @@ pub extern "C" fn _start() -> ! {
 }
 
 #[panic_handler]
-fn panic(_: &core::panic::PanicInfo) -> ! {
-    sys_serial_debug(b'!'); // '!' = panic in serial log
+fn panic(info: &core::panic::PanicInfo) -> ! {
+    // Marker, then file:line if available — written byte-by-byte so we don't
+    // need an allocator at panic time (the bump allocator may itself be the
+    // cause of the panic).
+    sys_serial_debug(b'\n');
+    sys_serial_debug(b'!');
+    if let Some(loc) = info.location() {
+        for &b in loc.file().as_bytes() { sys_serial_debug(b); }
+        sys_serial_debug(b':');
+        let mut line = loc.line();
+        if line == 0 {
+            sys_serial_debug(b'0');
+        } else {
+            let mut buf = [0u8; 10];
+            let mut i = 0;
+            while line > 0 { buf[i] = b'0' + (line % 10) as u8; line /= 10; i += 1; }
+            while i > 0 { i -= 1; sys_serial_debug(buf[i]); }
+        }
+    }
+    sys_serial_debug(b'\n');
     loop {}
 }
