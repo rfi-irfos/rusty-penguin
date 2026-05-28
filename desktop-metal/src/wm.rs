@@ -134,10 +134,11 @@ pub fn draw_window(fb: &mut Framebuffer, win: &Window, focused: bool) {
 
     // Title text
     let max_chars = ((w - 54) / 8).max(0) as usize;
-    let title: String = win.title.chars().take(max_chars).collect();
+    let n_bytes = max_chars.min(win.title.len());
+    let title = &win.title[..n_bytes];
     let txt_col = if focused { TXT_ACT } else { TXT_DIM };
     let txt_y = y + 1 + (TITLEBAR_H - 8) / 2;
-    fb.draw_str((x + 6) as u32, txt_y as u32, &title, txt_col, tb_col);
+    fb.draw_str((x + 6) as u32, txt_y as u32, title, txt_col, tb_col);
 
     // Buttons
     let by = btn_y(win);

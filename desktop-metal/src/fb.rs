@@ -139,5 +139,20 @@ impl Framebuffer {
         }
     }
 
+    pub fn fill_circle(&mut self, cx: i32, cy: i32, r: i32, color: u32) {
+        let r2 = r * r;
+        for dy in -r..=r {
+            for dx in -r..=r {
+                if dx * dx + dy * dy <= r2 {
+                    let px = cx + dx;
+                    let py = cy + dy;
+                    if px >= 0 && py >= 0 && (px as u32) < self.width && (py as u32) < self.height {
+                        self.set_pixel(px as u32, py as u32, color);
+                    }
+                }
+            }
+        }
+    }
+
     pub fn flush(&self) {}
 }

@@ -13,8 +13,6 @@ mod wm;
 
 use alloc::vec;
 use alloc::vec::Vec;
-use alloc::string::String;
-use alloc::format;
 
 use fb::Framebuffer;
 use input::MouseState;
@@ -203,8 +201,23 @@ fn sample_stats() -> SysStats {
     SysStats { mem_pct, used_mib: used, total_mib: total }
 }
 
-// Month abbreviations as individual chars (avoids &str args in format! which
-// triggers a different allocator code path that panics in this bare-metal env).
+// Stack-allocated string builder — format! uses alloc::fmt::format_inner which
+// crashes in this bare-metal env (1-byte-aligned heap + SSE movaps = #GP).
+struct Strbuf { buf: [u8; 48], len: usize }
+impl Strbuf {
+    fn new() -> Self { Strbuf { buf: [0; 48], len: 0 } }
+    fn push(&mut self, b: u8) { if self.len < 48 { self.buf[self.len] = b; self.len += 1; } }
+    fn push_bytes(&mut self, s: &[u8]) { for &b in s { self.push(b); } }
+    fn push_u64(&mut self, mut n: u64) {
+        if n == 0 { self.push(b'0'); return; }
+        let mut tmp = [0u8; 20]; let mut i = 0;
+        while n > 0 { tmp[i] = b'0' + (n % 10) as u8; n /= 10; i += 1; }
+        for j in (0..i).rev() { self.push(tmp[j]); }
+    }
+    fn push_d2(&mut self, n: u64) { if n < 10 { self.push(b'0'); } self.push_u64(n); }
+    fn as_str(&self) -> &str { core::str::from_utf8(&self.buf[..self.len]).unwrap_or("") }
+}
+
 fn month_abbr(m: u8) -> [u8; 3] {
     match m {
         1  => *b"Jan",  2  => *b"Feb",  3  => *b"Mar",  4  => *b"Apr",
@@ -220,7 +233,7 @@ fn day_abbr(d: u8) -> [u8; 3] {
     }
 }
 
-fn rtc_str() -> String {
+fn rtc_str() -> Strbuf {
     let rtc = sys_rtc();
     let wday  = (rtc        & 0xFF) as u8;
     let sec   = ((rtc >>  8) & 0xFF) as u8;
@@ -228,27 +241,24 @@ fn rtc_str() -> String {
     let hour  = ((rtc >> 24) & 0xFF) as u8;
     let mday  = ((rtc >> 32) & 0xFF) as u8;
     let month = ((rtc >> 40) & 0xFF) as u8;
-    // Sanity check — if RTC returned garbage, fall back to uptime
+    let mut s = Strbuf::new();
     if month == 0 || month > 12 || mday == 0 || mday > 31 || hour > 23 || min > 59 || sec > 59 {
         let ticks = sys_ticks();
         let secs = ticks / 100;
-        let h = secs / 3600; let m = (secs % 3600) / 60; let s = secs % 60;
-        return format!("{:02}:{:02}:{:02}", h, m, s);
+        let h = secs / 3600; let m = (secs % 3600) / 60; let sc = secs % 60;
+        s.push_d2(h); s.push(b':'); s.push_d2(m); s.push(b':'); s.push_d2(sc);
+        return s;
     }
-    // Use only char/numeric args in format! — &str args cause a GP in our env
     let d = day_abbr(wday);
     let mo = month_abbr(month);
-    format!("{}{}{} {}{}{} {:02}  {:02}:{:02}:{:02}",
-        d[0] as char, d[1] as char, d[2] as char,
-        mo[0] as char, mo[1] as char, mo[2] as char,
-        mday, hour, min, sec)
-}
-
-fn uptime_str() -> String {
-    let ticks = sys_ticks();
-    let secs = ticks / 100;
-    let h = secs / 3600; let m = (secs % 3600) / 60; let s = secs % 60;
-    format!("{:02}:{:02}:{:02}", h, m, s)
+    s.push_bytes(&d); s.push(b' ');
+    s.push_bytes(&mo); s.push(b' ');
+    s.push_u64(mday as u64);
+    s.push(b' '); s.push(b' ');
+    s.push_d2(hour as u64); s.push(b':');
+    s.push_d2(min as u64); s.push(b':');
+    s.push_d2(sec as u64);
+    s
 }
 
 // ---- Scene drawing ──────────────────────────────────────────────────────────
@@ -362,7 +372,13 @@ fn draw_topbar(fb: &mut Framebuffer, time: &str, s: &SysStats, ticks: u64) {
     fb.draw_str(cx, ty, time, WHITE, TOPBAR);
 
     // RIGHT: trit indicator + labeled memory
-    let mem_str = format!("MEM: {}/{}M", s.used_mib, s.total_mib);
+    let mut mem_buf = Strbuf::new();
+    mem_buf.push_bytes(b"MEM: ");
+    mem_buf.push_u64(s.used_mib as u64);
+    mem_buf.push(b'/');
+    mem_buf.push_u64(s.total_mib as u64);
+    mem_buf.push(b'M');
+    let mem_str = mem_buf.as_str();
     let ind = trit_indicator(ticks);
     let ind_str = core::str::from_utf8(&ind).unwrap_or("T[+--+]");
     let mut rx = fw as i32 - 8;
@@ -465,8 +481,9 @@ fn draw_taskbar_win_btns(fb: &mut Framebuffer, term_wins: &[TermWin]) {
         let top = if is_focused   { BLUE } else { BORDER };
         fb.fill_rect(x as u32, y as u32, w as u32, h as u32, bg);
         fb.fill_rect(x as u32, y as u32, w as u32, 1, top);
-        let lbl: String = tw.win.title.chars().take(((w - 4) / 8) as usize).collect();
-        fb.draw_str((x + 2) as u32, (y + 5) as u32, &lbl, txt, bg);
+        let n = ((w - 4) / 8) as usize;
+        let lbl = &tw.win.title[..n.min(tw.win.title.len())];
+        fb.draw_str((x + 2) as u32, (y + 5) as u32, lbl, txt, bg);
     }
 }
 
@@ -602,7 +619,7 @@ fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, 
     }
     if start_menu { draw_start_menu(fb); }
     if let Some((cmx, cmy)) = ctx_menu { draw_ctx_menu(fb, cmx, cmy); }
-    draw_topbar(fb, &up, stats, sys_ticks());
+    draw_topbar(fb, up.as_str(), stats, sys_ticks());
 }
 
 // ── Entry point ──────────────────────────────────────────────────────────────
@@ -621,7 +638,7 @@ pub extern "C" fn _start() -> ! {
     draw_scene_static(&mut fb);
     draw_desktop_icons(&mut fb);
     let up0 = rtc_str();
-    draw_topbar(&mut fb, &up0, &stats, sys_ticks());
+    draw_topbar(&mut fb, up0.as_str(), &stats, sys_ticks());
 
     let cbl = (CURSOR_W * CURSOR_H) as usize;
     let mut cbuf = vec![BG; cbl];
@@ -725,7 +742,7 @@ pub extern "C" fn _start() -> ! {
             stats = sample_stats();
             let up = rtc_str();
             restore_cursor_bg(&mut fb, cx, cy, &cbuf);
-            draw_topbar(&mut fb, &up, &stats, now_ticks);
+            draw_topbar(&mut fb, up.as_str(), &stats, now_ticks);
             save_cursor_bg(&fb, cx, cy, &mut cbuf);
             draw_cursor(&mut fb, cx, cy);
         }
