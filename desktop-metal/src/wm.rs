@@ -6,18 +6,19 @@ pub const TITLEBAR_H: i32 = 22;
 pub const WINDOW_W:   i32 = term::TERM_PIX_W as i32 + 2;
 pub const WINDOW_H:   i32 = term::TERM_PIX_H as i32 + 2 + TITLEBAR_H;
 
-const SHADOW:      u32 = 0x06101E;
-const BORDER_DIM:  u32 = 0x334155;
-const BORDER_ACT:  u32 = 0x60A5FA;
-const TITLE_DIM:   u32 = 0x1A2535;
-const TITLE_ACT:   u32 = 0x1E293B;
-const TITLE_LINE:  u32 = 0x334155;
-const CONTENT_BG:  u32 = 0x0F172A;
-const TXT_DIM:     u32 = 0x64748B;
-const TXT_ACT:     u32 = 0xE2E8F0;
-const BTN_CLOSE:   u32 = 0xEF4444;
-const BTN_MIN:     u32 = 0xF59E0B;
-const BTN_MAX:     u32 = 0x22C55E;
+// Window styling — matches Ubuntu Yaru theme
+const SHADOW:      u32 = 0x05080F;  // Deep shadow
+const BORDER_DIM:  u32 = 0x3C3C48;  // Inactive window border
+const BORDER_ACT:  u32 = 0x4A9EFF;  // Active window border (blue)
+const TITLE_DIM:   u32 = 0x1F1F2B;  // Inactive titlebar
+const TITLE_ACT:   u32 = 0x24242F;  // Active titlebar (slightly lighter)
+const TITLE_LINE:  u32 = 0x3C3C48;  // Separator line
+const CONTENT_BG:  u32 = 0x1A1A24;  // Content background (matches main BG)
+const TXT_DIM:     u32 = 0x6B7280;  // Inactive text
+const TXT_ACT:     u32 = 0xF5F5F7;  // Active text (warm white)
+const BTN_CLOSE:   u32 = 0xFF6B6B;  // Red close button
+const BTN_MIN:     u32 = 0xFFD43B;  // Yellow minimize button
+const BTN_MAX:     u32 = 0x51CF66;  // Green maximize button
 
 // Traffic-light buttons on the RIGHT side of the titlebar.
 const BTN_R:      i32 = 5;   // radius in pixels
@@ -141,10 +142,10 @@ pub fn draw_window(fb: &mut Framebuffer, win: &Window, focused: bool) {
 
     let x = win.x; let y = win.y; let w = win.w; let h = win.h;
 
-    // Soft shadow — rounded to match the window shape.
-    fb.fill_rounded_rect(x + 7, y + 7, w, h, 8, 0x030709);
-    fb.fill_rounded_rect(x + 4, y + 4, w, h, 8, 0x040C12);
-    fb.fill_rounded_rect(x + 2, y + 2, w, h, 8, SHADOW);
+    // Soft shadow — multi-layer for modern depth (Ubuntu-style)
+    fb.fill_rounded_rect(x + 6, y + 6, w, h, 8, 0x000000);  // Deep shadow far
+    fb.fill_rounded_rect(x + 4, y + 4, w, h, 8, 0x0A0A14);  // Medium shadow
+    fb.fill_rounded_rect(x + 2, y + 2, w, h, 8, SHADOW);    // Soft shadow near
 
     // Outer border (1px) — rounded corners, color signals focus.
     let border = if focused { BORDER_ACT } else { BORDER_DIM };
