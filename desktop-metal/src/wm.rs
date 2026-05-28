@@ -132,14 +132,19 @@ pub fn draw_window(fb: &mut Framebuffer, win: &Window, focused: bool) {
     let border = if focused { BORDER_ACT } else { BORDER_DIM };
     fb.fill_rect(x as u32, y as u32, w as u32, h as u32, border);
 
-    // Titlebar
+    // Titlebar — subtle vertical gradient: 0x10 lighter at top, base at bottom
     let tb_col = if focused { TITLE_ACT } else { TITLE_DIM };
-    fb.fill_rect((x + 1) as u32, (y + 1) as u32, (w - 2) as u32, TITLEBAR_H as u32, tb_col);
-    // Subtle top-row highlight for depth
-    let hi = (((tb_col >> 16 & 0xFF).saturating_add(0x10)) << 16)
-           | (((tb_col >>  8 & 0xFF).saturating_add(0x10)) << 8)
-           |   (tb_col       & 0xFF).saturating_add(0x10);
-    fb.fill_rect((x + 1) as u32, (y + 1) as u32, (w - 2) as u32, 3, hi);
+    let tr = (tb_col >> 16 & 0xFF) as u8;
+    let tg = (tb_col >>  8 & 0xFF) as u8;
+    let tb = (tb_col       & 0xFF) as u8;
+    for dy in 0..TITLEBAR_H as u32 {
+        // top row: +0x14 on all channels; bottom row: +0x00 — no hue shift
+        let hi = (0x14u32 * (TITLEBAR_H as u32 - 1 - dy) / (TITLEBAR_H as u32 - 1)) as u8;
+        let row_col = (tr.saturating_add(hi) as u32) << 16
+                    | (tg.saturating_add(hi) as u32) << 8
+                    |  tb.saturating_add(hi) as u32;
+        fb.fill_rect((x + 1) as u32, (y + 1 + dy as i32) as u32, (w - 2) as u32, 1, row_col);
+    }
     // Bottom edge of titlebar
     fb.fill_rect((x + 1) as u32, (y + 1 + TITLEBAR_H) as u32, (w - 2) as u32, 1, TITLE_LINE);
 

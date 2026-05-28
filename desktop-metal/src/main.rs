@@ -267,14 +267,21 @@ fn draw_scene_static(fb: &mut Framebuffer) {
     let w = fb.width; let h = fb.height;
     let tb_y = h - 28;
 
-    // Smooth desktop gradient — deep navy top to slightly lighter at bottom
+    // Desktop gradient — three-stop: dark blue-green top → deep navy mid → dark teal bottom.
+    // Gives the subtle "lit panel" depth that Ubuntu/Mint wallpapers have.
     let total_rows = tb_y.saturating_sub(TOPBAR_H);
     let mut y = TOPBAR_H;
     while y < tb_y {
-        let frac = (y - TOPBAR_H) as u64 * 16 / total_rows.max(1) as u64; // 0..16
-        let r = (0x09u64 + frac / 4) as u8;
-        let g = (0x14u64 + frac / 3) as u8;
-        let b = (0x20u64 + frac / 2) as u8;
+        let t = (y - TOPBAR_H) as u64 * 256 / total_rows.max(1) as u64; // 0..255
+        let (r, g, b) = if t < 128 {
+            // top half: dark blue-green → deep navy
+            let s = t;
+            (0x0Au64 + s / 32, 0x16u64 + s / 20, 0x22u64 + s / 10)
+        } else {
+            // bottom half: deep navy → slightly teal
+            let s = t - 128;
+            (0x0Eu64 - s / 64, 0x1Du64 - s / 32, 0x34u64 - s / 16)
+        };
         let col = ((r as u32) << 16) | ((g as u32) << 8) | b as u32;
         fb.fill_rect(0, y, w, 1, col);
         y += 1;
@@ -311,8 +318,15 @@ fn draw_scene_static(fb: &mut Framebuffer) {
         fb.draw_str(w.saturating_sub(tag.len() as u32 * 8) / 2, tag_y, tag, TEAL, 0x0B1728);
     }
 
-    // ── Taskbar ──
+    // ── Taskbar — gradient lighter at top, darker at bottom ──
     fb.fill_rect(0, tb_y, w, 28, TASKBAR);
+    for dy in 0..28u32 {
+        let blend = (7u8).saturating_sub((dy * 7 / 27) as u8);
+        let col = (0x0Bu8.saturating_add(blend) as u32) << 16
+                | (0x14u8.saturating_add(blend) as u32) << 8
+                |  0x1Au8.saturating_add(blend) as u32;
+        fb.fill_rect(0, tb_y + dy, w, 1, col);
+    }
     fb.fill_rect(0, tb_y, w, 1, 0x1A3028);       // green-tint separator line
     fb.fill_rect(0, tb_y + 1, w, 1, 0x0D161F);   // shadow line below separator
     // Menu button — rounded pill style
@@ -323,11 +337,16 @@ fn draw_scene_static(fb: &mut Framebuffer) {
     // Separator
     fb.fill_rect(70, tb_y + 5, 1, 18, 0x1E3030);
 
-    // ── Topbar ──
-    fb.fill_rect(0, 0, w, TOPBAR_H, TOPBAR);
+    // ── Topbar — gradient top→bottom ──
+    for dy in 0..TOPBAR_H {
+        let blend = (dy * 10 / TOPBAR_H) as u8; // 0..10
+        let col = (0x06u8.saturating_add(blend) as u32) << 16
+                | (0x0Cu8.saturating_add(blend) as u32) << 8
+                |  0x18u8.saturating_add(blend) as u32;
+        fb.fill_rect(0, dy, w, 1, col);
+    }
     fb.fill_rect(0, TOPBAR_H - 1, w, 1, 0x1A2F3A);
-    // Small decorative left accent on topbar
-    fb.fill_rect(0, 0, 3, TOPBAR_H, 0x22C55E);
+    fb.fill_rect(0, 0, 3, TOPBAR_H, 0x22C55E); // green left accent
 }
 
 fn trit_indicator(ticks: u64) -> [u8; 7] {
@@ -342,7 +361,13 @@ fn trit_indicator(ticks: u64) -> [u8; 7] {
 
 fn draw_topbar(fb: &mut Framebuffer, time: &str, s: &SysStats, ticks: u64) {
     let fw = fb.width;
-    fb.fill_rect(0, 0, fw, TOPBAR_H, TOPBAR);
+    for dy in 0..TOPBAR_H {
+        let blend = (dy * 10 / TOPBAR_H) as u8;
+        let col = (0x06u8.saturating_add(blend) as u32) << 16
+                | (0x0Cu8.saturating_add(blend) as u32) << 8
+                |  0x18u8.saturating_add(blend) as u32;
+        fb.fill_rect(0, dy, fw, 1, col);
+    }
     fb.fill_rect(0, TOPBAR_H - 1, fw, 1, 0x1E293B);
     fb.fill_rect(0, 0, 3, TOPBAR_H, 0x22C55E);  // green left accent
     let ty = (TOPBAR_H / 2).saturating_sub(4);
