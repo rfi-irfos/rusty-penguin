@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented here.
 
+## [Unreleased]
+
+### Added — "It runs DOOM." (demoable milestone, 2026-05-28)
+
+- **DOOM live-boot entry**: a third GRUB menu entry, `Rusty Penguin -- DOOM
+  (demoable)`, boots the Linux track straight into id Software's DOOM
+  (shareware) rendering on the raw framebuffer — no X, no Wayland, no SDL.
+  - `iso/doom-assets/`: vendored fbDOOM binary, shareware `doom1.wad`
+    (md5 `f0cefca49926d00903cf57551d901abe`), and `doom-init.c` (a ~900 KiB
+    static PID 1 that mounts devtmpfs/proc/sys and execs fbdoom on the WAD).
+  - `iso/build.sh` assembles `initrd-doom.img` (rebuilding `doom-init` from
+    source when gcc is present) and stages it into the ISO automatically.
+  - Verified end-to-end in QEMU: boots from the ISO and reaches the E1M1
+    attract-mode demo at 1280×800. Proof shot: `docs/doom-on-rusty-penguin.png`.
+
+### Fixed / Learned — framebuffer requires UEFI on the Linux track
+
+- The Linux track's framebuffer (`/dev/fb0`) only materialises under **UEFI**
+  (OVMF / real UEFI firmware), where the kernel inherits the GOP framebuffer
+  via built-in `efifb`/`simpledrm`. Under legacy BIOS + GRUB VESA, the stock
+  Ubuntu kernel binds no DRM driver from our module-less initramfs, so
+  `/dev/fb0` never appears (`/sys/class/drm` shows no `card0`). Boot the ISO
+  in UEFI mode. This affects the graphical *desktop* track too, not just DOOM.
+
 ## [1.0.0] — 2026-05-26
 
 ### Initial release — "Binary hardware. Ternary mind."

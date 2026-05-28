@@ -120,14 +120,32 @@ Core components (run on both bare-metal and Linux kernels):
 
 ## Boot it
 
+> **UEFI required for the Linux track.** `/dev/fb0` comes from the EFI GOP
+> framebuffer via the kernel's built-in `efifb`/`simpledrm`. Under legacy BIOS
+> our module-less initramfs binds no DRM driver, so the graphical desktop and
+> DOOM entries have no framebuffer. Boot in UEFI mode (OVMF in QEMU). The
+> bare-metal track works under either firmware.
+
+### It runs DOOM
+
+Pick **`Rusty Penguin -- DOOM (demoable)`** at the GRUB menu to boot straight
+into id Software's DOOM (shareware) on the bare framebuffer — no X, no Wayland,
+no SDL. This is the project's "demoable" bar, verified in QEMU/UEFI:
+
+![DOOM running on Rusty Penguin](docs/doom-on-rusty-penguin.png)
+
 ```bash
 # Build the ISO
 bash iso/build.sh
 
-# Run in QEMU
-qemu-system-x86_64 -cdrom rusty-penguin.iso -m 512M \
+# Run in QEMU (UEFI)
+cp /usr/share/OVMF/OVMF_VARS_4M.fd /tmp/ovmf_vars.fd
+qemu-system-x86_64 \
+  -drive if=pflash,format=raw,unit=0,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \
+  -drive if=pflash,format=raw,unit=1,file=/tmp/ovmf_vars.fd \
+  -cdrom rusty-penguin.iso -m 512M \
   -device virtio-tablet-pci \
-  -vga std -display sdl
+  -display sdl
 
 # Or in VirtualBox
 VBoxManage createvm --name "Rusty Penguin" --register

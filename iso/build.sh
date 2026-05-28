@@ -182,6 +182,39 @@ if [ ! -f "$KERNEL_ELF" ]; then
 fi
 echo "[build] kernel.elf: $(du -sh "$KERNEL_ELF" | cut -f1)"
 
+# 3c. Build DOOM live initramfs (Linux track, framebuffer doom on /dev/fb0)
+# The "demoable" milestone: boot the ISO straight into fbDOOM. Assets are
+# vendored under iso/doom-assets/ (fbdoom binary, shareware doom1.wad,
+# static doom-init.c). doom-init mounts devtmpfs so /dev/fb0 exists, then
+# execs fbdoom on the WAD. /dev/fb0 itself comes from GRUB gfxpayload=keep.
+DOOM_ASSETS="$ISO_DIR/doom-assets"
+if [ -f "$DOOM_ASSETS/fbdoom" ] && [ -f "$DOOM_ASSETS/doom1.wad" ]; then
+    echo "[build] Building DOOM live initramfs..."
+    DOOM_DIR="$(mktemp -d)"
+    trap "rm -rf $DOOM_DIR $BARE_INITRAMFS_DIR $INITRAMFS_DIR" EXIT
+    mkdir -p "$DOOM_DIR"/{proc,sys,dev,lib/x86_64-linux-gnu,lib64}
+    # Rebuild static init from source if a C compiler is present; else use vendored binary
+    if command -v gcc >/dev/null && [ -f "$DOOM_ASSETS/doom-init.c" ]; then
+        gcc -static -O2 -o "$DOOM_DIR/init" "$DOOM_ASSETS/doom-init.c"
+    else
+        cp "$DOOM_ASSETS/doom-init" "$DOOM_DIR/init"
+    fi
+    chmod +x "$DOOM_DIR/init"
+    cp "$DOOM_ASSETS/fbdoom"   "$DOOM_DIR/fbdoom"   && chmod +x "$DOOM_DIR/fbdoom"
+    cp "$DOOM_ASSETS/doom1.wad" "$DOOM_DIR/doom1.wad"
+    # fbdoom is dynamically linked: bundle libc + ld
+    DLIBC=$(ldconfig -p 2>/dev/null | awk '/libc.so.6/{print $NF}' | head -1)
+    [ -n "$DLIBC" ] && cp "$DLIBC" "$DOOM_DIR/lib/x86_64-linux-gnu/libc.so.6"
+    DLD=$(readlink -f /lib64/ld-linux-x86-64.so.2 2>/dev/null)
+    [ -n "$DLD" ] && cp "$DLD" "$DOOM_DIR/lib64/ld-linux-x86-64.so.2"
+    ln -sf /lib64/ld-linux-x86-64.so.2 "$DOOM_DIR/lib/ld-linux-x86-64.so.2" 2>/dev/null || true
+    DOOM_INITRD="$ISO_DIR/initrd-doom.img"
+    (cd "$DOOM_DIR" && find . | cpio -o -H newc 2>/dev/null | gzip -9 > "$DOOM_INITRD")
+    echo "[build] initrd-doom.img: $(du -sh "$DOOM_INITRD" | cut -f1)"
+else
+    echo "[build] WARNING: iso/doom-assets/{fbdoom,doom1.wad} missing — skipping DOOM entry"
+fi
+
 # 4. Assemble ISO tree
 echo "[build] Assembling ISO tree..."
 mkdir -p "$ISO_DIR/boot/grub"
@@ -190,6 +223,7 @@ cp "$INITRD"  "$ISO_DIR/boot/initrd.img"
 cp "$KERNEL_ELF" "$ISO_DIR/boot/kernel.elf"
 # bare-metal CPIO module (already at ISO_DIR/initrd-bare.img)
 cp "$BARE_INITRD" "$ISO_DIR/boot/initrd-bare.img"
+[ -f "$ISO_DIR/initrd-doom.img" ] && cp "$ISO_DIR/initrd-doom.img" "$ISO_DIR/boot/initrd-doom.img"
 # grub.cfg is already at iso/grub/grub.cfg
 cp "$ISO_DIR/grub/grub.cfg" "$ISO_DIR/boot/grub/grub.cfg"
 
