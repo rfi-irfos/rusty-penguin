@@ -459,6 +459,8 @@ const DESKTOP_ICONS: &[DesktopIcon] = &[
     DesktopIcon { label: "Edit",  bitmap: &ICON_AI,    color: AMBER,   launcher_idx: 2 },
     DesktopIcon { label: "Procs", bitmap: &ICON_PROC,  color: 0xA0D0FF, launcher_idx: 3 },
     DesktopIcon { label: "Cal",   bitmap: &ICON_TRIT,  color: 0xC4B5FD,  launcher_idx: 4 },
+    DesktopIcon { label: "Prefs", bitmap: &ICON_PROC,  color: 0x9CA3AF,  launcher_idx: 5 },
+    DesktopIcon { label: "TIS",   bitmap: &ICON_TRIT,  color: 0x4A9EFF,  launcher_idx: 6 },
 ];
 
 // 56px wide keeps icons safely left of the default window start (x=79)
@@ -779,6 +781,52 @@ fn open_calendar(w: i32, h: i32, n: usize) -> Option<TermWin> {
     }
 }
 
+fn open_settings(w: i32, h: i32, n: usize) -> Option<TermWin> {
+    match term::Terminal::spawn() {
+        Ok(t) => {
+            let settings = alloc::boxed::Box::new(app::Settings::new());
+            let off = n as i32 * 20;
+            let left_margin = 75;
+            let wx = ((w - left_margin - wm::WINDOW_W) / 2 + left_margin + off)
+                .max(left_margin)
+                .min(w - wm::WINDOW_W);
+            let wy = ((h - wm::WINDOW_H - 28) / 2 + off).max(TOPBAR_H as i32).min(h - wm::WINDOW_H - 28);
+            Some(TermWin {
+                win: wm::Window::new(wx, wy, "Settings"),
+                term: t,
+                editor: None,
+                app: Some(settings),
+                win_dirty: true,
+                initial_cmd: None,
+            })
+        }
+        Err(_) => None,
+    }
+}
+
+fn open_tis_console(w: i32, h: i32, n: usize) -> Option<TermWin> {
+    match term::Terminal::spawn() {
+        Ok(t) => {
+            let tis = alloc::boxed::Box::new(app::TisConsole::new());
+            let off = n as i32 * 20;
+            let left_margin = 75;
+            let wx = ((w - left_margin - wm::WINDOW_W) / 2 + left_margin + off)
+                .max(left_margin)
+                .min(w - wm::WINDOW_W);
+            let wy = ((h - wm::WINDOW_H - 28) / 2 + off).max(TOPBAR_H as i32).min(h - wm::WINDOW_H - 28);
+            Some(TermWin {
+                win: wm::Window::new(wx, wy, "TIS Console"),
+                term: t,
+                editor: None,
+                app: Some(tis),
+                win_dirty: true,
+                initial_cmd: None,
+            })
+        }
+        Err(_) => None,
+    }
+}
+
 // ---- Full scene recomposite ─────────────────────────────────────────────────
 
 fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, ctx_menu: Option<(i32,i32)>, stats: &SysStats, blink_on: bool, hover_icon: Option<usize>) {
@@ -1034,6 +1082,18 @@ pub extern "C" fn _start() -> ! {
                             }
                             4 => { // Cal icon → Calendar app
                                 if let Some(tw) = open_calendar(w, h, wins.len()) {
+                                    wins.push(tw);
+                                    scene_dirty = true;
+                                }
+                            }
+                            5 => { // Prefs icon → Settings app
+                                if let Some(tw) = open_settings(w, h, wins.len()) {
+                                    wins.push(tw);
+                                    scene_dirty = true;
+                                }
+                            }
+                            6 => { // TIS icon → TIS Console
+                                if let Some(tw) = open_tis_console(w, h, wins.len()) {
                                     wins.push(tw);
                                     scene_dirty = true;
                                 }
