@@ -37,9 +37,10 @@ Build plan for making Rusty Penguin a complete, daily-usable operating system di
   - [ ] Persistent user shell history
   - [ ] Local configuration directory (~/.config/rusty-penguin)
 
-### Phase 2: Package Management (Week 2)
+### Phase 2: Package Management (Week 2) — IN PROGRESS
 **Goal: Users can `install` software**
 
+- [x] **Shell integration**: `rpm` command in psh
 - [ ] **Package system**:
   - [ ] Simple repository format (tarball + manifest)
   - [ ] `rpm install <package-name>` command
