@@ -1538,3 +1538,304 @@ impl App for Minesweeper {
 
     fn title(&self) -> &str { "Minesweeper" }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Doom — a pure-Rust raycaster FPS (Lode-style DDA). NOT id Software's DOOM
+// (that C engine runs on the Linux track via the ISO's DOOM boot entry); this
+// is a from-scratch tribute that fits the no_std bare-metal desktop: only f32
+// +,-,*,/ and casts — no trig, no sqrt at runtime (turning uses a constant
+// rotation matrix), no per-frame heap allocation (zbuffer is on the stack).
+// ─────────────────────────────────────────────────────────────────────────────
+
+const DM_W: usize = 16;
+const DM_H: usize = 16;
+#[rustfmt::skip]
+const DOOM_MAP: [u8; DM_W * DM_H] = [
+    1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+    1,0,0,0,0,0,2,0,0,0,0,3,0,0,0,1,
+    1,0,1,1,0,0,2,0,0,0,0,3,0,1,0,1,
+    1,0,1,0,0,0,0,0,1,1,0,0,0,1,0,1,
+    1,0,1,0,0,0,0,0,1,0,0,0,0,0,0,1,
+    1,0,0,0,0,4,4,4,1,0,0,2,2,2,0,1,
+    1,0,0,0,0,4,0,0,0,0,0,0,0,2,0,1,
+    1,0,0,0,0,4,0,1,1,1,0,0,0,2,0,1,
+    1,0,3,3,0,0,0,1,0,1,0,0,0,0,0,1,
+    1,0,3,0,0,0,0,1,0,1,1,1,0,0,0,1,
+    1,0,3,0,0,0,0,0,0,0,0,4,0,0,0,1,
+    1,0,0,0,1,1,0,0,0,0,0,4,0,2,2,1,
+    1,0,0,0,1,0,0,0,3,3,0,0,0,0,0,1,
+    1,0,1,0,0,0,0,0,3,0,0,0,1,1,0,1,
+    1,0,1,0,0,0,0,0,0,0,0,0,0,0,0,1,
+    1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+];
+
+// Constant rotation matrix for one turn step (~6.9°): cos/sin precomputed so we
+// never call a trig function at runtime.
+const ROT_C: f32 = 0.99272;
+const ROT_S: f32 = 0.12050;
+const MOVE_STEP: f32 = 0.18;
+
+fn fabs(x: f32) -> f32 { if x < 0.0 { -x } else { x } }
+
+pub struct Doom {
+    px: f32, py: f32,        // player position
+    dx: f32, dy: f32,        // direction vector
+    plx: f32, ply: f32,      // camera plane
+    enemies: Vec<(f32, f32, bool)>, // x, y, alive
+    kills: u32,
+    flash: u8,               // muzzle-flash countdown
+    pub dirty: bool,
+    pub wants_close: bool,
+    ansi: crate::ansi::AnsiParser,
+}
+
+impl Doom {
+    pub fn new(_seed: u64) -> Self {
+        let mut enemies = Vec::with_capacity(8);
+        enemies.push((6.5, 2.5, true));
+        enemies.push((11.5, 11.5, true));
+        enemies.push((2.5, 8.5, true));
+        enemies.push((13.5, 6.5, true));
+        enemies.push((8.5, 13.5, true));
+        Doom {
+            px: 4.5, py: 4.5,
+            dx: -1.0, dy: 0.0,
+            plx: 0.0, ply: 0.66,
+            enemies,
+            kills: 0,
+            flash: 0,
+            dirty: true,
+            wants_close: false,
+            ansi: crate::ansi::AnsiParser::new(),
+        }
+    }
+
+    fn cell(x: f32, y: f32) -> u8 {
+        let xi = x as i32; let yi = y as i32;
+        if xi < 0 || yi < 0 || xi >= DM_W as i32 || yi >= DM_H as i32 { return 1; }
+        DOOM_MAP[yi as usize * DM_W + xi as usize]
+    }
+
+    fn try_move(&mut self, nx: f32, ny: f32) {
+        // Slide along walls: test each axis independently.
+        if Self::cell(nx, self.py) == 0 { self.px = nx; }
+        if Self::cell(self.px, ny) == 0 { self.py = ny; }
+        self.dirty = true;
+    }
+
+    fn rotate(&mut self, c: f32, s: f32) {
+        let odx = self.dx;
+        self.dx = self.dx * c - self.dy * s;
+        self.dy = odx * s + self.dy * c;
+        let oplx = self.plx;
+        self.plx = self.plx * c - self.ply * s;
+        self.ply = oplx * s + self.ply * c;
+        self.dirty = true;
+    }
+
+    fn fire(&mut self) {
+        self.flash = 4;
+        // Hit the nearest alive enemy roughly in front of the crosshair.
+        let mut best: Option<usize> = None;
+        let mut best_d = 1e30f32;
+        for (i, &(ex, ey, alive)) in self.enemies.iter().enumerate() {
+            if !alive { continue; }
+            let rx = ex - self.px; let ry = ey - self.py;
+            let dist = rx * self.dx + ry * self.dy;       // forward distance
+            if dist <= 0.2 { continue; }
+            let side = rx * self.plx + ry * self.ply;     // lateral offset
+            // Within a narrow cone that tightens with distance ≈ crosshair.
+            if fabs(side) < 0.35 * dist && dist < best_d {
+                best_d = dist; best = Some(i);
+            }
+        }
+        if let Some(i) = best { self.enemies[i].2 = false; self.kills += 1; }
+        self.dirty = true;
+    }
+}
+
+impl App for Doom {
+    fn tick(&mut self, _t: u64) -> bool {
+        if self.flash > 0 { self.flash -= 1; return true; }
+        false
+    }
+
+    fn render(&mut self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, h: u32) {
+        if w == 0 || h == 0 { return; }
+        let cols = (w as usize).min(1024);
+        let mut zbuf = [1e30f32; 1024];
+
+        // Ceiling (dark) and floor (gray).
+        fb.fill_rect(x, y, w, h / 2, 0x202830);
+        fb.fill_rect(x, y + h / 2, w, h - h / 2, 0x383838);
+
+        // Cast one ray per column.
+        for col in 0..cols {
+            let camera = 2.0 * (col as f32) / (w as f32) - 1.0;
+            let rdx = self.dx + self.plx * camera;
+            let rdy = self.dy + self.ply * camera;
+
+            let mut map_x = self.px as i32;
+            let mut map_y = self.py as i32;
+            let ddx = if rdx == 0.0 { 1e30 } else { fabs(1.0 / rdx) };
+            let ddy = if rdy == 0.0 { 1e30 } else { fabs(1.0 / rdy) };
+
+            let (step_x, mut sdx) = if rdx < 0.0 {
+                (-1i32, (self.px - map_x as f32) * ddx)
+            } else {
+                (1i32, (map_x as f32 + 1.0 - self.px) * ddx)
+            };
+            let (step_y, mut sdy) = if rdy < 0.0 {
+                (-1i32, (self.py - map_y as f32) * ddy)
+            } else {
+                (1i32, (map_y as f32 + 1.0 - self.py) * ddy)
+            };
+
+            let mut side = 0;
+            let mut hit = 0u8;
+            for _ in 0..64 {
+                if sdx < sdy { sdx += ddx; map_x += step_x; side = 0; }
+                else         { sdy += ddy; map_y += step_y; side = 1; }
+                if map_x < 0 || map_y < 0 || map_x >= DM_W as i32 || map_y >= DM_H as i32 { hit = 1; break; }
+                let c = DOOM_MAP[map_y as usize * DM_W + map_x as usize];
+                if c != 0 { hit = c; break; }
+            }
+
+            let perp = if side == 0 {
+                (map_x as f32 - self.px + (1 - step_x) as f32 / 2.0) / rdx
+            } else {
+                (map_y as f32 - self.py + (1 - step_y) as f32 / 2.0) / rdy
+            };
+            let perp = if perp < 0.01 { 0.01 } else { perp };
+            zbuf[col] = perp;
+
+            let line_h = (h as f32 / perp) as i32;
+            let mut draw_start = -line_h / 2 + h as i32 / 2;
+            let mut draw_end = line_h / 2 + h as i32 / 2;
+            if draw_start < 0 { draw_start = 0; }
+            if draw_end > h as i32 { draw_end = h as i32; }
+
+            // Base color per wall type, darkened on y-sides and with distance.
+            let base = match hit {
+                2 => 0xB04040u32, // red brick
+                3 => 0x40A060u32, // green
+                4 => 0x4060B0u32, // blue
+                _ => 0xA0A0A0u32, // gray stone
+            };
+            let mut col_rgb = if side == 1 { (base >> 1) & 0x7F7F7F } else { base };
+            // Distance shade.
+            let shade = if perp > 6.0 { 3 } else if perp > 3.5 { 2 } else if perp > 1.8 { 1 } else { 0 };
+            col_rgb = (col_rgb >> shade) & (0xFFFFFF >> shade);
+
+            let sh = (draw_end - draw_start).max(0) as u32;
+            if sh > 0 {
+                fb.fill_rect(x + col as u32, y + draw_start as u32, 1, sh, col_rgb);
+            }
+        }
+
+        // Sprites (enemies): sort far→near, billboard, z-test per column.
+        // Stack-only ordering — no per-frame heap allocation (bump allocator
+        // never frees, so a render-path Vec would leak every frame).
+        let mut order = [0usize; 16];
+        let mut ocount = 0usize;
+        for i in 0..self.enemies.len().min(16) {
+            if self.enemies[i].2 { order[ocount] = i; ocount += 1; }
+        }
+        // insertion sort by distance descending
+        for a in 1..ocount {
+            let key = order[a];
+            let kd = sqdist(self.px, self.py, self.enemies[key].0, self.enemies[key].1);
+            let mut b = a;
+            while b > 0 && sqdist(self.px, self.py, self.enemies[order[b-1]].0, self.enemies[order[b-1]].1) < kd {
+                order[b] = order[b-1]; b -= 1;
+            }
+            order[b] = key;
+        }
+        for &i in &order[..ocount] {
+            let (ex, ey, _) = self.enemies[i];
+            let rx = ex - self.px; let ry = ey - self.py;
+            // Inverse camera transform.
+            let inv = 1.0 / (self.plx * self.dy - self.dx * self.ply);
+            let tx = inv * (self.dy * rx - self.dx * ry);
+            let ty = inv * (-self.ply * rx + self.plx * ry); // depth
+            if ty <= 0.1 { continue; }
+            let screen_x = ((w as f32 / 2.0) * (1.0 + tx / ty)) as i32;
+            let sprite_h = (h as f32 / ty) as i32;
+            let sp_top = (-sprite_h / 2 + h as i32 / 2).max(0);
+            let sp_bot = (sprite_h / 2 + h as i32 / 2).min(h as i32);
+            let sprite_w = sprite_h / 2;
+            let col_start = (screen_x - sprite_w / 2).max(0);
+            let col_end = (screen_x + sprite_w / 2).min(w as i32);
+            for sc in col_start..col_end {
+                if sc < 0 || sc as usize >= cols { continue; }
+                if ty >= zbuf[sc as usize] { continue; } // behind wall
+                let sh = (sp_bot - sp_top).max(0) as u32;
+                if sh > 0 {
+                    // crude imp: body + darker head band
+                    fb.fill_rect(x + sc as u32, y + sp_top as u32, 1, sh, 0x7A3010);
+                }
+            }
+            // head accent
+            if sp_bot > sp_top {
+                let hx = (screen_x).max(0).min(w as i32 - 1);
+                let head_h = ((sp_bot - sp_top) / 4).max(1) as u32;
+                fb.fill_rect(x + hx as u32, y + sp_top as u32, 2, head_h, 0xC05020);
+            }
+        }
+
+        // Gun (bottom center) + muzzle flash.
+        let gun_w = w / 6;
+        let gun_x = x + w / 2 - gun_w / 2;
+        let gun_h = h / 5;
+        fb.fill_rect(gun_x, y + h - gun_h, gun_w, gun_h, 0x303030);
+        fb.fill_rect(gun_x + gun_w / 3, y + h - gun_h - gun_h / 2, gun_w / 3, gun_h / 2, 0x202020);
+        if self.flash > 0 {
+            let fx = x + w / 2 - 6;
+            let fy = y + h - gun_h - gun_h / 2 - 10;
+            fb.fill_rect(fx, fy, 12, 10, 0xFFE060);
+        }
+
+        // Crosshair.
+        let cx = x + w / 2; let cy = y + h / 2;
+        fb.fill_rect(cx - 5, cy, 11, 1, 0xE0E0E0);
+        fb.fill_rect(cx, cy - 5, 1, 11, 0xE0E0E0);
+
+        // HUD.
+        fb.fill_rect(x, y, w, 16, 0x101418);
+        fb.draw_str(x + 6, y + 4, "DOOM (pure-Rust raycaster)", 0xEF4444, 0x101418);
+        let mut kb = [0u8; 24];
+        fb.draw_str(x + w - 90, y + 4, "kills:", 0x9CA3AF, 0x101418);
+        fb.draw_str(x + w - 42, y + 4, u64_into(&mut kb, self.kills as u64), 0xF5F5F7, 0x101418);
+
+        self.dirty = false;
+    }
+
+    fn on_key(&mut self, key: u8) {
+        use crate::ansi::Key as AK;
+        match self.ansi.feed(key) {
+            AK::Up    | AK::Char(b'w') | AK::Char(b'W') => {
+                self.try_move(self.px + self.dx * MOVE_STEP, self.py + self.dy * MOVE_STEP);
+            }
+            AK::Down  | AK::Char(b's') | AK::Char(b'S') => {
+                self.try_move(self.px - self.dx * MOVE_STEP, self.py - self.dy * MOVE_STEP);
+            }
+            AK::Left  | AK::Char(b'a') | AK::Char(b'A') => self.rotate(ROT_C, ROT_S),
+            AK::Right | AK::Char(b'd') | AK::Char(b'D') => self.rotate(ROT_C, -ROT_S),
+            AK::Char(b'q') | AK::Char(b'Q') => {
+                // strafe left (perpendicular to dir)
+                self.try_move(self.px + self.dy * MOVE_STEP, self.py - self.dx * MOVE_STEP);
+            }
+            AK::Char(b'e') | AK::Char(b'E') => {
+                self.try_move(self.px - self.dy * MOVE_STEP, self.py + self.dx * MOVE_STEP);
+            }
+            AK::Char(b' ') | AK::Char(b'\n') | AK::Char(b'\r') => self.fire(),
+            _ => {}
+        }
+    }
+
+    fn title(&self) -> &str { "Doom" }
+}
+
+fn sqdist(ax: f32, ay: f32, bx: f32, by: f32) -> f32 {
+    let dx = ax - bx; let dy = ay - by; dx * dx + dy * dy
+}

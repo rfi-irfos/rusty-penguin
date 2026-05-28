@@ -150,6 +150,9 @@ const ICON_SNAKE: [u8; 8] = [0x7C, 0x04, 0x04, 0x7C, 0x40, 0x40, 0x7C, 0x02];
 // Minesweeper icon: bomb with fuse
 #[rustfmt::skip]
 const ICON_MINE:  [u8; 8] = [0x08, 0x2A, 0x1C, 0x3E, 0x7F, 0x7F, 0x3E, 0x1C];
+// Doom icon: a stylized demon/skull face
+#[rustfmt::skip]
+const ICON_DOOM:  [u8; 8] = [0x3C, 0x7E, 0xDB, 0xFF, 0xBD, 0xFF, 0x66, 0x24];
 
 // Dingir — cuneiform divine determinative (8-pointed star with wedges)
 #[rustfmt::skip]
@@ -503,6 +506,7 @@ const DESKTOP_ICONS: &[DesktopIcon] = &[
     DesktopIcon { label: "TIS",   bitmap: &ICON_TRIT,  color: 0x4A9EFF, launcher_idx: 6 },
     DesktopIcon { label: "Snake", bitmap: &ICON_SNAKE, color: 0x4ADE80, launcher_idx: 10 },
     DesktopIcon { label: "Mines", bitmap: &ICON_MINE,  color: 0xFCD34D, launcher_idx: 11 },
+    DesktopIcon { label: "Doom",  bitmap: &ICON_DOOM,  color: 0xEF4444, launcher_idx: 12 },
 ];
 
 // 56px wide keeps icons safely left of the default window start (x=79)
@@ -656,6 +660,7 @@ const MENU_ITEMS: &[MenuItem] = &[
     MenuItem { label: "TIS Console", color: 0x4A9EFF, kind: MenuLaunch::App(5) },
     MenuItem { label: "Snake",       color: 0x4ADE80, kind: MenuLaunch::App(6) },
     MenuItem { label: "Minesweeper", color: 0xFCD34D, kind: MenuLaunch::App(7) },
+    MenuItem { label: "Doom",        color: 0xEF4444, kind: MenuLaunch::App(8) },
     MenuItem { label: "Terminal",    color: GREEN,    kind: MenuLaunch::Term(0) },
     MenuItem { label: "ls -la",      color: BLUE,     kind: MenuLaunch::Term(1) },
     MenuItem { label: "nano",        color: AMBER,    kind: MenuLaunch::Term(2) },
@@ -1009,6 +1014,29 @@ fn open_snake(w: i32, h: i32, n: usize) -> Option<TermWin> {
     }
 }
 
+fn open_doom(w: i32, h: i32, n: usize) -> Option<TermWin> {
+    match term::Terminal::spawn() {
+        Ok(t) => {
+            let game = alloc::boxed::Box::new(app::Doom::new(sys_ticks()));
+            let off = n as i32 * 20;
+            let left_margin = 75;
+            let wx = ((w - left_margin - wm::WINDOW_W) / 2 + left_margin + off)
+                .max(left_margin)
+                .min(w - wm::WINDOW_W);
+            let wy = ((h - wm::WINDOW_H - 28) / 2 + off).max(TOPBAR_H as i32).min(h - wm::WINDOW_H - 28);
+            Some(TermWin {
+                win: wm::Window::new(wx, wy, "Doom"),
+                term: t,
+                editor: None,
+                app: Some(game),
+                win_dirty: true,
+                initial_cmd: None,
+            })
+        }
+        Err(_) => None,
+    }
+}
+
 fn open_minesweeper(w: i32, h: i32, n: usize) -> Option<TermWin> {
     match term::Terminal::spawn() {
         Ok(t) => {
@@ -1278,6 +1306,7 @@ pub extern "C" fn _start() -> ! {
                         MenuLaunch::App(5)   => open_tis_console(w, h, wins.len()),
                         MenuLaunch::App(6)   => open_snake(w, h, wins.len()),
                         MenuLaunch::App(7)   => open_minesweeper(w, h, wins.len()),
+                        MenuLaunch::App(8)   => open_doom(w, h, wins.len()),
                         MenuLaunch::App(_)   => None,
                     };
                     if let Some(tw) = opened { wins.push(tw); }
@@ -1364,6 +1393,7 @@ pub extern "C" fn _start() -> ! {
                             6 => open_tis_console(w, h, wins.len()),
                             7 => open_snake(w, h, wins.len()),
                             8 => open_minesweeper(w, h, wins.len()),
+                            9 => open_doom(w, h, wins.len()),
                             _ => None,
                         };
                         if let Some(tw) = opened {

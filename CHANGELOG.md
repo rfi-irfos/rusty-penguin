@@ -4,6 +4,22 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+### Added — Doom (pure-Rust raycaster FPS) in the bare-metal desktop (2026-05-28)
+
+- A **first-person 3D shooter** runs natively as a bare-metal desktop app,
+  launchable from the dock and start menu next to Snake and Minesweeper.
+  - Lode-style DDA raycaster, **100% pure Rust / no_std**: only f32
+    `+ - * /` and casts — no trig or sqrt at runtime (turning uses a constant
+    rotation matrix), no per-frame heap allocation (zbuffer + sprite ordering
+    are stack arrays). Colored walls with side/distance shading, billboarded
+    enemy sprites with z-testing, gun + muzzle flash + crosshair, kill counter.
+  - Controls: W/S move, A/D turn, Q/E strafe, SPACE fire. PS/2 typematic
+    repeat gives smooth held-key movement.
+  - NOT id Software's DOOM — that C engine runs on the **Linux track** via the
+    ISO's `Rusty Penguin -- DOOM (demoable)` boot entry. This is a from-scratch
+    Rust tribute that fits the pure-Rust bare-metal ethos.
+  - Proof: `docs/doom-raycaster-baremetal.png`.
+
 ### Added — Preinstalled games + 1080p bare-metal desktop (2026-05-28)
 
 - **Snake and Minesweeper** ship as native desktop apps (pure Rust, no_std, no
