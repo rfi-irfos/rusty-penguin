@@ -1409,32 +1409,37 @@ impl Terminal {
 
         if line == b"help" {
             self.write_output(b"\x1b[36mFiles:\x1b[0m\r\n");
-            self.write_output(b"  ls  cat  nano  touch  rm  cp  mv  mkdir\r\n");
+            self.write_output(b"  ls  cat  nano  touch  rm  cp  mv  mkdir  cd  pwd\r\n");
             self.write_output(b"  wc  head  tail  find  xxd  rev  stat  file  du\r\n");
             self.write_output(b"\x1b[36mText filters (pipe-aware):\x1b[0m\r\n");
             self.write_output(b"  grep <pat> [f]   sort [f]   uniq [f]\r\n");
             self.write_output(b"  cut <-f N>  tr <from> <to>\r\n");
             self.write_output(b"\x1b[36mPipes & redirect:\x1b[0m\r\n");
             self.write_output(b"  cmd | cmd     cmd > file     cmd >> file\r\n");
+            self.write_output(b"\x1b[36mControl & logic:\x1b[0m\r\n");
+            self.write_output(b"  true  false  test <expr>  [<expr>]\r\n");
+            self.write_output(b"  if...then...else...fi  while...do...done\r\n");
+            self.write_output(b"  for...in...do...done   break  continue\r\n");
             self.write_output(b"\x1b[36mScripting:\x1b[0m\r\n");
             self.write_output(b"  psh <script>       run VFS file as script\r\n");
             self.write_output(b"  seq [s] e [step]   generate number sequence\r\n");
             self.write_output(b"  calc <expr>        arithmetic (+ - * / % ())\r\n");
+            self.write_output(b"  sleep <secs>       pause execution\r\n");
             self.write_output(b"\x1b[36mSystem:\x1b[0m\r\n");
             self.write_output(b"  ps  mem  free  df  du  lscpu  sysinfo\r\n");
-            self.write_output(b"  uname  whoami  uptime  date\r\n");
-            self.write_output(b"  env  history  which <cmd>\r\n");
+            self.write_output(b"  uname  whoami  uptime  date  hostname  hostid  id\r\n");
+            self.write_output(b"  env  history  which <cmd>  lsb_release\r\n");
             self.write_output(b"  alias [name[=val]]   list or set command aliases\r\n");
             self.write_output(b"  printf fmt [args]    formatted output\r\n");
             self.write_output(b"  trit <n|op a b>      balanced ternary\r\n");
             self.write_output(b"  ai [n]             sparse ternary inference\r\n");
-            self.write_output(b"  echo  clear  pwd  exit\r\n");
-            self.write_output(b"\x1b[36mKernel:\x1b[0m\r\n");
+            self.write_output(b"  echo  clear  exit\r\n");
+            self.write_output(b"\x1b[36mKernel & Desktop:\x1b[0m\r\n");
             self.write_output(b"  kver               show kernel version + ABI\r\n");
             self.write_output(b"  kinstall <f>       stage custom kernel ELF\r\n");
-            self.write_output(b"  kmanager           kernel manager TUI (Ctrl+X to exit)\r\n");
-            self.write_output(b"\x1b[90m  Tab completion  Up/Down history\x1b[0m\r\n");
-            self.write_output(b"\x1b[90m  Ctrl+T new term  Ctrl+W close  Ctrl+L clear\x1b[0m\r\n");
+            self.write_output(b"  kmanager           kernel manager TUI\r\n");
+            self.write_output(b"\x1b[90m  Tab completion  Up/Down history  Shift+Ctrl+T new window\x1b[0m\r\n");
+            self.write_output(b"\x1b[90m  Ctrl+W close  Ctrl+L clear terminal\x1b[0m\r\n");
 
         } else if line == b"ls" || line.starts_with(b"ls ") {
             let args = if line == b"ls" { b"" } else { &line[3..] };
