@@ -2,6 +2,7 @@
 // Apps implement this trait to be launchable desktop applications.
 
 use crate::fb::Framebuffer;
+use crate::vfs;
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -310,29 +311,34 @@ impl Settings {
     }
 
     fn load_from_disk(&mut self) {
-        // Try to load from ~/.config/rusty-penguin/settings.ini
-        // Format: key=value pairs, one per line
-        // For now, use defaults; on Linux track this would read from real filesystem
-        // On bare-metal ramfs, this is still valid but won't persist across reboots
-
-        // Example config file content:
-        // theme=dark
-        // window_snap=true
-        // taskbar_bottom=true
-        // auto_save_enabled=true
-        // auto_save_interval=30
-
-        // In a full implementation, this would:
-        // 1. Call sys_open("home/.config/rusty-penguin/settings.ini", ...)
-        // 2. Call sys_read to get file contents
-        // 3. Parse key=value pairs
-        // 4. Update self fields
+        // Try to load from VFS (.config/rusty-penguin/settings.ini)
+        if let Some(data) = vfs::vfs().read(".config/rusty-penguin/settings.ini") {
+            // Parse key=value pairs
+            let content = core::str::from_utf8(data).unwrap_or("");
+            for line in content.lines() {
+                if let Some(eq_pos) = line.find('=') {
+                    let key = &line[..eq_pos];
+                    let val = &line[eq_pos + 1..];
+                    match key {
+                        "theme" => self.theme = val == "dark",
+                        "window_snap" => self.window_snap = val == "true",
+                        "taskbar_bottom" => self.taskbar_bottom = val == "true",
+                        "auto_save_enabled" => self.auto_save_enabled = val == "true",
+                        "auto_save_interval" => {
+                            if let Ok(n) = val.parse::<u32>() {
+                                self.auto_save_interval = n;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
     }
 
     fn save_to_disk(&self) {
-        // Save settings to ~/.config/rusty-penguin/settings.ini
+        // Save settings to VFS (.config/rusty-penguin/settings.ini)
         // Format: key=value pairs, one per line
-
         let config = alloc::format!(
             "theme={}\nwindow_snap={}\ntaskbar_bottom={}\nauto_save_enabled={}\nauto_save_interval={}\n",
             if self.theme { "dark" } else { "light" },
@@ -342,14 +348,18 @@ impl Settings {
             self.auto_save_interval
         );
 
-        // In a full implementation, this would:
-        // 1. Create ~/.config/rusty-penguin/ directory if needed
-        // 2. Call sys_open with O_CREAT | O_WRONLY | O_TRUNC flags
-        // 3. Call sys_write with the config string
-        // 4. Call sys_close
+        let vfs = vfs::vfs();
 
-        // For now, this is a placeholder that shows the structure
-        let _ = config; // Suppress unused warning
+        // Ensure directory exists
+        if !vfs.exists(".config") {
+            vfs.mkdir(".config");
+        }
+        if !vfs.exists(".config/rusty-penguin") {
+            vfs.mkdir(".config/rusty-penguin");
+        }
+
+        // Write settings file
+        vfs.write(".config/rusty-penguin/settings.ini", config.as_bytes());
     }
 
     fn toggle_selected(&mut self) {
