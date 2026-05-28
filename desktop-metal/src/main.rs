@@ -1236,6 +1236,9 @@ pub extern "C" fn _start() -> ! {
             save_cursor_bg(&fb, cx, cy, &mut cbuf);
             draw_cursor(&mut fb, cx, cy);
         }
+
+        // Save button state for next frame's edge detection
+        mouse.btn_pressed = btn;
     }
 }
 
