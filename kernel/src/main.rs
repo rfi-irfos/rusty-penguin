@@ -274,12 +274,31 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
+    // VGA — on-screen banner for direct console viewing.
     vga::write_str("\nKERNEL PANIC", vga::Color::Red);
+    // Serial — captured by QEMU into /tmp/rusty-penguin.log so host-side
+    // log inspection can distinguish a kernel panic from a userspace
+    // panic ('!') and read the location/line.
+    serial::write_str("\nKERNEL PANIC");
     if let Some(loc) = info.location() {
         vga::write_str(" at ", vga::Color::Red);
         vga::write_str(loc.file(), vga::Color::Red);
         vga::write_byte(b':', vga::Color::Red);
         vga::write_i32(loc.line() as i32);
+
+        serial::write_str(" at ");
+        serial::write_str(loc.file());
+        serial::write_byte(b':');
+        let mut line = loc.line();
+        if line == 0 {
+            serial::write_byte(b'0');
+        } else {
+            let mut buf = [0u8; 10];
+            let mut i = 0;
+            while line > 0 { buf[i] = b'0' + (line % 10) as u8; line /= 10; i += 1; }
+            while i > 0 { i -= 1; serial::write_byte(buf[i]); }
+        }
     }
+    serial::write_byte(b'\n');
     loop {}
 }

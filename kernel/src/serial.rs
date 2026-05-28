@@ -38,3 +38,8 @@ pub fn write_byte(b: u8) {
     if b == b'\n' { send(b'\r'); }
     send(b);
 }
+
+/// Write a string to COM1, byte-by-byte. Same \n expansion as write_byte.
+pub fn write_str(s: &str) {
+    for &b in s.as_bytes() { write_byte(b); }
+}
