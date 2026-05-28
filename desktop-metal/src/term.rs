@@ -621,6 +621,23 @@ impl Terminal {
     pub fn send_key(&mut self, b: u8) {
         if self.editor.is_some() { self.send_key_editor(b); return; }
         if self.km.is_some()     { self.send_key_km(b);     return; }
+        // Ctrl+V (0x16): paste clipboard contents as if typed. Strip the
+        // terminating newline so the user can review before pressing Enter —
+        // shells generally don't expect a trailing \n in pasted input.
+        if b == 0x16 {
+            if let Some(text) = crate::clipboard::get() {
+                let bytes = text.as_bytes();
+                let end = if bytes.last() == Some(&b'\n') { bytes.len() - 1 } else { bytes.len() };
+                for &byte in &bytes[..end] {
+                    // Filter out control bytes that would re-trigger paste or
+                    // close the line; pass through printable plus '\t'.
+                    if byte == b'\t' || (byte >= 0x20 && byte < 0x7F) {
+                        self.send_key(byte);
+                    }
+                }
+            }
+            return;
+        }
         match b {
             b'\n' | b'\r' => {
                 self.process_byte(b'\n');
