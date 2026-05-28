@@ -372,15 +372,24 @@ impl App for Settings {
         fb.draw_str(x + 8, y + 7, "System Settings", 0xF5F5F7, 0x2C2C38);
         fb.fill_rect(x, y + 24, w, 1, 0x3C3C48);
 
-        // Settings options with dynamic values (avoid allocations per frame)
-        let items: [(&str, &str); 4] = [
-            ("Theme: ", if self.theme { "Dark" } else { "Light" }),
-            ("Window Snap: ", if self.window_snap { "On" } else { "Off" }),
-            ("Taskbar: ", if self.taskbar_bottom { "Bottom" } else { "Top" }),
-            ("Auto-Save: ", if self.auto_save_enabled { "30s" } else { "Off" }),
+        // Settings options with dynamic values
+        let theme_str = if self.theme { "Dark" } else { "Light" };
+        let snap_str = if self.window_snap { "On" } else { "Off" };
+        let taskbar_str = if self.taskbar_bottom { "Bottom" } else { "Top" };
+        let autosave_str = if self.auto_save_enabled {
+            alloc::format!("{}s", self.auto_save_interval)
+        } else {
+            String::from("Off")
+        };
+
+        let settings = [
+            alloc::format!("Theme: {}", theme_str),
+            alloc::format!("Window Snap: {}", snap_str),
+            alloc::format!("Taskbar: {}", taskbar_str),
+            alloc::format!("Auto-Save: {}", &autosave_str),
         ];
 
-        for (i, (label, value)) in items.iter().enumerate() {
+        for (i, setting) in settings.iter().enumerate() {
             let y_pos = y + 32 + (i as u32 * 20);
             if y_pos + 20 > y + h { break; }
 
@@ -388,8 +397,7 @@ impl App for Settings {
             fb.fill_rect(x, y_pos, w, 20, bg_color);
 
             let text_color = if i == self.selected { 0xF5F5F7 } else { 0xB8B8B8 };
-            fb.draw_str(x + 12, y_pos + 5, label, text_color, bg_color);
-            fb.draw_str(x + 140, y_pos + 5, value, text_color, bg_color);
+            fb.draw_str(x + 12, y_pos + 5, setting.as_str(), text_color, bg_color);
         }
 
         // Draw hint at bottom
