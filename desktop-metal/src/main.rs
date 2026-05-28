@@ -431,6 +431,25 @@ fn draw_topbar(fb: &mut Framebuffer, time: &str, s: &SysStats, ticks: u64) {
 
     // "MEM" label
     if rx > 120 { fb.draw_str((rx - 24) as u32, ty, "MEM", DIM, 0x090F1B); }
+    rx -= 32;  // skip past the "MEM" label
+
+    // App heap usage (bump allocator never frees — this only grows).
+    // Useful early-warning for the leak/exhaustion failure mode that
+    // crashed multi-window earlier in the session.
+    let heap_used = allocator::used_bytes();
+    let heap_total = allocator::total_bytes();
+    let heap_pct = if heap_total > 0 {
+        ((heap_used as u64 * 100 / heap_total as u64) as u8).min(100)
+    } else { 0 };
+    let mut hp = Strbuf::new();
+    hp.push_u64(heap_pct as u64);
+    hp.push(b'%');
+    let hp_str = hp.as_str();
+    let heap_col = if heap_pct > 80 { 0xEF4444u32 } else if heap_pct > 60 { AMBER } else { GREEN };
+    rx -= hp_str.len() as i32 * 8;
+    if rx > 120 { fb.draw_str(rx as u32, ty, hp_str, heap_col, 0x090F1B); }
+    rx -= 32;
+    if rx > 120 { fb.draw_str(rx as u32, ty, "HEAP", DIM, 0x090F1B); }
 }
 
 // ---- Launcher buttons ───────────────────────────────────────────────────────

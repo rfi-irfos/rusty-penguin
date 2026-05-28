@@ -36,3 +36,12 @@ unsafe impl GlobalAlloc for BumpAllocator {
 
 #[global_allocator]
 pub static ALLOCATOR: BumpAllocator = BumpAllocator { next: AtomicUsize::new(0) };
+
+/// Bytes currently committed by the bump allocator. Since the allocator
+/// never frees, this only grows — useful as a "leak monitor" in the topbar.
+pub fn used_bytes() -> usize {
+    ALLOCATOR.next.load(Ordering::Relaxed)
+}
+
+/// Total heap capacity in bytes.
+pub fn total_bytes() -> usize { HEAP_BYTES }
