@@ -60,6 +60,20 @@ toward polling. Used for the scheduler, and the storage & network bring-up in
 *Honest note:* this is an expressiveness/architecture win that yields real
 behavior (lower idle CPU), not a benchmarked throughput number — yet.
 
+## F6 — Sparse present: quantified VRAM-bandwidth saving from skipping dormant rows
+*2026-05-28 · analytical (from the shipped F3 implementation, commit 6369b8b)*
+Putting numbers on F3. At 1920×1080×32bpp, a full-screen present copies
+**1920 × 1080 × 4 = 8,294,400 B ≈ 8.29 MiB** to VRAM (uncached MMIO) **every
+frame**. The ternary damage model presents only the changed band. For a dragged
+terminal window (~270 rows incl. titlebar + slack): **1920 × 270 × 4 ≈ 2.07 MiB**
+— a **~75% reduction** in per-frame MMIO write. The saving scales with how
+*dormant* the screen is: a small window dragging on an otherwise-static desktop
+approaches **~90%** fewer bytes; a near-full-screen window approaches 0%. The
+`0` (dormant) state is exactly what licenses the skip — binary "redraw or don't"
+at whole-frame granularity cannot express "this band changed, the rest rests."
+*Honest note:* analytical (byte counts from the implemented band sizing), not a
+profiler trace; the qualitative smoothness win is verified (F3).
+
 ## F5 — Balanced ternary: negation is free, arithmetic is symmetric
 *2026-05-28 · mathematical*
 Negation in balanced ternary is just swapping `+`↔`-` per trit (subtraction =
