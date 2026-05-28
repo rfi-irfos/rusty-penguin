@@ -105,7 +105,18 @@ fn draw_btn(fb: &mut Framebuffer, cx: i32, cy: i32, color: u32) {
     if cx < BTN_R + 2 || cy < BTN_R + 2 { return; }
     fb.fill_circle(cx, cy, BTN_R + 1, darken(color));
     fb.fill_circle(cx, cy, BTN_R,     color);
+    // Soft highlight dot — top-left quadrant for 3D sphere look
+    let hi = (((color >> 16 & 0xFF).saturating_add(0x50).min(0xFF)) << 16)
+           | (((color >>  8 & 0xFF).saturating_add(0x50).min(0xFF)) << 8)
+           |   (color       & 0xFF).saturating_add(0x50).min(0xFF);
+    if cx >= 3 && cy >= 3 {
+        fb.set_pixel((cx as u32) - 2, (cy as u32) - 2, hi);
+        fb.set_pixel((cx as u32) - 1, (cy as u32) - 2, hi);
+        fb.set_pixel((cx as u32) - 2, (cy as u32) - 1, hi);
+    }
 }
+
+// Update comment: buttons are now on the RIGHT side
 
 pub fn draw_window(fb: &mut Framebuffer, win: &Window, focused: bool) {
     if win.minimized || win.w <= 0 || win.h <= 0 { return; }
