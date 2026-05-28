@@ -52,7 +52,8 @@ fn run_shell() {
         match parts.first().copied().unwrap_or("") {
             "exit" | "quit" => break,
             "help" => println!(
-                "Commands:\n  ps                  list processes with ternary state\n  \
+                "Commands:\n  ps [filter] [--all] list processes with ternary state;\n  \
+                                     optional substring filter on name\n  \
                  kill <pid> <st>     transition pid to +1 (resume), 0 (stop), -1 (terminate)\n  \
                  tis [dim] [layers]  multi-layer sparse-skip inference; reports per-layer dormancy\n  \
                                      (alias: `ai`, matches bare-metal psh)\n  \
@@ -63,7 +64,7 @@ fn run_shell() {
             "desktop" => {
                 let _ = Command::new("desktop").status();
             }
-            "ps" => print_ternary_ps(),
+            "ps" => print_ternary_ps(&parts[1..]),
             "kill" => kill_transition(&parts[1..]),
             "tis" | "ai" => tis_demo(&parts[1..]),  // `ai` is the bare-metal alias
             "tri" => tri_calc(&parts[1..]),
@@ -266,20 +267,45 @@ fn kill_transition(args: &[&str]) {
     }
 }
 
-/// Built-in `ps` that surfaces the scheduler crate's ternary process states.
-/// Reads /proc, annotates each process as Active/Dormant/Suppressed using
-/// the same heuristic the doctrine maps to +1/0/-1.
-fn print_ternary_ps() {
+/// Built-in `ps [filter] [--all]` that surfaces the scheduler crate's ternary
+/// process states. Reads /proc, annotates each process as Active/Dormant/
+/// Suppressed using the same heuristic the doctrine maps to +1/0/-1.
+///
+/// `filter`: optional case-insensitive substring matched against process name.
+/// `--all` :  show all matches instead of the default top-40-by-RSS.
+fn print_ternary_ps(args: &[&str]) {
     use scheduler::ProcessController;
+
+    let mut filter: Option<String> = None;
+    let mut show_all = false;
+    for a in args {
+        if *a == "--all" || *a == "-a" { show_all = true; }
+        else if !a.starts_with('-')    { filter = Some(a.to_lowercase()); }
+    }
+
     let mut procs = ProcessController::list_processes();
-    // Show only those with a name and resident memory > 0 first for readability.
+    if let Some(ref needle) = filter {
+        procs.retain(|p| p.name.to_lowercase().contains(needle));
+    }
     procs.sort_by_key(|p| (-(p.vmrss_kb as i64), p.pid));
 
-    println!("  PID  ST  NAME             VmRSS (KiB)");
-    println!("  ---  --  ---------------- -----------");
-    for p in procs.iter().take(40) {
+    let limit = if show_all { procs.len() } else { 40 };
+    let shown = procs.len().min(limit);
+
+    // PID width: linux PIDs comfortably exceed 100k; reserve 7 cols so the
+    // ternary state column stays aligned even with 6- and 7-digit PIDs.
+    println!("    PID  ST  NAME             VmRSS (KiB)");
+    println!("  -----  --  ---------------- -----------");
+    for p in procs.iter().take(limit) {
         let name = if p.name.len() > 16 { &p.name[..16] } else { &p.name };
-        println!("  {:>3}  {}  {:<16} {:>11}",
+        println!("  {:>5}  {}  {:<16} {:>11}",
                  p.pid, p.state.symbol(), name, p.vmrss_kb);
+    }
+
+    if procs.len() > shown {
+        println!("  ({} more — pass --all to see them)", procs.len() - shown);
+    }
+    if let Some(needle) = filter {
+        println!("  [filter: '{}', {} matches]", needle, procs.len());
     }
 }

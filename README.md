@@ -151,6 +151,8 @@ Each builtin is backed by a real workspace crate — psh is the user-visible sur
 
 ```
 rp$ ps                  # list processes annotated with ternary state (+1/0/-1)
+rp$ ps firefox          # filter by name substring (case-insensitive)
+rp$ ps --all            # all matches instead of default top-40-by-RSS
 rp$ kill 1234 0         # transition pid 1234 to Dormant   (SIGSTOP)
 rp$ kill 1234 +1        # transition pid 1234 to Active    (SIGCONT)
 rp$ kill 1234 -1        # transition pid 1234 to Suppressed (SIGTERM)
