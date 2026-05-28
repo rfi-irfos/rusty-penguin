@@ -4,6 +4,7 @@
 extern crate alloc;
 
 mod allocator;
+mod editor;
 mod fb;
 mod font;
 mod input;
@@ -679,6 +680,7 @@ fn ctx_menu_item_hit(mx: i32, my: i32, cmx: i32, cmy: i32, fw: u32, fh: u32) -> 
 struct TermWin {
     win:         wm::Window,
     term:        term::Terminal,
+    editor:      Option<editor::TextEditor>,
     win_dirty:   bool,
     initial_cmd: Option<&'static [u8]>,
 }
@@ -687,7 +689,6 @@ fn open_term(w: i32, h: i32, n: usize, l: &Launcher) -> Option<TermWin> {
     match term::Terminal::spawn() {
         Ok(t) => {
             let off = n as i32 * 20;
-            // Ensure windows respect the sidebar area (x=4..66) and don't clip
             let left_margin = 75;
             let wx = ((w - left_margin - wm::WINDOW_W) / 2 + left_margin + off)
                 .max(left_margin)
@@ -696,8 +697,31 @@ fn open_term(w: i32, h: i32, n: usize, l: &Launcher) -> Option<TermWin> {
             Some(TermWin {
                 win: wm::Window::new(wx, wy, l.title),
                 term: t,
+                editor: None,
                 win_dirty: true,
                 initial_cmd: l.cmd.map(|s| s.as_bytes()),
+            })
+        }
+        Err(_) => None,
+    }
+}
+
+fn open_editor(w: i32, h: i32, n: usize, filename: &str, title: &str) -> Option<TermWin> {
+    match term::Terminal::spawn() {
+        Ok(t) => {
+            let ed = editor::TextEditor::new(filename);
+            let off = n as i32 * 20;
+            let left_margin = 75;
+            let wx = ((w - left_margin - wm::WINDOW_W) / 2 + left_margin + off)
+                .max(left_margin)
+                .min(w - wm::WINDOW_W);
+            let wy = ((h - wm::WINDOW_H - 28) / 2 + off).max(TOPBAR_H as i32).min(h - wm::WINDOW_H - 28);
+            Some(TermWin {
+                win: wm::Window::new(wx, wy, title),
+                term: t,
+                editor: Some(ed),
+                win_dirty: true,
+                initial_cmd: None,
             })
         }
         Err(_) => None,
@@ -719,7 +743,11 @@ fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, 
         let (ox, oy) = wm::content_origin(&tw.win);
         let cw = (tw.win.w - 2).max(0) as u32;
         let ch = (tw.win.h - 3 - wm::TITLEBAR_H).max(0) as u32;
-        tw.term.render(fb, ox as u32, oy as u32, cw, ch, focused && blink_on);
+        if let Some(ed) = &mut tw.editor {
+            ed.render(fb, ox as u32, oy as u32, cw, ch);
+        } else {
+            tw.term.render(fb, ox as u32, oy as u32, cw, ch, focused && blink_on);
+        }
         wm::draw_resize_grip(fb, &tw.win, focused);
         tw.term.dirty = false;
         tw.win_dirty  = false;
@@ -777,7 +805,7 @@ pub extern "C" fn _start() -> ! {
         // Snapshot old cursor position — the unified render uses this for restore.
         let prev_cx = cx; let prev_cy = cy;
 
-        // Keyboard → global shortcuts first, then focused terminal
+        // Keyboard → global shortcuts first, then focused terminal/editor
         for &k in keys.iter() {
             if k == 0x14 { // Ctrl+T
                 if let Some(tw) = open_term(w, h, wins.len(), &LAUNCHERS[0]) {
@@ -789,9 +817,26 @@ pub extern "C" fn _start() -> ! {
                     wins.pop();
                     scene_dirty = true;
                 }
+            } else if k == 0x13 { // Ctrl+S (save editor)
+                if let Some(tw) = wins.last_mut() {
+                    if let Some(ed) = &mut tw.editor {
+                        ed.save();
+                    }
+                }
+            } else if k == 0x11 { // Ctrl+Q (close editor)
+                if let Some(tw) = wins.last_mut() {
+                    if let Some(ed) = &mut tw.editor {
+                        ed.wants_close = true;
+                    }
+                }
             } else if let Some(tw) = wins.last_mut() {
-                tw.term.send_key(k);
-                tw.term.dirty = true;
+                if let Some(ed) = &mut tw.editor {
+                    ed.send_key(k);
+                    tw.win_dirty = true;
+                } else {
+                    tw.term.send_key(k);
+                    tw.term.dirty = true;
+                }
             }
         }
 
@@ -804,8 +849,8 @@ pub extern "C" fn _start() -> ! {
         }
 
         // Close windows that typed `exit`
-        if wins.iter().any(|tw| tw.term.wants_close) {
-            wins.retain(|tw| !tw.term.wants_close);
+        if wins.iter().any(|tw| tw.editor.is_some() || tw.term.wants_close) {
+            wins.retain(|tw| !(tw.editor.as_ref().map(|ed| ed.wants_close).unwrap_or(false) || tw.term.wants_close));
             scene_dirty = true;
         }
 
@@ -922,7 +967,13 @@ pub extern "C" fn _start() -> ! {
                         scene_dirty = true;
                     } else if let Some(di) = desktop_icon_hit(cx, cy) {
                         let li = DESKTOP_ICONS[di].launcher_idx;
-                        if let Some(tw) = open_term(w, h, wins.len(), &LAUNCHERS[li]) {
+                        // Special case: Edit icon (launcher_idx 2) opens graphical editor
+                        if li == 2 {
+                            if let Some(tw) = open_editor(w, h, wins.len(), "readme.txt", "Text Editor") {
+                                wins.push(tw);
+                                scene_dirty = true;
+                            }
+                        } else if let Some(tw) = open_term(w, h, wins.len(), &LAUNCHERS[li]) {
                             wins.push(tw);
                             scene_dirty = true;
                         }
@@ -977,7 +1028,7 @@ pub extern "C" fn _start() -> ! {
         // composite per frame regardless of how many state changes occurred.
         let cursor_moved = prev_cx != cx || prev_cy != cy;
         let any_chrome   = scene_dirty || wins.iter().any(|tw| tw.win_dirty);
-        let any_content  = wins.iter().any(|tw| tw.term.dirty && !tw.win.minimized);
+        let any_content  = wins.iter().any(|tw| (tw.term.dirty || tw.editor.is_some()) && !tw.win.minimized);
 
         if any_chrome || any_content || cursor_moved || topbar_due {
             restore_cursor_bg(&mut fb, prev_cx, prev_cy, &cbuf);
@@ -988,12 +1039,18 @@ pub extern "C" fn _start() -> ! {
             } else if any_content {
                 let n = wins.len();
                 for (i, tw) in wins.iter_mut().enumerate() {
-                    if !tw.term.dirty || tw.win.minimized { continue; }
+                    if tw.win.minimized { continue; }
+                    let is_dirty = tw.term.dirty || tw.editor.is_some();
+                    if !is_dirty { continue; }
                     let focused = i == n - 1;
                     let (ox, oy) = wm::content_origin(&tw.win);
                     let cw = (tw.win.w - 2).max(0) as u32;
                     let ch = (tw.win.h - 3 - wm::TITLEBAR_H).max(0) as u32;
-                    tw.term.render(&mut fb, ox as u32, oy as u32, cw, ch, focused && blink_on);
+                    if let Some(ed) = &mut tw.editor {
+                        ed.render(&mut fb, ox as u32, oy as u32, cw, ch);
+                    } else {
+                        tw.term.render(&mut fb, ox as u32, oy as u32, cw, ch, focused && blink_on);
+                    }
                     tw.term.dirty = false;
                 }
                 if start_menu_open { draw_start_menu(&mut fb); }
@@ -1005,12 +1062,10 @@ pub extern "C" fn _start() -> ! {
                 draw_topbar(&mut fb, up.as_str(), &stats, now_ticks);
             }
 
-            // Re-stamp the focused terminal cursor over whatever restore_cursor_bg
-            // put back, so cbuf always captures the correct blink state — not a
-            // stale frame from when the mouse was elsewhere.
+            // Re-stamp the focused terminal cursor (editors include cursor in render).
             {
                 let n = wins.len();
-                if let Some((fi, tw)) = wins.iter_mut().enumerate().rev().find(|(_, tw)| !tw.win.minimized) {
+                if let Some((fi, tw)) = wins.iter_mut().enumerate().rev().find(|(_, tw)| !tw.win.minimized && tw.editor.is_none()) {
                     let focused = fi == n - 1;
                     let (ox, oy) = wm::content_origin(&tw.win);
                     let cw = (tw.win.w - 2).max(0) as u32;
