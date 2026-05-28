@@ -334,8 +334,11 @@ fn draw_scene_static(fb: &mut Framebuffer) {
     fb.fill_rect(4, tb_y + 3, 62, 1, 0x22C55E);  // green top edge
     fb.draw_bitmap_2x(8, tb_y + 6, &DINGIR, GREEN, 0x152230);
     fb.draw_str(30, tb_y + 10, "Menu", WHITE, 0x152230);
-    // Separator
+    // Separator after menu button
     fb.fill_rect(70, tb_y + 5, 1, 18, 0x1E3030);
+    // "Show desktop" strip — far right of taskbar (Mint/GNOME-style)
+    fb.fill_rect(w - 6, tb_y, 6, 28, 0x0E1C16);   // dark backing
+    fb.fill_rect(w - 5, tb_y, 1, 28, 0x22C55E);   // green accent stripe
 
     // ── Topbar — gradient top→bottom ──
     for dy in 0..TOPBAR_H {
@@ -538,6 +541,11 @@ fn tbwin_hit(fw: u32, fh: u32, wins: &[TermWin], mx: i32, my: i32) -> Option<usi
 fn dingir_hit(fh: u32, mx: i32, my: i32) -> bool {
     let tb_y = fh as i32 - 28;
     mx >= 4 && mx < 24 && my >= tb_y + 4 && my < tb_y + 24
+}
+
+fn show_desktop_hit(fw: u32, fh: u32, mx: i32, my: i32) -> bool {
+    mx >= fw as i32 - 6 && mx < fw as i32
+        && my >= fh as i32 - 28 && my < fh as i32
 }
 
 fn start_menu_bounds(fh: u32) -> (i32, i32, i32, i32) {
@@ -877,7 +885,10 @@ pub extern "C" fn _start() -> ! {
                         tw.win.drag_oy  = cy - tw.win.y;
                     }
                 } else {
-                    if let Some(mi) = tbwin_hit(fb.width, fb.height, &wins, cx, cy) {
+                    if show_desktop_hit(fb.width, fb.height, cx, cy) {
+                        for tw in wins.iter_mut() { tw.win.minimized = true; }
+                        scene_dirty = true;
+                    } else if let Some(mi) = tbwin_hit(fb.width, fb.height, &wins, cx, cy) {
                         wins[mi].win.minimized = false;
                         let tw = wins.remove(mi); wins.push(tw);
                         scene_dirty = true;
