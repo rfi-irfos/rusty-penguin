@@ -706,7 +706,6 @@ pub extern "C" fn _start() -> ! {
     draw_desktop_icons(&mut fb);
     let up0 = rtc_str();
     draw_topbar(&mut fb, up0.as_str(), &stats, sys_ticks());
-    draw_taskbar_clock(&mut fb, up0.as_str());
 
     let cbl = (CURSOR_BW * CURSOR_BH) as usize;
     let mut cbuf = vec![BG; cbl];
@@ -715,12 +714,12 @@ pub extern "C" fn _start() -> ! {
     draw_cursor(&mut fb, cx, cy);
 
     let mut last_topbar_tick: u64 = 0;
+    let mut drag_tick: u64 = 0;
     let mut wins: Vec<TermWin> = Vec::new();
     let mut scene_dirty = false;
     let mut start_menu_open = false;
     let mut ctx_menu: Option<(i32, i32)> = None;
 
-    // Auto-open one terminal on boot so the desktop is immediately interactive
     if let Some(tw) = open_term(w, h, 0, &LAUNCHERS[0]) {
         wins.push(tw);
         scene_dirty = true;
@@ -729,25 +728,23 @@ pub extern "C" fn _start() -> ! {
     loop {
         sys_yield();
 
-        // Input — drain all events; ESC sequences need all bytes in order
         let keys = input::poll(&mut mouse, w, h);
-        let (nx, ny, btn) = (mouse.x, mouse.y, mouse.buttons);
+        let btn = mouse.buttons;
+
+        // Snapshot old cursor position — the unified render uses this for restore.
+        let prev_cx = cx; let prev_cy = cy;
 
         // Keyboard → global shortcuts first, then focused terminal
         for &k in keys.iter() {
-            if k == 0x14 { // Ctrl+T — new terminal
+            if k == 0x14 { // Ctrl+T
                 if let Some(tw) = open_term(w, h, wins.len(), &LAUNCHERS[0]) {
                     wins.push(tw);
                     scene_dirty = true;
                 }
-            } else if k == 0x17 { // Ctrl+W — close focused terminal
+            } else if k == 0x17 { // Ctrl+W
                 if !wins.is_empty() {
-                    restore_cursor_bg(&mut fb, cx, cy, &cbuf);
                     wins.pop();
-                    recomposite(&mut fb, &mut wins, false, ctx_menu, &stats);
-                    scene_dirty = false;
-                    save_cursor_bg(&fb, cx, cy, &mut cbuf);
-                    draw_cursor(&mut fb, cx, cy);
+                    scene_dirty = true;
                 }
             } else if let Some(tw) = wins.last_mut() {
                 tw.term.send_key(k);
@@ -765,60 +762,23 @@ pub extern "C" fn _start() -> ! {
 
         // Close windows that typed `exit`
         if wins.iter().any(|tw| tw.term.wants_close) {
-            restore_cursor_bg(&mut fb, cx, cy, &cbuf);
             wins.retain(|tw| !tw.term.wants_close);
-            recomposite(&mut fb, &mut wins, false, ctx_menu, &stats);
-            scene_dirty = false;
-            save_cursor_bg(&fb, cx, cy, &mut cbuf);
-            draw_cursor(&mut fb, cx, cy);
+            scene_dirty = true;
         }
 
-        // Rendering
-        let cursor_moved = nx != cx || ny != cy;
-        let any_chrome   = scene_dirty || wins.iter().any(|tw| tw.win_dirty);
-        let any_content  = wins.iter().any(|tw| tw.term.dirty && !tw.win.minimized);
-
-        if any_chrome || any_content || cursor_moved {
-            restore_cursor_bg(&mut fb, cx, cy, &cbuf);
-
-            if any_chrome {
-                recomposite(&mut fb, &mut wins, start_menu_open, ctx_menu, &stats);
-                scene_dirty = false;
-            } else if any_content {
-                let n = wins.len();
-                for (i, tw) in wins.iter_mut().enumerate() {
-                    if !tw.term.dirty || tw.win.minimized { continue; }
-                    let (ox, oy) = wm::content_origin(&tw.win);
-                    tw.term.render(&mut fb, ox as u32, oy as u32);
-                    tw.term.dirty = false;
-                    let _ = i; let _ = n;
-                }
-                if start_menu_open { draw_start_menu(&mut fb); }
-                if let Some((cmx, cmy)) = ctx_menu { draw_ctx_menu(&mut fb, cmx, cmy); }
-            }
-
-            if cursor_moved { cx = nx; cy = ny; }
-            save_cursor_bg(&fb, cx, cy, &mut cbuf);
-            draw_cursor(&mut fb, cx, cy);
-        }
-
-        // Top bar + taskbar clock: update every ~2s (200 real kernel ticks @ 100Hz)
+        // Topbar: check if due; defer actual draw to the unified render pass.
         let now_ticks = sys_ticks();
-        if now_ticks.wrapping_sub(last_topbar_tick) >= 200 {
+        let topbar_due = now_ticks.wrapping_sub(last_topbar_tick) >= 200;
+        if topbar_due {
             last_topbar_tick = now_ticks;
             stats = sample_stats();
-            let up = rtc_str();
-            restore_cursor_bg(&mut fb, cx, cy, &cbuf);
-            draw_topbar(&mut fb, up.as_str(), &stats, now_ticks);
-            draw_taskbar_clock(&mut fb, up.as_str());
-            save_cursor_bg(&fb, cx, cy, &mut cbuf);
-            draw_cursor(&mut fb, cx, cy);
         }
 
-        // Click handling
+        // Update cursor to new position so click/drag handlers see current coords.
+        cx = mouse.x; cy = mouse.y;
+
         let left_down  = (btn & 0x01) != 0;
         let left_edge  = (mouse.btn_pressed & 0x01) != 0;
-        let right_down = (btn & 0x02) != 0;
         let right_edge = (mouse.btn_pressed & 0x02) != 0;
 
         // Right-click: open context menu on empty desktop area
@@ -834,17 +794,16 @@ pub extern "C" fn _start() -> ! {
         }
 
         if left_edge {
-            // Context menu takes priority: dismiss on any left click
             if let Some((cmx, cmy)) = ctx_menu.take() {
                 if let Some(item) = ctx_menu_item_hit(cx, cy, cmx, cmy, fb.width, fb.height) {
                     match item {
-                        0 => { // New Terminal
+                        0 => {
                             if let Some(tw) = open_term(w, h, wins.len(), &LAUNCHERS[0]) {
                                 wins.push(tw);
                             }
                         }
-                        1 => { wins.clear(); } // Close All Windows
-                        _ => {}                // Refresh Desktop — scene_dirty handles it
+                        1 => { wins.clear(); }
+                        _ => {}
                     }
                 }
                 scene_dirty = true;
@@ -858,10 +817,7 @@ pub extern "C" fn _start() -> ! {
                 scene_dirty = true;
             } else if dingir_hit(fb.height, cx, cy) {
                 start_menu_open = true;
-                restore_cursor_bg(&mut fb, cx, cy, &cbuf);
-                draw_start_menu(&mut fb);
-                save_cursor_bg(&fb, cx, cy, &mut cbuf);
-                draw_cursor(&mut fb, cx, cy);
+                scene_dirty = true;
             } else {
                 let hit = wins.iter().enumerate().rev()
                     .find(|(_, tw)| wm::window_hit(&tw.win, cx, cy))
@@ -876,17 +832,13 @@ pub extern "C" fn _start() -> ! {
                     let tw = &mut wins[last];
 
                     if wm::close_btn_hit(&tw.win, cx, cy) {
-                        restore_cursor_bg(&mut fb, cx, cy, &cbuf);
                         wins.remove(last);
-                        recomposite(&mut fb, &mut wins, false, ctx_menu, &stats);
-                        scene_dirty = false;
-                        save_cursor_bg(&fb, cx, cy, &mut cbuf);
-                        draw_cursor(&mut fb, cx, cy);
+                        scene_dirty = true;
                     } else if wm::min_btn_hit(&tw.win, cx, cy) {
-                        tw.win.minimized = true;
+                        tw.win.toggle_maximize(w, h, TOPBAR_H as i32);
                         scene_dirty = true;
                     } else if wm::max_btn_hit(&tw.win, cx, cy) {
-                        tw.win.toggle_maximize(w, h, TOPBAR_H as i32);
+                        tw.win.minimized = true;
                         scene_dirty = true;
                     } else if wm::resize_corner_hit(&tw.win, cx, cy) {
                         tw.win.resizing  = true;
@@ -926,33 +878,70 @@ pub extern "C" fn _start() -> ! {
                     let ny2 = (cy - tw.win.drag_oy).max(TOPBAR_H as i32).min(h - tw.win.h - 28);
                     if nx2 != tw.win.x || ny2 != tw.win.y {
                         tw.win.x = nx2; tw.win.y = ny2;
-                        scene_dirty = true;
+                        // Rate-limit drag recomposites to ~25Hz (4 ticks @ 100Hz).
+                        // Cursor still updates every frame; only the window position
+                        // repaints are throttled to cut framebuffer write pressure.
+                        if now_ticks.wrapping_sub(drag_tick) >= 4 {
+                            drag_tick = now_ticks;
+                            scene_dirty = true;
+                        }
                     }
                 } else if tw.win.resizing {
                     let nw = (tw.win.resize_ow + cx - tw.win.resize_mx).max(wm::WIN_MIN_W);
                     let nh = (tw.win.resize_oh + cy - tw.win.resize_my).max(wm::WIN_MIN_H);
-                    // Also clamp so window doesn't exceed screen bounds
                     let nw = nw.min(w - tw.win.x);
                     let nh = nh.min(h - tw.win.y - 28);
                     if nw != tw.win.w || nh != tw.win.h {
                         tw.win.w = nw; tw.win.h = nh;
-                        scene_dirty = true;
+                        if now_ticks.wrapping_sub(drag_tick) >= 4 {
+                            drag_tick = now_ticks;
+                            scene_dirty = true;
+                        }
                     }
                 }
             }
         } else {
+            // Drag/resize ended — flush final position unconditionally.
+            let was_active = wins.iter().any(|tw| tw.win.dragging || tw.win.resizing);
             for tw in wins.iter_mut() {
                 tw.win.dragging = false;
                 tw.win.resizing = false;
             }
+            if was_active { scene_dirty = true; }
         }
 
-        // Render any scene changes produced by this frame's click/drag handling.
-        // Without this a new window only appears in the *next* loop iteration.
-        if scene_dirty || wins.iter().any(|tw| tw.win_dirty) {
-            restore_cursor_bg(&mut fb, cx, cy, &cbuf);
-            recomposite(&mut fb, &mut wins, start_menu_open, ctx_menu, &stats);
-            scene_dirty = false;
+        // ── Single unified render pass per frame ──────────────────────────────
+        // Cursor is always restored from prev_cx/prev_cy (old position) and
+        // saved + drawn at cx/cy (new position). This guarantees exactly one
+        // composite per frame regardless of how many state changes occurred.
+        let cursor_moved = prev_cx != cx || prev_cy != cy;
+        let any_chrome   = scene_dirty || wins.iter().any(|tw| tw.win_dirty);
+        let any_content  = wins.iter().any(|tw| tw.term.dirty && !tw.win.minimized);
+
+        if any_chrome || any_content || cursor_moved || topbar_due {
+            restore_cursor_bg(&mut fb, prev_cx, prev_cy, &cbuf);
+
+            if any_chrome {
+                recomposite(&mut fb, &mut wins, start_menu_open, ctx_menu, &stats);
+                scene_dirty = false;
+            } else if any_content {
+                let n = wins.len();
+                for (i, tw) in wins.iter_mut().enumerate() {
+                    if !tw.term.dirty || tw.win.minimized { continue; }
+                    let (ox, oy) = wm::content_origin(&tw.win);
+                    tw.term.render(&mut fb, ox as u32, oy as u32);
+                    tw.term.dirty = false;
+                    let _ = i; let _ = n;
+                }
+                if start_menu_open { draw_start_menu(&mut fb); }
+                if let Some((cmx, cmy)) = ctx_menu { draw_ctx_menu(&mut fb, cmx, cmy); }
+            }
+
+            if topbar_due && !any_chrome {
+                let up = rtc_str();
+                draw_topbar(&mut fb, up.as_str(), &stats, now_ticks);
+            }
+
             save_cursor_bg(&fb, cx, cy, &mut cbuf);
             draw_cursor(&mut fb, cx, cy);
         }
