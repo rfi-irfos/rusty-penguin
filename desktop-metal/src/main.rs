@@ -1161,6 +1161,13 @@ pub extern "C" fn _start() -> ! {
             if now != last_loop_tick { last_loop_tick = now; break; }
         }
 
+        // Sparse-rendering / "ternary" damage tracking for this frame: when only
+        // a window is being dragged, the rest of the screen is DORMANT — we
+        // recomposite the (correct) backbuffer but present ONLY the changed band
+        // to VRAM, skipping the dominant full-screen MMIO copy. Set by the drag
+        // handler below to the union of the window's old+new vertical span.
+        let mut drag_band: Option<(i32, i32)> = None;
+
         let keys = input::poll(&mut mouse, w, h);
         let btn = mouse.buttons;
 
@@ -1427,9 +1434,15 @@ pub extern "C" fn _start() -> ! {
         if left_down {
             if let Some(tw) = wins.last_mut() {
                 if tw.win.dragging {
+                    let oy = tw.win.y; let oh = tw.win.h;
                     let nx2 = (cx - tw.win.drag_ox).max(75).min(w - tw.win.w);
                     let ny2 = (cy - tw.win.drag_oy).max(TOPBAR_H as i32).min(h - tw.win.h - 28);
                     if nx2 != tw.win.x || ny2 != tw.win.y {
+                        // Damage band = union of old + new vertical span (plus a
+                        // little slack for the cursor + shadow).
+                        let y0 = oy.min(ny2) - 8;
+                        let y1 = (oy + oh).max(ny2 + oh) + 10;
+                        drag_band = Some((y0.max(0), y1.min(h)));
                         tw.win.x = nx2; tw.win.y = ny2;
                         scene_dirty = true;
                     }
@@ -1521,11 +1534,18 @@ pub extern "C" fn _start() -> ! {
             save_cursor_bg(&fb, cx, cy, &mut cbuf);
             draw_cursor(&mut fb, cx, cy);
 
-            // Flush the backbuffer to the real framebuffer in one block.
-            // Up to this point the user has seen the previous frame; the
-            // intermediate paint states (border fills, partial composites)
-            // were all confined to RAM.
-            fb.present();
+            // Flush the backbuffer to the real framebuffer. Sparse path: on a
+            // pure drag frame (no terminal output, no topbar tick) only the
+            // window's damage band changed, so present just those rows — the
+            // rest of the screen is dormant. This skips the dominant full-screen
+            // MMIO copy and is what makes 1080p dragging smooth. The backbuffer
+            // is always fully correct, so a missed source just self-corrects on
+            // the next full present.
+            match drag_band {
+                Some((y0, y1)) if !any_term && !topbar_due =>
+                    fb.present_rows(y0.max(0) as u32, y1.max(0) as u32),
+                _ => fb.present(),
+            }
             frames_since_stat = frames_since_stat.saturating_add(1);
         }
     }

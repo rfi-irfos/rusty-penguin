@@ -27,6 +27,20 @@ All notable changes to this project will be documented here.
   today's web; ISO grows to ~600 MB–1 GB). Honest: from-scratch web-platform
   parity with Firefox is a long-horizon effort.
 
+### Added — Sparse "ternary" rendering: dirty-rect present (smooth dragging, 2026-05-28)
+
+- Window dragging now uses **sparse damage tracking** — the concrete embodiment
+  of ternary/sparse logic applied to rendering: on a pure drag frame the rest of
+  the screen is **dormant**, so we recomposite the (always-correct) backbuffer
+  but `present_rows` ONLY the window's damage band to VRAM, skipping the
+  dominant full-screen MMIO copy. The drag handler computes the band as the
+  union of the window's old+new vertical span; the periodic cursor-blink and
+  topbar ticks provide self-correcting full presents.
+- Verified in QEMU (QMP-driven drag): window renders correctly mid-drag and at
+  the drop position, vacated area clean — no trails/corruption.
+- This is the architecture thesis in miniature: sparsity designed in
+  (dormant = skip the work), not bolted on. See `docs/BROWSER_PLAN.md`.
+
 ### Changed — Cache the static desktop background (drag perf groundwork, 2026-05-28)
 
 - The bare-metal compositor cached the static scene (gradient + logo + icon
