@@ -287,6 +287,7 @@ pub struct Terminal {
     stdin_data:      Vec<u8>,           // pipe input for the current command
     vars:            Vec<(String, String)>, // shell variables
     aliases:         Vec<(String, String)>, // command aliases (alias_name, expanded_cmd)
+    cwd:             String,            // current working directory
     last_exit:       u8,               // exit code of last command
 }
 
@@ -360,6 +361,7 @@ impl Terminal {
             stdin_data:  Vec::new(),
             vars:        Vec::new(),
             aliases:     Vec::new(),
+            cwd:         String::from("/"),
             last_exit:   0,
         };
         t.write_output(b"\x1b[32m  Rusty Penguin\x1b[0m \x1b[90mv1.0.0 \xB7 psh 1.0\x1b[0m\r\n");
@@ -618,7 +620,8 @@ impl Terminal {
                 }
                 self.parse_and_exec(&line[..line_len]);
                 if self.editor.is_none() {
-                    self.write_output(b"\x1b[32mring3\x1b[0m@\x1b[36mrusty-penguin\x1b[90m:~$\x1b[0m ");
+                    let s = format!("\x1b[32mring3\x1b[0m@\x1b[36mrusty-penguin\x1b[90m:{}\x1b[0m$ ", self.cwd);
+                    self.write_output(s.as_bytes());
                 }
             }
             0x08 | 0x7F => {
@@ -1100,7 +1103,7 @@ impl Terminal {
 
         let matches: Vec<String> = if is_cmd {
             const CMDS: &[&str] = &[
-                "ai","alias","bc","calc","cat","clear","cp","date","df","echo","env","exit",
+                "ai","alias","bc","calc","cat","cd","clear","cp","date","df","echo","env","exit",
                 "find","free","grep","head","help","hexdump","history","kinstall","kmanager","kver",
                 "ls","lscpu","mem","mkdir","mv","nano","neofetch","printf","printenv","ps","psh",
                 "pwd","rev","rm","seq","sort","sysinfo","tail","touch","trit","uname",
@@ -1688,7 +1691,23 @@ impl Terminal {
         } else if line.starts_with(b"trit ") {
             self.exec_trit(&line[5..]);
         } else if line == b"pwd" {
-            self.write_output(b"/\r\n");
+            let s = format!("{}\r\n", self.cwd);
+            self.write_output(s.as_bytes());
+
+        } else if line == b"cd" || line == b"cd /" {
+            self.cwd = String::from("/");
+
+        } else if line.starts_with(b"cd ") {
+            let path = arg(3);
+            if path.is_empty() || path == "/" {
+                self.cwd = String::from("/");
+            } else if vfs::vfs().exists(path) {
+                self.cwd = String::from(path);
+            } else {
+                let s = format!("\x1b[31mcd: {}: no such directory\x1b[0m\r\n", path);
+                self.write_output(s.as_bytes());
+            }
+
         } else if line == b"date" {
             let ticks = sys_ticks();
             let secs = ticks / 100;
@@ -2094,7 +2113,7 @@ impl Terminal {
                 "history","env","printenv","which","set","export","unset",
                 "ps","mem","free","df","lscpu","sysinfo","neofetch",
                 "uname","whoami","uptime","date","trit","ai",
-                "echo","clear","pwd","exit","kver","kinstall","kmanager",
+                "echo","clear","pwd","cd","exit","kver","kinstall","kmanager",
                 "psh","seq","bc","calc","rev","alias","printf","unalias",
             ];
             if BUILTINS.iter().any(|&b| b == cmd_name) {
