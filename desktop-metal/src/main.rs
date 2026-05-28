@@ -144,6 +144,13 @@ const ICON_KM: [u8; 8] = [0x18, 0x7E, 0x3C, 0xFF, 0xFF, 0x3C, 0x7E, 0x18];
 #[rustfmt::skip]
 const ICON_FILES: [u8; 8] = [0x3E, 0x22, 0xE2, 0xA2, 0xA2, 0xA2, 0xA2, 0xFE];
 
+// Snake icon: coiled body
+#[rustfmt::skip]
+const ICON_SNAKE: [u8; 8] = [0x7C, 0x04, 0x04, 0x7C, 0x40, 0x40, 0x7C, 0x02];
+// Minesweeper icon: bomb with fuse
+#[rustfmt::skip]
+const ICON_MINE:  [u8; 8] = [0x08, 0x2A, 0x1C, 0x3E, 0x7F, 0x7F, 0x3E, 0x1C];
+
 // Dingir — cuneiform divine determinative (8-pointed star with wedges)
 #[rustfmt::skip]
 const DINGIR: [u8; 8] = [
@@ -494,6 +501,8 @@ const DESKTOP_ICONS: &[DesktopIcon] = &[
     DesktopIcon { label: "Help",  bitmap: &ICON_FILES, color: 0x90EE90, launcher_idx: 9 },
     DesktopIcon { label: "Prefs", bitmap: &ICON_PROC,  color: 0x9CA3AF, launcher_idx: 5 },
     DesktopIcon { label: "TIS",   bitmap: &ICON_TRIT,  color: 0x4A9EFF, launcher_idx: 6 },
+    DesktopIcon { label: "Snake", bitmap: &ICON_SNAKE, color: 0x4ADE80, launcher_idx: 10 },
+    DesktopIcon { label: "Mines", bitmap: &ICON_MINE,  color: 0xFCD34D, launcher_idx: 11 },
 ];
 
 // 56px wide keeps icons safely left of the default window start (x=79)
@@ -613,8 +622,10 @@ fn tbwin_hit(fw: u32, fh: u32, wins: &[TermWin], mx: i32, my: i32) -> Option<usi
 // ---- Start menu ─────────────────────────────────────────────────────────────
 
 fn dingir_hit(fh: u32, mx: i32, my: i32) -> bool {
+    // Whole "Menu" button is clickable, not just the icon glyph. Mirrors the
+    // button drawn in draw_taskbar: x 4..66, y tb_y+3 .. tb_y+25.
     let tb_y = fh as i32 - 28;
-    mx >= 4 && mx < 24 && my >= tb_y + 4 && my < tb_y + 24
+    mx >= 4 && mx < 66 && my >= tb_y + 3 && my < tb_y + 25
 }
 
 fn show_desktop_hit(fw: u32, fh: u32, mx: i32, my: i32) -> bool {
@@ -643,6 +654,8 @@ const MENU_ITEMS: &[MenuItem] = &[
     MenuItem { label: "Help",        color: 0x90EE90, kind: MenuLaunch::App(3) },
     MenuItem { label: "Settings",    color: 0x9CA3AF, kind: MenuLaunch::App(4) },
     MenuItem { label: "TIS Console", color: 0x4A9EFF, kind: MenuLaunch::App(5) },
+    MenuItem { label: "Snake",       color: 0x4ADE80, kind: MenuLaunch::App(6) },
+    MenuItem { label: "Minesweeper", color: 0xFCD34D, kind: MenuLaunch::App(7) },
     MenuItem { label: "Terminal",    color: GREEN,    kind: MenuLaunch::Term(0) },
     MenuItem { label: "ls -la",      color: BLUE,     kind: MenuLaunch::Term(1) },
     MenuItem { label: "nano",        color: AMBER,    kind: MenuLaunch::Term(2) },
@@ -973,6 +986,52 @@ fn open_help_browser(w: i32, h: i32, n: usize) -> Option<TermWin> {
     }
 }
 
+fn open_snake(w: i32, h: i32, n: usize) -> Option<TermWin> {
+    match term::Terminal::spawn() {
+        Ok(t) => {
+            let game = alloc::boxed::Box::new(app::Snake::new(sys_ticks()));
+            let off = n as i32 * 20;
+            let left_margin = 75;
+            let wx = ((w - left_margin - wm::WINDOW_W) / 2 + left_margin + off)
+                .max(left_margin)
+                .min(w - wm::WINDOW_W);
+            let wy = ((h - wm::WINDOW_H - 28) / 2 + off).max(TOPBAR_H as i32).min(h - wm::WINDOW_H - 28);
+            Some(TermWin {
+                win: wm::Window::new(wx, wy, "Snake"),
+                term: t,
+                editor: None,
+                app: Some(game),
+                win_dirty: true,
+                initial_cmd: None,
+            })
+        }
+        Err(_) => None,
+    }
+}
+
+fn open_minesweeper(w: i32, h: i32, n: usize) -> Option<TermWin> {
+    match term::Terminal::spawn() {
+        Ok(t) => {
+            let game = alloc::boxed::Box::new(app::Minesweeper::new(sys_ticks()));
+            let off = n as i32 * 20;
+            let left_margin = 75;
+            let wx = ((w - left_margin - wm::WINDOW_W) / 2 + left_margin + off)
+                .max(left_margin)
+                .min(w - wm::WINDOW_W);
+            let wy = ((h - wm::WINDOW_H - 28) / 2 + off).max(TOPBAR_H as i32).min(h - wm::WINDOW_H - 28);
+            Some(TermWin {
+                win: wm::Window::new(wx, wy, "Minesweeper"),
+                term: t,
+                editor: None,
+                app: Some(game),
+                win_dirty: true,
+                initial_cmd: None,
+            })
+        }
+        Err(_) => None,
+    }
+}
+
 // ---- Full scene recomposite ─────────────────────────────────────────────────
 
 fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, ctx_menu: Option<(i32,i32)>, stats: &SysStats, blink_on: bool, hover_icon: Option<usize>) {
@@ -1217,6 +1276,8 @@ pub extern "C" fn _start() -> ! {
                         MenuLaunch::App(3)   => open_help_browser(w, h, wins.len()),
                         MenuLaunch::App(4)   => open_settings(w, h, wins.len()),
                         MenuLaunch::App(5)   => open_tis_console(w, h, wins.len()),
+                        MenuLaunch::App(6)   => open_snake(w, h, wins.len()),
+                        MenuLaunch::App(7)   => open_minesweeper(w, h, wins.len()),
                         MenuLaunch::App(_)   => None,
                     };
                     if let Some(tw) = opened { wins.push(tw); }
@@ -1292,7 +1353,7 @@ pub extern "C" fn _start() -> ! {
                         let tw = wins.remove(mi); wins.push(tw);
                         scene_dirty = true;
                     } else if let Some(di) = desktop_icon_hit(cx, cy) {
-                        // Icon order: Term, Files, Edit, Calc, Help, Prefs, TIS
+                        // Icon order: Term, Files, Edit, Calc, Help, Prefs, TIS, Snake, Mines
                         let opened = match di {
                             0 => open_term(w, h, wins.len(), &LAUNCHERS[0]),
                             1 => open_file_manager(w, h, wins.len()),
@@ -1301,6 +1362,8 @@ pub extern "C" fn _start() -> ! {
                             4 => open_help_browser(w, h, wins.len()),
                             5 => open_settings(w, h, wins.len()),
                             6 => open_tis_console(w, h, wins.len()),
+                            7 => open_snake(w, h, wins.len()),
+                            8 => open_minesweeper(w, h, wins.len()),
                             _ => None,
                         };
                         if let Some(tw) = opened {
@@ -1343,6 +1406,17 @@ pub extern "C" fn _start() -> ! {
                 tw.win.resizing = false;
             }
             if was_active { scene_dirty = true; }
+        }
+
+        // Pump per-tick updates into animated apps (e.g. Snake). Only the
+        // non-minimized windows advance; an app that actually changed state
+        // marks its window dirty so the recomposite path below redraws it.
+        // Sparse: apps that don't animate return false and cost nothing.
+        for tw in wins.iter_mut() {
+            if tw.win.minimized { continue; }
+            if let Some(app) = &mut tw.app {
+                if app.tick(now_ticks) { tw.win_dirty = true; }
+            }
         }
 
         // ── Single unified render pass per frame ──────────────────────────────

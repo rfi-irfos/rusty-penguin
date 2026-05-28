@@ -37,8 +37,29 @@ pub trait App {
         false
     }
 
+    /// Periodic update tick (called ~100 Hz with the current PIT tick count).
+    /// Return `true` if the app's state advanced and it needs a redraw. Apps
+    /// that are purely input-driven (most of them) keep the default no-op.
+    /// Used by animated apps like Snake. Sparse by default: no redraw unless
+    /// something actually changed.
+    fn tick(&mut self, _ticks: u64) -> bool {
+        false
+    }
+
     /// Get app title for window
     fn title(&self) -> &str;
+}
+
+/// Tiny xorshift PRNG — no_std, no heap. Seeded from the PIT tick at launch.
+struct Rng(u64);
+impl Rng {
+    fn new(seed: u64) -> Self { Rng(seed ^ 0x9E3779B97F4A7C15 | 1) }
+    fn next(&mut self) -> u64 {
+        let mut x = self.0;
+        x ^= x << 13; x ^= x >> 7; x ^= x << 17;
+        self.0 = x; x
+    }
+    fn range(&mut self, n: u32) -> u32 { (self.next() % n as u64) as u32 }
 }
 
 struct FileEntry {
@@ -1081,4 +1102,439 @@ impl App for HelpBrowser {
     fn title(&self) -> &str {
         "Help Browser"
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Games — preinstalled on the Rusty Penguin desktop. Pure-Rust, no_std, no heap
+// churn in the render path (numbers via u64_into, no per-frame format!()).
+// ─────────────────────────────────────────────────────────────────────────────
+
+const SNAKE_COLS: i16 = 24;
+const SNAKE_ROWS: i16 = 18;
+
+/// Classic Snake. Tick-driven movement; arrow keys steer; SPACE restarts.
+pub struct Snake {
+    body: Vec<(i16, i16)>, // head at index 0
+    dir: (i16, i16),
+    pending: (i16, i16),
+    food: (i16, i16),
+    score: u32,
+    dead: bool,
+    started: bool,
+    last_move: u64,
+    interval: u64,
+    rng: Rng,
+    pub dirty: bool,
+    pub wants_close: bool,
+    ansi: crate::ansi::AnsiParser,
+}
+
+impl Snake {
+    pub fn new(seed: u64) -> Self {
+        let mut s = Snake {
+            body: Vec::with_capacity((SNAKE_COLS * SNAKE_ROWS) as usize),
+            dir: (1, 0),
+            pending: (1, 0),
+            food: (0, 0),
+            score: 0,
+            dead: false,
+            started: false,
+            last_move: 0,
+            interval: 9, // ~11 moves/sec at 100 Hz
+            rng: Rng::new(seed),
+            dirty: true,
+            wants_close: false,
+            ansi: crate::ansi::AnsiParser::new(),
+        };
+        s.reset();
+        s
+    }
+
+    fn reset(&mut self) {
+        self.body.clear();
+        let cx = SNAKE_COLS / 2;
+        let cy = SNAKE_ROWS / 2;
+        self.body.push((cx, cy));
+        self.body.push((cx - 1, cy));
+        self.body.push((cx - 2, cy));
+        self.dir = (1, 0);
+        self.pending = (1, 0);
+        self.score = 0;
+        self.dead = false;
+        self.started = false;
+        self.place_food();
+        self.dirty = true;
+    }
+
+    fn place_food(&mut self) {
+        // Try random cells until one is free (grid is large relative to snake).
+        for _ in 0..256 {
+            let fx = self.rng.range(SNAKE_COLS as u32) as i16;
+            let fy = self.rng.range(SNAKE_ROWS as u32) as i16;
+            if !self.body.iter().any(|&p| p == (fx, fy)) {
+                self.food = (fx, fy);
+                return;
+            }
+        }
+    }
+}
+
+impl App for Snake {
+    fn tick(&mut self, ticks: u64) -> bool {
+        if self.dead || !self.started { return false; }
+        if ticks.wrapping_sub(self.last_move) < self.interval { return false; }
+        self.last_move = ticks;
+
+        // Apply the queued direction unless it reverses straight back.
+        if (self.pending.0 + self.dir.0, self.pending.1 + self.dir.1) != (0, 0) {
+            self.dir = self.pending;
+        }
+        let (hx, hy) = self.body[0];
+        let nx = hx + self.dir.0;
+        let ny = hy + self.dir.1;
+
+        // Wall or self collision → dead.
+        if nx < 0 || ny < 0 || nx >= SNAKE_COLS || ny >= SNAKE_ROWS
+            || self.body.iter().any(|&p| p == (nx, ny))
+        {
+            self.dead = true;
+            return true;
+        }
+
+        self.body.insert(0, (nx, ny));
+        if (nx, ny) == self.food {
+            self.score += 1;
+            self.place_food();
+        } else {
+            self.body.pop();
+        }
+        true
+    }
+
+    fn render(&mut self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, h: u32) {
+        // Header with score.
+        fb.fill_rect(x, y, w, 22, 0x14281E);
+        fb.draw_str(x + 8, y + 6, "SNAKE", 0x4ADE80, 0x14281E);
+        let mut sbuf = [0u8; 24];
+        fb.draw_str(x + 70, y + 6, "score:", 0x9CA3AF, 0x14281E);
+        fb.draw_str(x + 126, y + 6, u64_into(&mut sbuf, self.score as u64), 0xF5F5F7, 0x14281E);
+
+        // Board area below header.
+        let board_y = y + 24;
+        let board_h = h.saturating_sub(24);
+        let cell = core::cmp::min(w / SNAKE_COLS as u32, board_h / SNAKE_ROWS as u32).max(1);
+        let gw = cell * SNAKE_COLS as u32;
+        let gh = cell * SNAKE_ROWS as u32;
+        let ox = x + (w.saturating_sub(gw)) / 2;
+        let oy = board_y + (board_h.saturating_sub(gh)) / 2;
+
+        // Playfield background.
+        fb.fill_rect(x, board_y, w, board_h, 0x0A0E14);
+        fb.fill_rect(ox, oy, gw, gh, 0x0E1A12);
+
+        // Food.
+        fb.fill_rect(ox + self.food.0 as u32 * cell + 1, oy + self.food.1 as u32 * cell + 1,
+                     cell - 2, cell - 2, 0xEF4444);
+
+        // Snake — head brighter than body.
+        for (i, &(sx, sy)) in self.body.iter().enumerate() {
+            let col = if i == 0 { 0x86EFAC } else { 0x22C55E };
+            fb.fill_rect(ox + sx as u32 * cell, oy + sy as u32 * cell, cell - 1, cell - 1, col);
+        }
+
+        if self.dead {
+            let by = oy + gh / 2 - 16;
+            fb.fill_rect(ox, by, gw, 34, 0x000000);
+            fb.draw_str(ox + 8, by + 4, "GAME OVER", 0xEF4444, 0x000000);
+            fb.draw_str(ox + 8, by + 20, "press SPACE to restart", 0xF5F5F7, 0x000000);
+        } else if !self.started {
+            let by = oy + gh / 2 - 8;
+            fb.fill_rect(ox, by, gw, 18, 0x000000);
+            fb.draw_str(ox + 8, by + 4, "arrow keys / WASD to start", 0x86EFAC, 0x000000);
+        }
+        self.dirty = false;
+    }
+
+    fn on_key(&mut self, key: u8) {
+        use crate::ansi::Key as AK;
+        match self.ansi.feed(key) {
+            AK::Up    => { self.pending = (0, -1); self.started = true; self.dirty = true; }
+            AK::Down  => { self.pending = (0, 1);  self.started = true; self.dirty = true; }
+            AK::Left  => { self.pending = (-1, 0); self.started = true; self.dirty = true; }
+            AK::Right => { self.pending = (1, 0);  self.started = true; self.dirty = true; }
+            AK::Char(b' ') | AK::Char(b'\n') | AK::Char(b'\r') => {
+                if self.dead { self.reset(); }
+            }
+            // WASD as a fallback for steering.
+            AK::Char(b'w') => { self.pending = (0, -1); self.started = true; self.dirty = true; }
+            AK::Char(b's') => { self.pending = (0, 1);  self.started = true; self.dirty = true; }
+            AK::Char(b'a') => { self.pending = (-1, 0); self.started = true; self.dirty = true; }
+            AK::Char(b'd') => { self.pending = (1, 0);  self.started = true; self.dirty = true; }
+            _ => {}
+        }
+    }
+
+    fn title(&self) -> &str { "Snake" }
+}
+
+const MS_COLS: usize = 12;
+const MS_ROWS: usize = 10;
+const MS_MINES: usize = 18;
+
+/// Minesweeper. First reveal is always safe (mines placed after it). Arrow
+/// keys + SPACE/ENTER to reveal, F to flag; mouse also works (L reveal,
+/// R flag). SPACE restarts after win/loss.
+pub struct Minesweeper {
+    mine: Vec<bool>,
+    count: Vec<u8>,
+    state: Vec<u8>, // 0 hidden, 1 revealed, 2 flagged
+    cursor: usize,
+    placed: bool,
+    dead: bool,
+    won: bool,
+    revealed: usize,
+    flags: usize,
+    seed: u64,
+    pub dirty: bool,
+    pub wants_close: bool,
+    ansi: crate::ansi::AnsiParser,
+}
+
+impl Minesweeper {
+    pub fn new(seed: u64) -> Self {
+        let n = MS_COLS * MS_ROWS;
+        let mut m = Minesweeper {
+            mine: Vec::with_capacity(n),
+            count: Vec::with_capacity(n),
+            state: Vec::with_capacity(n),
+            cursor: 0,
+            placed: false,
+            dead: false,
+            won: false,
+            revealed: 0,
+            flags: 0,
+            seed,
+            dirty: true,
+            wants_close: false,
+            ansi: crate::ansi::AnsiParser::new(),
+        };
+        m.reset();
+        m
+    }
+
+    fn reset(&mut self) {
+        let n = MS_COLS * MS_ROWS;
+        self.mine.clear(); self.count.clear(); self.state.clear();
+        for _ in 0..n { self.mine.push(false); self.count.push(0); self.state.push(0); }
+        self.cursor = 0;
+        self.placed = false;
+        self.dead = false;
+        self.won = false;
+        self.revealed = 0;
+        self.flags = 0;
+        self.dirty = true;
+    }
+
+    fn idx(c: usize, r: usize) -> usize { r * MS_COLS + c }
+
+    fn neighbors(i: usize) -> ([usize; 8], usize) {
+        let c = (i % MS_COLS) as i32;
+        let r = (i / MS_COLS) as i32;
+        let mut out = [0usize; 8];
+        let mut k = 0;
+        let mut dr = -1;
+        while dr <= 1 {
+            let mut dc = -1;
+            while dc <= 1 {
+                if !(dr == 0 && dc == 0) {
+                    let nc = c + dc; let nr = r + dr;
+                    if nc >= 0 && nc < MS_COLS as i32 && nr >= 0 && nr < MS_ROWS as i32 {
+                        out[k] = Self::idx(nc as usize, nr as usize);
+                        k += 1;
+                    }
+                }
+                dc += 1;
+            }
+            dr += 1;
+        }
+        (out, k)
+    }
+
+    fn place_mines(&mut self, safe: usize) {
+        let mut rng = Rng::new(self.seed ^ (safe as u64).wrapping_mul(0x100000001B3));
+        let (safe_n, safe_k) = Self::neighbors(safe);
+        let mut placed = 0;
+        while placed < MS_MINES {
+            let i = rng.range((MS_COLS * MS_ROWS) as u32) as usize;
+            if i == safe || self.mine[i] { continue; }
+            // Keep the first-click neighborhood clear for a friendlier open.
+            if safe_n[..safe_k].contains(&i) { continue; }
+            self.mine[i] = true;
+            placed += 1;
+        }
+        // Precompute adjacency counts.
+        for i in 0..self.count.len() {
+            if self.mine[i] { continue; }
+            let (nb, k) = Self::neighbors(i);
+            let mut c = 0u8;
+            for &j in &nb[..k] { if self.mine[j] { c += 1; } }
+            self.count[i] = c;
+        }
+        self.placed = true;
+    }
+
+    fn reveal(&mut self, start: usize) {
+        if self.dead || self.won { return; }
+        if !self.placed { self.place_mines(start); }
+        if self.state[start] != 0 { return; } // already revealed or flagged
+
+        if self.mine[start] {
+            self.state[start] = 1;
+            self.dead = true;
+            self.dirty = true;
+            return;
+        }
+
+        // Iterative flood fill for zero-count regions.
+        let mut stack = Vec::with_capacity(32);
+        stack.push(start);
+        while let Some(i) = stack.pop() {
+            if self.state[i] != 0 { continue; }
+            self.state[i] = 1;
+            self.revealed += 1;
+            if self.count[i] == 0 {
+                let (nb, k) = Self::neighbors(i);
+                for &j in &nb[..k] {
+                    if self.state[j] == 0 && !self.mine[j] { stack.push(j); }
+                }
+            }
+        }
+        if self.revealed == MS_COLS * MS_ROWS - MS_MINES { self.won = true; }
+        self.dirty = true;
+    }
+
+    fn toggle_flag(&mut self, i: usize) {
+        if self.dead || self.won { return; }
+        match self.state[i] {
+            0 => { self.state[i] = 2; self.flags += 1; }
+            2 => { self.state[i] = 0; self.flags -= 1; }
+            _ => {}
+        }
+        self.dirty = true;
+    }
+}
+
+impl App for Minesweeper {
+    fn render(&mut self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, h: u32) {
+        // Header: mines remaining + status.
+        fb.fill_rect(x, y, w, 22, 0x1A1A24);
+        fb.draw_str(x + 8, y + 6, "MINES", 0xFCD34D, 0x1A1A24);
+        let mut sbuf = [0u8; 24];
+        let remaining = MS_MINES.saturating_sub(self.flags) as u64;
+        fb.draw_str(x + 64, y + 6, u64_into(&mut sbuf, remaining), 0xF5F5F7, 0x1A1A24);
+        if self.dead { fb.draw_str(x + 110, y + 6, "BOOM!", 0xEF4444, 0x1A1A24); }
+        else if self.won { fb.draw_str(x + 110, y + 6, "YOU WIN!", 0x4ADE80, 0x1A1A24); }
+
+        let board_y = y + 24;
+        let board_h = h.saturating_sub(24);
+        let cell = core::cmp::min(w / MS_COLS as u32, board_h / MS_ROWS as u32).max(1);
+        let gw = cell * MS_COLS as u32;
+        let gh = cell * MS_ROWS as u32;
+        let ox = x + (w.saturating_sub(gw)) / 2;
+        let oy = board_y + (board_h.saturating_sub(gh)) / 2;
+
+        fb.fill_rect(x, board_y, w, board_h, 0x0A0E14);
+
+        let num_colors = [0x9CA3AF, 0x60A5FA, 0x4ADE80, 0xF87171, 0xC084FC,
+                          0xFB923C, 0x22D3EE, 0xF5F5F7, 0xF5F5F7];
+        for i in 0..(MS_COLS * MS_ROWS) {
+            let c = (i % MS_COLS) as u32;
+            let r = (i / MS_COLS) as u32;
+            let px = ox + c * cell;
+            let py = oy + r * cell;
+            let is_cursor = i == self.cursor;
+            match self.state[i] {
+                1 => {
+                    // Revealed.
+                    if self.mine[i] {
+                        fb.fill_rect(px, py, cell - 1, cell - 1, 0xEF4444);
+                        fb.draw_char(px + cell / 2 - 4, py + cell / 2 - 6, '*', 0x000000, 0xEF4444);
+                    } else {
+                        fb.fill_rect(px, py, cell - 1, cell - 1, 0x1F2937);
+                        let cnt = self.count[i];
+                        if cnt > 0 {
+                            let ch = (b'0' + cnt) as char;
+                            fb.draw_char(px + cell / 2 - 4, py + cell / 2 - 6, ch,
+                                         num_colors[cnt as usize], 0x1F2937);
+                        }
+                    }
+                }
+                2 => {
+                    fb.fill_rect(px, py, cell - 1, cell - 1, 0x374151);
+                    fb.draw_char(px + cell / 2 - 4, py + cell / 2 - 6, 'F', 0xFCD34D, 0x374151);
+                }
+                _ => {
+                    // Hidden — also reveal mines on death.
+                    if self.dead && self.mine[i] {
+                        fb.fill_rect(px, py, cell - 1, cell - 1, 0x7F1D1D);
+                        fb.draw_char(px + cell / 2 - 4, py + cell / 2 - 6, '*', 0x000000, 0x7F1D1D);
+                    } else {
+                        fb.fill_rect(px, py, cell - 1, cell - 1, 0x4B5563);
+                    }
+                }
+            }
+            if is_cursor {
+                // Cursor outline.
+                fb.fill_rect(px, py, cell - 1, 2, 0xFCD34D);
+                fb.fill_rect(px, py, 2, cell - 1, 0xFCD34D);
+                fb.fill_rect(px, py + cell - 3, cell - 1, 2, 0xFCD34D);
+                fb.fill_rect(px + cell - 3, py, 2, cell - 1, 0xFCD34D);
+            }
+        }
+        self.dirty = false;
+    }
+
+    fn on_key(&mut self, key: u8) {
+        use crate::ansi::Key as AK;
+        let c = self.cursor % MS_COLS;
+        let r = self.cursor / MS_COLS;
+        match self.ansi.feed(key) {
+            AK::Up    => { if r > 0 { self.cursor -= MS_COLS; self.dirty = true; } }
+            AK::Down  => { if r + 1 < MS_ROWS { self.cursor += MS_COLS; self.dirty = true; } }
+            AK::Left  => { if c > 0 { self.cursor -= 1; self.dirty = true; } }
+            AK::Right => { if c + 1 < MS_COLS { self.cursor += 1; self.dirty = true; } }
+            AK::Char(b'f') | AK::Char(b'F') => { let i = self.cursor; self.toggle_flag(i); }
+            AK::Char(b'\n') | AK::Char(b'\r') => {
+                if self.dead || self.won { self.reset(); } else { let i = self.cursor; self.reveal(i); }
+            }
+            AK::Char(b' ') => {
+                if self.dead || self.won { self.reset(); } else { let i = self.cursor; self.reveal(i); }
+            }
+            _ => {}
+        }
+    }
+
+    fn on_mouse(&mut self, mx: i32, my: i32, w: u32, h: u32, buttons: u8) {
+        if buttons & 0x03 == 0 { return; }
+        let board_h = h.saturating_sub(24);
+        let cell = core::cmp::min(w / MS_COLS as u32, board_h / MS_ROWS as u32).max(1) as i32;
+        let gw = cell * MS_COLS as i32;
+        let gh = cell * MS_ROWS as i32;
+        let ox = (w as i32 - gw) / 2;
+        let oy = 24 + (board_h as i32 - gh) / 2;
+        let lx = mx - ox;
+        let ly = my - oy;
+        if lx < 0 || ly < 0 || lx >= gw || ly >= gh { return; }
+        let c = (lx / cell) as usize;
+        let r = (ly / cell) as usize;
+        let i = Self::idx(c, r);
+        self.cursor = i;
+        if buttons & 0x02 != 0 {
+            self.toggle_flag(i);
+        } else if buttons & 0x01 != 0 {
+            if self.dead || self.won { self.reset(); } else { self.reveal(i); }
+        }
+    }
+
+    fn title(&self) -> &str { "Minesweeper" }
 }

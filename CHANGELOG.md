@@ -4,6 +4,34 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+### Added — Preinstalled games + 1080p bare-metal desktop (2026-05-28)
+
+- **Snake and Minesweeper** ship as native desktop apps (pure Rust, no_std, no
+  per-frame heap churn). Launchable from the dock icons and the start menu.
+  - New `App::tick(ticks) -> bool` hook drives animation (Snake); input-only
+    apps keep the default no-op. A tiny xorshift `Rng` (seeded from the PIT
+    tick) places food/mines.
+  - Snake: arrow keys / WASD, SPACE restarts, waits for first steer before
+    moving. Minesweeper: 12×10 / 18 mines, first click always safe, flood-fill
+    reveal, mouse (L reveal / R flag) and keyboard. Proof: `docs/snake-on-rusty-penguin.png`.
+
+- **Bare-metal desktop now boots at 1920×1080×32** (was capped at 800×600).
+  Three coordinated fixes:
+  - `boot.s`: the multiboot2 framebuffer request tag now asks for 1920×1080×32
+    (GRUB `gfxpayload` does *not* drive multiboot2 — width/height of 0 gave the
+    800×600×24 default).
+  - kernel relocates GRUB's initrd module to 40 MiB before loading the ring-3
+    desktop, so the desktop's in-place `.bss` zero-fill (now a 24 MiB heap)
+    can't clobber the module it's loaded from (was: `entry @ 0x0` + #PF).
+  - ring-3 stack moved to ~63 MiB (`vmm::USER_STACK_TOP`), out of the heap's
+    `.bss` region; desktop heap raised 8→24 MiB for the 8.3 MiB 1080p backbuffer.
+  - Proof: `docs/bare-metal-1080p-desktop.png`.
+
+- **Pointer acceleration** in the PS/2 mouse driver (2× baseline, 3× on fast
+  flicks) — raw 1-count-per-pixel felt half-speed, especially at high res.
+- **Whole "Menu" button is clickable** now, not just the icon glyph
+  (`dingir_hit` widened to the full 4..66 px button).
+
 ### Added — "It runs DOOM." (demoable milestone, 2026-05-28)
 
 - **DOOM live-boot entry**: a third GRUB menu entry, `Rusty Penguin -- DOOM

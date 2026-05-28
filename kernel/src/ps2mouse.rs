@@ -107,6 +107,11 @@ pub fn init() {
     }
 }
 
+/// Pointer acceleration curve. 2× baseline; 3× for fast flicks (|d| ≥ 6).
+fn accel(d: i32) -> i32 {
+    if d.abs() >= 6 { d * 3 } else { d * 2 }
+}
+
 /// Called from IRQ12 handler. Accumulates 3-byte packets and fires an
 /// input event when a complete packet is ready.
 pub fn handle_irq() {
@@ -139,8 +144,14 @@ pub fn handle_irq() {
             let y_neg = (flags & 0x20) != 0;
             let dx_u = PACKET[1] as i32;  // 0..255
             let dy_u = PACKET[2] as i32;  // 0..255
-            let dx = if x_neg { dx_u - 256 } else { dx_u };
-            let dy = -(if y_neg { dy_u - 256 } else { dy_u }); // PS/2 Y inverted vs screen
+            let raw_dx = if x_neg { dx_u - 256 } else { dx_u };
+            let raw_dy = -(if y_neg { dy_u - 256 } else { dy_u }); // PS/2 Y inverted vs screen
+            // Pointer acceleration. Raw PS/2 deltas map 1 count → 1 pixel, which
+            // feels sluggish (roughly half-speed) once the framebuffer is large /
+            // fullscreen. 2× baseline restores normal speed; a mild boost on fast
+            // flicks lets the cursor cross a 1080p screen without losing precision.
+            let dx = accel(raw_dx);
+            let dy = accel(raw_dy);
 
             let w = fb::width() as i32;
             let h = fb::height() as i32;

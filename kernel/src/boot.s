@@ -16,13 +16,16 @@ mb2_start:
     .long   mb2_end - mb2_start     /* header length */
     /* checksum: -(magic + arch + length) truncated to 32 bits */
     .long   -(0xE85250D6 + 0 + (mb2_end - mb2_start))
-    /* framebuffer request tag (type=5): ask GRUB for a linear framebuffer */
+    /* framebuffer request tag (type=5): ask GRUB for a linear framebuffer.
+     * Request a high resolution explicitly — leaving width/height 0 makes GRUB
+     * fall back to its default 800x600x24. GRUB matches the closest mode the
+     * firmware/GOP supports; flags=1 (optional) keeps us booting if it can't. */
     .align  8
     .short  5                       /* type */
     .short  1                       /* flags: 1 = optional (still boot if unsupported) */
     .long   20                      /* size: 20 bytes */
-    .long   0                       /* preferred width  (0 = GRUB decides) */
-    .long   0                       /* preferred height (0 = GRUB decides) */
+    .long   1920                    /* preferred width  */
+    .long   1080                    /* preferred height */
     .long   32                      /* preferred bpp */
 
     /* end tag */

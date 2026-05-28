@@ -4,7 +4,13 @@
 use core::alloc::{GlobalAlloc, Layout};
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-const HEAP_BYTES: usize = 8 * 1024 * 1024; // 8 MiB
+// 24 MiB — large enough for a 1920×1080×32 backbuffer (~8.3 MiB) plus the
+// terminals/windows working set. Two kernel-side changes make this safe:
+//   1. the ring-3 stack was moved high (vmm::USER_STACK_TOP ≈ 63 MiB), out of
+//      this heap's .bss region;
+//   2. the kernel relocates GRUB's initrd module to a high address before
+//      loading this ELF, so the in-place .bss zero-fill can't clobber it.
+const HEAP_BYTES: usize = 24 * 1024 * 1024;
 
 pub struct BumpAllocator {
     next: AtomicUsize,

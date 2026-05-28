@@ -6,8 +6,13 @@ pub const PTE_HUGE:     u64 = 1 << 7;  // in PD: 2MB page
 
 // User-space virtual addresses for the ring-3 demo
 pub const USER_CODE_VIRT: u64 = 0x0040_1000;
-pub const USER_STACK_TOP: u64 = 0x0080_2000;  // stack grows down from here
-pub const USER_STACK_PAGES: usize = 4;         // 4 × 4KiB = 16 KiB
+// Stack grows down from here. Placed high in the identity-mapped 0–64 MiB
+// region, ABOVE the ring-3 program's .bss/heap (which starts at 0x400000 and,
+// with a multi-MiB heap + high-res backbuffer, can extend well past 8 MiB).
+// The old value (0x802000) sat *inside* the heap region and corrupted once a
+// large framebuffer backbuffer was allocated — that was the high-res crash.
+pub const USER_STACK_TOP: u64 = 0x03F0_0000;  // ~63 MiB, above heap, below 64 MiB map
+pub const USER_STACK_PAGES: usize = 16;        // 16 × 4KiB = 64 KiB
 
 fn cr3() -> u64 {
     let v: u64;

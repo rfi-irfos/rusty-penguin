@@ -132,14 +132,25 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
     vmm::extend_identity_map(64);  // identity-map 0–64 MiB
     vga::write_str("  [VMM] identity map extended to 64 MiB\n", vga::Color::Green);
 
-    // Parse initramfs CPIO from GRUB module (Multiboot2 tag type=3)
+    // Parse initramfs CPIO from GRUB module (Multiboot2 tag type=3).
+    //
+    // Relocate it to a fixed high address first. The ring-3 desktop is loaded at
+    // 0x400000 and the ELF loader zero-fills its .bss (the 24 MiB heap) IN PLACE,
+    // covering roughly 0x400000..0x1C00000 (~28 MiB). GRUB may park the initrd
+    // inside that range, so loading the desktop ELF would zero out the very
+    // module we read it from (seen as `entry @ 0x0` + #PF). Copying the module
+    // up to 40 MiB — above the heap, below the 63 MiB ring-3 stack, inside the
+    // 64 MiB identity map — keeps the source intact across the .bss wipe.
+    const INITRD_RELOC: usize = 0x0280_0000; // 40 MiB
     if let Some((mod_start, mod_end)) = unsafe { parse_mb2_module(mb2) } {
         let size = (mod_end - mod_start) as usize;
-        ramfs::init(mod_start as *const u8, size);
+        // ptr::copy has memmove semantics, so source/dest overlap is safe.
+        unsafe { core::ptr::copy(mod_start as *const u8, INITRD_RELOC as *mut u8, size); }
+        ramfs::init(INITRD_RELOC as *const u8, size);
         let count = ramfs::inode_count();
         vga::write_str("  [ramfs] ", vga::Color::Green);
         vga::write_i32(count as i32);
-        vga::write_str(" files loaded\n", vga::Color::Green);
+        vga::write_str(" files loaded (initrd relocated to 40 MiB)\n", vga::Color::Green);
     } else {
         vga::write_str("  [ramfs] no module — VFS unavailable\n", vga::Color::Amber);
     }
