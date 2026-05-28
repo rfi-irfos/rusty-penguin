@@ -50,10 +50,11 @@ fn run_shell() {
 
         match cmd {
             "exit" | "quit" => break,
-            "help" => println!("Commands: desktop, ls, pwd, cd, exit"),
+            "help" => println!("Commands: desktop, ps, ls, pwd, cd, exit"),
             "desktop" => {
                 let _ = Command::new("desktop").status();
             }
+            "ps" => print_ternary_ps(),
             _ => {
                 let parts: Vec<&str> = cmd.split_whitespace().collect();
                 if !parts.is_empty() {
@@ -63,5 +64,23 @@ fn run_shell() {
                 }
             }
         }
+    }
+}
+
+/// Built-in `ps` that surfaces the scheduler crate's ternary process states.
+/// Reads /proc, annotates each process as Active/Dormant/Suppressed using
+/// the same heuristic the doctrine maps to +1/0/-1.
+fn print_ternary_ps() {
+    use scheduler::ProcessController;
+    let mut procs = ProcessController::list_processes();
+    // Show only those with a name and resident memory > 0 first for readability.
+    procs.sort_by_key(|p| (-(p.vmrss_kb as i64), p.pid));
+
+    println!("  PID  ST  NAME             VmRSS (KiB)");
+    println!("  ---  --  ---------------- -----------");
+    for p in procs.iter().take(40) {
+        let name = if p.name.len() > 16 { &p.name[..16] } else { &p.name };
+        println!("  {:>3}  {}  {:<16} {:>11}",
+                 p.pid, p.state.symbol(), name, p.vmrss_kb);
     }
 }

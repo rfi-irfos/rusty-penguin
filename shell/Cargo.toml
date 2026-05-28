@@ -10,3 +10,4 @@ name = "shell"
 path = "src/main.rs"
 
 [dependencies]
+scheduler = { path = "../scheduler" }

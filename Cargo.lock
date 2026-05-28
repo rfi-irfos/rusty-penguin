@@ -108,6 +108,9 @@ dependencies = [
 [[package]]
 name = "shell"
 version = "0.1.0"
+dependencies = [
+ "scheduler",
+]
 
 [[package]]
 name = "syn"
