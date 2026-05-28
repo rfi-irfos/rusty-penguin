@@ -4,6 +4,18 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+### Added — Package repository + dependency resolution (2026-05-28)
+
+- `rpm update <url>` caches a repo **index in `.tern` format** (ternary-native):
+  `@pkg <name> <version> <url> [dep …]`. `rpm install <name>` then resolves the
+  transitive dependency closure (topological order, cycle-detected,
+  skips already-installed) and installs each over HTTP via busybox wget.
+- `install` now distinguishes a repo **name** (resolve from index) from a local
+  `.rpkg` path or an `http(s)` URL (install directly).
+- Dependency resolver unit-tested: topological ordering, shared-dep dedup,
+  skip-installed, missing-dependency error, cycle detection (7 tests pass).
+- Closes the "package manager + real repo + dependency resolution" gap.
+
 ### Added — Ternary CSS engine (brick 1) + browser strategy (2026-05-28)
 
 - New `desktop-metal/src/css.rs`: a pure-Rust, no_std **CSS-subset styling

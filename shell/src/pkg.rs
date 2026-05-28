@@ -34,6 +34,123 @@ fn fetch_remote(url: &str) -> Result<String, String> {
     Ok(dest)
 }
 
+// ── Package repository + dependency resolution ───────────────────────────────
+// The repo index is a `.tern` document (ternary-native format):
+//   @pkg <name> <version> <url> [dep ...]
+// `rpm update <url>` caches it; `rpm install <name>` resolves the transitive
+// dependency closure (topological order, cycle-detected) and installs each.
+
+const REPO_CACHE: &str = "/opt/rusty-penguin/repo.tern";
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RepoPkg {
+    pub name: String,
+    pub version: String,
+    pub url: String,
+    pub deps: Vec<String>,
+}
+
+pub struct RepoIndex {
+    pub pkgs: Vec<RepoPkg>,
+}
+
+impl RepoIndex {
+    /// Parse a `.tern` repo index. `#` comments and blank lines ignored.
+    pub fn parse(text: &str) -> Self {
+        let mut pkgs = Vec::new();
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') { continue; }
+            let mut it = line.split_whitespace();
+            if it.next() != Some("@pkg") { continue; }
+            let name = match it.next() { Some(n) => n.to_string(), None => continue };
+            let version = it.next().unwrap_or("0").to_string();
+            let url = match it.next() { Some(u) => u.to_string(), None => continue };
+            let deps = it.map(|s| s.to_string()).collect();
+            pkgs.push(RepoPkg { name, version, url, deps });
+        }
+        RepoIndex { pkgs }
+    }
+
+    pub fn get(&self, name: &str) -> Option<&RepoPkg> {
+        self.pkgs.iter().find(|p| p.name == name)
+    }
+
+    /// Resolve the install order for `name` + transitive deps, skipping anything
+    /// already installed. Dependency-first (topological) order; errors on a
+    /// missing package or a dependency cycle.
+    pub fn resolve(&self, name: &str, is_installed: &dyn Fn(&str) -> bool)
+        -> Result<Vec<String>, String>
+    {
+        let mut order = Vec::new();
+        let mut visiting: Vec<String> = Vec::new();
+        self.visit(name, is_installed, &mut order, &mut visiting)?;
+        Ok(order)
+    }
+
+    fn visit(&self, name: &str, is_installed: &dyn Fn(&str) -> bool,
+             order: &mut Vec<String>, visiting: &mut Vec<String>) -> Result<(), String> {
+        if order.iter().any(|n| n == name) { return Ok(()); }   // already resolved
+        if is_installed(name) { return Ok(()); }                // present — skip
+        if visiting.iter().any(|n| n == name) {
+            return Err(format!("dependency cycle involving '{}'", name));
+        }
+        let pkg = self.get(name)
+            .ok_or_else(|| format!("package not found in repo: '{}'", name))?;
+        visiting.push(name.to_string());
+        for dep in &pkg.deps {
+            self.visit(dep, is_installed, order, visiting)?;
+        }
+        visiting.pop();
+        order.push(name.to_string());
+        Ok(())
+    }
+}
+
+/// Is a package already installed (dir `<name>` or `<name>-<version>` in PKG_DIR)?
+fn is_installed(name: &str) -> bool {
+    if let Ok(rd) = fs::read_dir(PKG_DIR) {
+        let prefix = format!("{}-", name);
+        for e in rd.flatten() {
+            let n = e.file_name().to_string_lossy().into_owned();
+            if n == name || n.starts_with(&prefix) { return true; }
+        }
+    }
+    false
+}
+
+/// `rpm update <url>` — cache the repo index.
+pub fn update_repo(url: &str) -> Result<String, String> {
+    fs::create_dir_all(PKG_DIR).map_err(|e| e.to_string())?;
+    let status = std::process::Command::new("/bin/busybox")
+        .args(["wget", "-q", "-O", REPO_CACHE, url])
+        .status()
+        .map_err(|e| format!("could not run wget: {}", e))?;
+    if !status.success() {
+        return Err(format!("repo update failed: {}", url));
+    }
+    let text = fs::read_to_string(REPO_CACHE).map_err(|e| e.to_string())?;
+    Ok(format!("repo updated: {} package(s) available", RepoIndex::parse(&text).pkgs.len()))
+}
+
+/// `rpm install <name>` — resolve deps from the cached repo and install all.
+pub fn install_by_name(name: &str) -> Result<String, String> {
+    let text = fs::read_to_string(REPO_CACHE)
+        .map_err(|_| "no repo index — run `rpm update <url>` first".to_string())?;
+    let idx = RepoIndex::parse(&text);
+    let order = idx.resolve(name, &|n| is_installed(n))?;
+    if order.is_empty() {
+        return Ok(format!("{} is already installed", name));
+    }
+    let mut log = String::new();
+    for n in &order {
+        let pkg = idx.get(n).ok_or_else(|| format!("package not found: {}", n))?;
+        log.push_str(&PackageManager::install(&pkg.url)?);
+        log.push('\n');
+    }
+    Ok(format!("installed {} (+{} dep(s)):\n{}", name, order.len().saturating_sub(1), log))
+}
+
 pub struct PackageManager;
 
 impl PackageManager {
@@ -179,9 +296,19 @@ impl PackageManager {
 pub fn cmd_rpm(args: &[&str]) -> Result<String, String> {
     match args.get(0).map(|s| *s) {
         Some("install") => {
-            let pkg_path = args.get(1)
-                .ok_or("Usage: rpm install <package.rpkg | http(s)://…/package.rpkg>")?;
-            PackageManager::install(pkg_path)
+            let arg = args.get(1)
+                .ok_or("Usage: rpm install <name | package.rpkg | http(s)://…/package.rpkg>")?;
+            // A path/URL/.rpkg installs directly; a bare name resolves from the
+            // repo index (with its dependencies).
+            if is_url(arg) || arg.ends_with(".rpkg") || Path::new(arg).exists() {
+                PackageManager::install(arg)
+            } else {
+                install_by_name(arg)
+            }
+        }
+        Some("update") => {
+            let url = args.get(1).ok_or("Usage: rpm update <index-url>")?;
+            update_repo(url)
         }
         Some("list") => PackageManager::list(),
         Some("info") => {
@@ -197,8 +324,9 @@ pub fn cmd_rpm(args: &[&str]) -> Result<String, String> {
             PackageManager::search(query)
         }
         _ => {
-            Err("Usage: rpm [install|list|info|remove|search] [args...]\n\
-                 install accepts a local .rpkg or an http(s) URL".to_string())
+            Err("Usage: rpm [install|update|list|info|remove|search] [args...]\n\
+                 install accepts a repo name, a local .rpkg, or an http(s) URL;\n\
+                 update <url> refreshes the package index".to_string())
         }
     }
 }
@@ -221,5 +349,63 @@ mod tests {
         assert!(!is_url("/tmp/foo.rpkg"));
         assert!(!is_url("foo.rpkg"));
         assert!(!is_url("ftp://x/foo.rpkg"));
+    }
+
+    const SAMPLE: &str = "\
+        # rusty-penguin repo index (.tern)\n\
+        @pkg app     1.0 http://r/app-1.0.rpkg lib gui\n\
+        @pkg lib     2.1 http://r/lib-2.1.rpkg core\n\
+        @pkg gui     0.9 http://r/gui-0.9.rpkg core\n\
+        @pkg core    3.0 http://r/core-3.0.rpkg\n";
+
+    fn none(_: &str) -> bool { false }
+
+    #[test]
+    fn test_index_parse() {
+        let idx = RepoIndex::parse(SAMPLE);
+        assert_eq!(idx.pkgs.len(), 4);
+        let app = idx.get("app").unwrap();
+        assert_eq!(app.version, "1.0");
+        assert_eq!(app.url, "http://r/app-1.0.rpkg");
+        assert_eq!(app.deps, vec!["lib".to_string(), "gui".to_string()]);
+        assert!(idx.get("nope").is_none());
+    }
+
+    #[test]
+    fn test_resolve_topological() {
+        let idx = RepoIndex::parse(SAMPLE);
+        let order = idx.resolve("app", &none).unwrap();
+        // deps must precede dependents
+        let pos = |n: &str| order.iter().position(|x| x == n).unwrap();
+        assert!(pos("core") < pos("lib"));
+        assert!(pos("core") < pos("gui"));
+        assert!(pos("lib") < pos("app"));
+        assert!(pos("gui") < pos("app"));
+        assert_eq!(*order.last().unwrap(), "app");
+        // core appears exactly once despite being a shared dep
+        assert_eq!(order.iter().filter(|n| *n == "core").count(), 1);
+    }
+
+    #[test]
+    fn test_resolve_skips_installed() {
+        let idx = RepoIndex::parse(SAMPLE);
+        let order = idx.resolve("app", &|n| n == "lib" || n == "core").unwrap();
+        assert!(!order.contains(&"lib".to_string()));
+        assert!(!order.contains(&"core".to_string()));
+        assert!(order.contains(&"gui".to_string()));
+        assert!(order.contains(&"app".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_missing_dep() {
+        let idx = RepoIndex::parse("@pkg a 1.0 http://r/a.rpkg ghost\n");
+        assert!(idx.resolve("a", &none).unwrap_err().contains("not found"));
+    }
+
+    #[test]
+    fn test_resolve_cycle() {
+        let idx = RepoIndex::parse(
+            "@pkg a 1 http://r/a.rpkg b\n@pkg b 1 http://r/b.rpkg a\n");
+        assert!(idx.resolve("a", &none).unwrap_err().contains("cycle"));
     }
 }
