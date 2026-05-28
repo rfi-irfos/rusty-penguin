@@ -310,15 +310,46 @@ impl Settings {
     }
 
     fn load_from_disk(&mut self) {
-        // Try to load from ~/.config/rusty-penguin/settings.toml
-        // For now, use defaults; on Linux track this will read from real filesystem
+        // Try to load from ~/.config/rusty-penguin/settings.ini
+        // Format: key=value pairs, one per line
+        // For now, use defaults; on Linux track this would read from real filesystem
         // On bare-metal ramfs, this is still valid but won't persist across reboots
+
+        // Example config file content:
+        // theme=dark
+        // window_snap=true
+        // taskbar_bottom=true
+        // auto_save_enabled=true
+        // auto_save_interval=30
+
+        // In a full implementation, this would:
+        // 1. Call sys_open("home/.config/rusty-penguin/settings.ini", ...)
+        // 2. Call sys_read to get file contents
+        // 3. Parse key=value pairs
+        // 4. Update self fields
     }
 
     fn save_to_disk(&self) {
-        // Save settings to ~/.config/rusty-penguin/settings.toml
-        // On Linux track: writes to real filesystem
-        // On bare-metal: writes to ramfs (ephemeral)
+        // Save settings to ~/.config/rusty-penguin/settings.ini
+        // Format: key=value pairs, one per line
+
+        let config = alloc::format!(
+            "theme={}\nwindow_snap={}\ntaskbar_bottom={}\nauto_save_enabled={}\nauto_save_interval={}\n",
+            if self.theme { "dark" } else { "light" },
+            self.window_snap,
+            self.taskbar_bottom,
+            self.auto_save_enabled,
+            self.auto_save_interval
+        );
+
+        // In a full implementation, this would:
+        // 1. Create ~/.config/rusty-penguin/ directory if needed
+        // 2. Call sys_open with O_CREAT | O_WRONLY | O_TRUNC flags
+        // 3. Call sys_write with the config string
+        // 4. Call sys_close
+
+        // For now, this is a placeholder that shows the structure
+        let _ = config; // Suppress unused warning
     }
 
     fn toggle_selected(&mut self) {
