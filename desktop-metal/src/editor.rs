@@ -126,11 +126,16 @@ impl TextEditor {
             fb.draw_str(ox + MARGIN_L, y + MARGIN_T, line, color, 0x1A1A24);
         }
 
+        // Draw cursor with bounds checking
         let cy = oy + ((self.cursor_line - self.scroll_line) as u32 * LINE_H) + MARGIN_T;
         let cx = ox + MARGIN_L + (self.cursor_col as u32 * CHAR_W);
-        for row in 0..LINE_H.min(h) {
-            if cy + row < oy + h {
-                fb.set_pixel(cx, cy + row, 0xF5F5F7);
+
+        // Only draw cursor if it's within window bounds
+        if cx >= ox && cx < ox + w && cy >= oy && cy + LINE_H <= oy + h {
+            for row in 0..LINE_H.min(h) {
+                if cy + row < oy + h {
+                    fb.set_pixel(cx, cy + row, 0xF5F5F7);
+                }
             }
         }
     }
