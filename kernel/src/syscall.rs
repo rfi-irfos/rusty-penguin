@@ -261,6 +261,64 @@ pub extern "C" fn syscall_handler(nr: u64, arg1: u64, arg2: u64, arg3: u64) -> u
             let max = (arg2 as usize).min(16);
             crate::sched::fill_ps(arg1 as *mut u8, max) as u64
         }
+        14 => {
+            // sys_listdir(path_ptr, path_len, out_buf, max_entries)
+            // Lists files in directory. Output format: [name_len][name][size (u64)]...
+            let path_ptr = arg1 as *const u8;
+            let path_len = (arg2 as usize).min(256);
+            let out_buf = arg3 as *mut u8;
+
+            let path = unsafe { core::slice::from_raw_parts(path_ptr, path_len) };
+            let path = if path.starts_with(b"/") { &path[1..] } else { path };
+
+            let mut out_off = 0usize;
+            let mut count = 0u64;
+
+            unsafe {
+                for i in 0..crate::ramfs::inode_count() {
+                    if let Some(ino) = crate::ramfs::inode(i) {
+                        let name = &ino.name[..ino.name_len];
+                        let stored = if name.starts_with(b"./") { &name[2..] } else { name };
+
+                        let in_dir = if path.is_empty() {
+                            !stored.contains(&b'/')
+                        } else {
+                            stored.starts_with(path) &&
+                            stored.get(path.len()) == Some(&b'/') &&
+                            !stored[path.len() + 1..].contains(&b'/')
+                        };
+
+                        if in_dir {
+                            let filename = if path.is_empty() {
+                                stored
+                            } else {
+                                &stored[path.len() + 1..]
+                            };
+
+                            let name_len = filename.len().min(255) as u8;
+                            if out_off + 1 + name_len as usize + 8 <= 4096 {
+                                *out_buf.add(out_off) = name_len;
+                                out_off += 1;
+
+                                core::ptr::copy_nonoverlapping(
+                                    filename.as_ptr(),
+                                    out_buf.add(out_off),
+                                    name_len as usize
+                                );
+                                out_off += name_len as usize;
+
+                                let size_ptr = out_buf.add(out_off) as *mut u64;
+                                size_ptr.write_unaligned(ino.size as u64);
+                                out_off += 8;
+
+                                count += 1;
+                            }
+                        }
+                    }
+                }
+            }
+            count
+        }
         24 => {
             // sys_yield — cooperative yield (no-op: single process)
             crate::sched::yield_();

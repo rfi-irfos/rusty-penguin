@@ -3,6 +3,7 @@
 
 use crate::fb::Framebuffer;
 use alloc::string::String;
+use alloc::vec::Vec;
 
 pub trait App {
     /// Render the app's content into the given framebuffer region
@@ -23,52 +24,153 @@ pub trait App {
     fn title(&self) -> &str;
 }
 
+struct FileEntry {
+    name: String,
+    size: u64,
+}
+
 /// File manager application
 pub struct FileManager {
     cwd: String,
+    entries: Vec<FileEntry>,
+    selected: usize,
     pub dirty: bool,
     pub wants_close: bool,
 }
 
+unsafe fn sys_listdir(path: &[u8], buf: &mut [u8]) -> u64 {
+    let mut result: u64;
+    core::arch::asm!(
+        "syscall",
+        in("rax") 14,
+        in("rdi") path.as_ptr() as u64,
+        in("rsi") path.len() as u64,
+        in("rdx") buf.as_mut_ptr() as u64,
+        in("rcx") 0u64,
+        lateout("rax") result,
+        clobber_abi("C"),
+    );
+    result
+}
+
 impl FileManager {
     pub fn new() -> Self {
-        FileManager {
+        let mut fm = FileManager {
             cwd: String::from("/"),
+            entries: Vec::new(),
+            selected: 0,
             dirty: true,
             wants_close: false,
+        };
+        fm.refresh();
+        fm
+    }
+
+    fn refresh(&mut self) {
+        self.entries.clear();
+        self.selected = 0;
+
+        let mut buf = [0u8; 4096];
+        let count = unsafe { sys_listdir(self.cwd.as_bytes(), &mut buf) };
+
+        let mut off = 0usize;
+        for _ in 0..count {
+            if off >= buf.len() { break; }
+
+            let name_len = buf[off] as usize;
+            off += 1;
+
+            if off + name_len > buf.len() { break; }
+            let name_bytes = &buf[off..off + name_len];
+            let name = String::from_utf8_lossy(name_bytes).into_owned();
+            off += name_len;
+
+            if off + 8 > buf.len() { break; }
+            let size_bytes = &buf[off..off + 8];
+            let size = u64::from_le_bytes([
+                size_bytes[0], size_bytes[1], size_bytes[2], size_bytes[3],
+                size_bytes[4], size_bytes[5], size_bytes[6], size_bytes[7],
+            ]);
+            off += 8;
+
+            self.entries.push(FileEntry { name, size });
+        }
+    }
+
+    fn nav_up(&mut self) {
+        if self.selected > 0 {
+            self.selected -= 1;
+            self.dirty = true;
+        }
+    }
+
+    fn nav_down(&mut self) {
+        if self.selected < self.entries.len().saturating_sub(1) {
+            self.selected += 1;
+            self.dirty = true;
         }
     }
 }
 
 impl App for FileManager {
     fn render(&mut self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, h: u32) {
-        // Draw file list header
-        fb.fill_rect(x, y, w, 20, 0x2C2C38);
-        fb.draw_str(x + 8, y + 6, "Name", 0xB8B8B8, 0x2C2C38);
-        fb.draw_str(x + 200, y + 6, "Size", 0xB8B8B8, 0x2C2C38);
+        // Draw header with current directory
+        fb.fill_rect(x, y, w, 24, 0x2C2C38);
+        let title = alloc::format!("  {}", self.cwd);
+        fb.draw_str(x + 8, y + 7, &title, 0xF5F5F7, 0x2C2C38);
 
-        // Draw divider
-        fb.fill_rect(x, y + 20, w, 1, 0x3C3C48);
+        // Draw column headers
+        fb.fill_rect(x, y + 24, w, 18, 0x3C3C48);
+        fb.draw_str(x + 8, y + 29, "Name", 0xB8B8B8, 0x3C3C48);
+        fb.draw_str(x + 300, y + 29, "Size", 0xB8B8B8, 0x3C3C48);
 
-        // Draw file entries (placeholder)
-        let files = ["readme.txt", "motd.txt", "QUICKSTART.txt", "demo.psh"];
-        for (i, filename) in files.iter().enumerate() {
-            let file_y = y + 24 + (i as u32 * 18);
+        // Draw file entries
+        for (i, entry) in self.entries.iter().enumerate() {
+            let file_y = y + 42 + (i as u32 * 18);
             if file_y + 18 > y + h { break; }
 
-            // Alternate row colors for readability
-            if i % 2 == 0 {
-                fb.fill_rect(x, file_y, w, 18, 0x1A1A24);
-            }
+            // Highlight selected entry
+            let bg_color = if i == self.selected { 0x4A5568 } else if i % 2 == 0 { 0x1A1A24 } else { 0x232333 };
+            fb.fill_rect(x, file_y, w, 18, bg_color);
 
-            fb.draw_str(x + 8, file_y + 5, filename, 0xB8B8B8, 0x1A1A24);
+            let text_color = if i == self.selected { 0xF5F5F7 } else { 0xB8B8B8 };
+            fb.draw_str(x + 8, file_y + 4, &entry.name, text_color, bg_color);
+
+            let size_str = alloc::format!("{}", entry.size);
+            fb.draw_str(x + 300, file_y + 4, &size_str, text_color, bg_color);
         }
 
         self.dirty = false;
     }
 
-    fn on_key(&mut self, _key: u8) {
-        // File manager keyboard handling
+    fn on_key(&mut self, key: u8) {
+        match key {
+            0x48 => self.nav_up(),      // Up arrow
+            0x50 => self.nav_down(),    // Down arrow
+            0x1C => {                   // Enter
+                if self.selected < self.entries.len() {
+                    let entry = &self.entries[self.selected];
+                    let sep = if self.cwd.ends_with('/') { "" } else { "/" };
+                    self.cwd = alloc::format!("{}{}{}", self.cwd, sep, entry.name);
+                    self.refresh();
+                    self.dirty = true;
+                }
+            }
+            0x0E => {                   // Backspace - go up directory
+                if self.cwd != "/" {
+                    if let Some(pos) = self.cwd.rfind('/') {
+                        if pos == 0 {
+                            self.cwd = String::from("/");
+                        } else {
+                            self.cwd.truncate(pos);
+                        }
+                        self.refresh();
+                        self.dirty = true;
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 
     fn title(&self) -> &str {
