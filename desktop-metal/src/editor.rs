@@ -113,6 +113,22 @@ impl TextEditor {
         }
     }
 
+    /// Position the cursor at the click point. `(x, y)` are content-relative.
+    pub fn on_mouse(&mut self, x: i32, y: i32, buttons: u8) {
+        if buttons & 0x01 == 0 { return; }
+        let lx = x - MARGIN_L as i32;
+        let ly = y - MARGIN_T as i32;
+        if ly < 0 { return; }
+        let row = (ly as u32 / LINE_H) as usize;
+        let line_idx = self.scroll_line + row;
+        if line_idx >= self.lines.len() { return; }
+        let col_pixels = lx.max(0) as u32;
+        let mut col = (col_pixels / CHAR_W) as usize;
+        col = col.min(self.lines[line_idx].len());
+        self.cursor_line = line_idx;
+        self.cursor_col = col;
+    }
+
     pub fn render(&mut self, fb: &mut Framebuffer, ox: u32, oy: u32, w: u32, h: u32) {
         let max_lines = (h / LINE_H) as usize;
 

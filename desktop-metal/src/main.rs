@@ -1167,6 +1167,17 @@ pub extern "C" fn _start() -> ! {
                             app.on_mouse(lx, ly, cw, ch, btn);
                             tw.win_dirty = true;
                         }
+                    } else if let Some(ed) = &mut tw.editor {
+                        // Click inside editor content — position the cursor.
+                        let (ox, oy) = wm::content_origin(&tw.win);
+                        let cw = (tw.win.w - 2).max(0) as u32;
+                        let ch = (tw.win.h - 3 - wm::TITLEBAR_H).max(0) as u32;
+                        let lx = cx - ox;
+                        let ly = cy - oy;
+                        if lx >= 0 && ly >= 0 && (lx as u32) < cw && (ly as u32) < ch {
+                            ed.on_mouse(lx, ly, btn);
+                            tw.win_dirty = true;
+                        }
                     }
                 } else {
                     if show_desktop_hit(fb.width, fb.height, cx, cy) {
