@@ -1031,8 +1031,19 @@ pub extern "C" fn _start() -> ! {
         scene_dirty = true;
     }
 
+    let mut last_loop_tick: u64 = sys_ticks();
+
     loop {
-        sys_yield();
+        // Cap the loop to one iteration per PIT tick (~100 Hz). Without this,
+        // sys_yield on a single-process kernel returns immediately and the
+        // loop spins as fast as the CPU allows — ~100k+ frames/sec with no
+        // visible benefit, since the display can't show that and the user
+        // can't react that fast. Doctrine: sparse execution, no busy loops.
+        loop {
+            sys_yield();
+            let now = sys_ticks();
+            if now != last_loop_tick { last_loop_tick = now; break; }
+        }
 
         let keys = input::poll(&mut mouse, w, h);
         let btn = mouse.buttons;
