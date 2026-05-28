@@ -1103,10 +1103,10 @@ impl Terminal {
 
         let matches: Vec<String> = if is_cmd {
             const CMDS: &[&str] = &[
-                "ai","alias","bc","calc","cat","cd","clear","cp","date","df","echo","env","exit",
-                "find","free","grep","head","help","hexdump","history","kinstall","kmanager","kver",
+                "ai","alias","bc","calc","cat","cd","clear","cp","date","df","du","echo","env","exit",
+                "file","find","free","grep","head","help","hexdump","history","kinstall","kmanager","kver",
                 "ls","lscpu","mem","mkdir","mv","nano","neofetch","printf","printenv","ps","psh",
-                "pwd","rev","rm","seq","sort","sysinfo","tail","touch","trit","uname",
+                "pwd","rev","rm","seq","sort","stat","sysinfo","tail","touch","trit","uname",
                 "unalias","uniq","uptime","vi","wc","which","whoami","xxd",
             ];
             CMDS.iter().filter(|&&c| c.starts_with(prefix)).map(|&c| String::from(c)).collect()
@@ -1390,7 +1390,7 @@ impl Terminal {
         if line == b"help" {
             self.write_output(b"\x1b[36mFiles:\x1b[0m\r\n");
             self.write_output(b"  ls  cat  nano  touch  rm  cp  mv  mkdir\r\n");
-            self.write_output(b"  wc  head  tail  find  xxd  rev\r\n");
+            self.write_output(b"  wc  head  tail  find  xxd  rev  stat  file  du\r\n");
             self.write_output(b"\x1b[36mText filters (pipe-aware):\x1b[0m\r\n");
             self.write_output(b"  grep <pat> [f]   sort [f]   uniq [f]\r\n");
             self.write_output(b"\x1b[36mPipes & redirect:\x1b[0m\r\n");
@@ -1400,7 +1400,7 @@ impl Terminal {
             self.write_output(b"  seq [s] e [step]   generate number sequence\r\n");
             self.write_output(b"  calc <expr>        arithmetic (+ - * / % ())\r\n");
             self.write_output(b"\x1b[36mSystem:\x1b[0m\r\n");
-            self.write_output(b"  ps  mem  free  df  lscpu  sysinfo\r\n");
+            self.write_output(b"  ps  mem  free  df  du  lscpu  sysinfo\r\n");
             self.write_output(b"  uname  whoami  uptime  date\r\n");
             self.write_output(b"  env  history  which <cmd>\r\n");
             self.write_output(b"  alias [name[=val]]   list or set command aliases\r\n");
@@ -1538,6 +1538,71 @@ impl Terminal {
             } else if !vfs::vfs().rename(src, dst) {
                 let s = format!("\x1b[31mmv: {}: no such file\x1b[0m\r\n", src);
                 self.write_output(s.as_bytes());
+            }
+
+        } else if line.starts_with(b"stat ") {
+            let fname = arg(5);
+            if fname.is_empty() {
+                self.write_output(b"usage: stat <filename>\r\n");
+            } else {
+                let entries = vfs::vfs().list();
+                if let Some(e) = entries.iter().find(|ent| ent.name == fname) {
+                    let s = format!("  File: {}\r\n", e.name);
+                    self.write_output(s.as_bytes());
+                    let s = format!("  Size: {} bytes\r\n", e.data.len());
+                    self.write_output(s.as_bytes());
+                    let s = format!("  Type: {}\r\n", if e.is_dir { "directory" } else { "regular file" });
+                    self.write_output(s.as_bytes());
+                } else {
+                    let s = format!("\x1b[31mstat: {}: no such file\x1b[0m\r\n", fname);
+                    self.write_output(s.as_bytes());
+                }
+            }
+
+        } else if line.starts_with(b"file ") {
+            let fname = arg(5);
+            if fname.is_empty() {
+                self.write_output(b"usage: file <filename>\r\n");
+            } else {
+                let entries = vfs::vfs().list();
+                if let Some(e) = entries.iter().find(|ent| ent.name == fname) {
+                    let ftype = if e.is_dir {
+                        String::from("directory")
+                    } else if fname.ends_with(".txt") {
+                        String::from("ASCII text")
+                    } else if fname.ends_with(".psh") {
+                        String::from("psh script")
+                    } else {
+                        String::from("data")
+                    };
+                    let s = format!("{}: {}\r\n", fname, ftype);
+                    self.write_output(s.as_bytes());
+                } else {
+                    let s = format!("\x1b[31mfile: {}: no such file\x1b[0m\r\n", fname);
+                    self.write_output(s.as_bytes());
+                }
+            }
+
+        } else if line.starts_with(b"du ") {
+            let fname = arg(3);
+            if fname.is_empty() {
+                let entries = vfs::vfs().list();
+                let mut total = 0u64;
+                for e in entries {
+                    total += e.data.len() as u64;
+                }
+                let s = format!("{}K\t.\r\n", (total + 1023) / 1024);
+                self.write_output(s.as_bytes());
+            } else {
+                let entries = vfs::vfs().list();
+                if let Some(e) = entries.iter().find(|ent| ent.name == fname) {
+                    let kb = (e.data.len() as u64 + 1023) / 1024;
+                    let s = format!("{}K\t{}\r\n", kb, fname);
+                    self.write_output(s.as_bytes());
+                } else {
+                    let s = format!("\x1b[31mdu: {}: no such file\x1b[0m\r\n", fname);
+                    self.write_output(s.as_bytes());
+                }
             }
 
         } else if line == b"wc" || line.starts_with(b"wc ") {
@@ -2111,8 +2176,8 @@ impl Terminal {
                 "ls","cat","nano","vi","edit","touch","rm","mkdir","cp","mv",
                 "wc","head","tail","grep","sort","uniq","find","xxd","hexdump",
                 "history","env","printenv","which","set","export","unset",
-                "ps","mem","free","df","lscpu","sysinfo","neofetch",
-                "uname","whoami","uptime","date","trit","ai",
+                "ps","mem","free","df","du","lscpu","sysinfo","neofetch",
+                "uname","whoami","uptime","date","trit","ai","stat","file",
                 "echo","clear","pwd","cd","exit","kver","kinstall","kmanager",
                 "psh","seq","bc","calc","rev","alias","printf","unalias",
             ];
