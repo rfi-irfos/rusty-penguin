@@ -34,6 +34,7 @@ pub struct FileManager {
     cwd: String,
     entries: Vec<FileEntry>,
     selected: usize,
+    clipboard: Option<String>,
     pub dirty: bool,
     pub wants_close: bool,
 }
@@ -59,11 +60,29 @@ impl FileManager {
             cwd: String::from("/"),
             entries: Vec::new(),
             selected: 0,
+            clipboard: None,
             dirty: true,
             wants_close: false,
         };
         fm.refresh();
         fm
+    }
+
+    fn copy_selected(&mut self) {
+        if self.selected < self.entries.len() {
+            let entry = &self.entries[self.selected];
+            let sep = if self.cwd.ends_with('/') { "" } else { "/" };
+            self.clipboard = Some(alloc::format!("{}{}{}", self.cwd, sep, entry.name));
+            self.dirty = true;
+        }
+    }
+
+    fn delete_selected(&mut self) {
+        if self.selected < self.entries.len() {
+            // Placeholder: actual delete would need kernel syscall
+            self.refresh();
+            self.dirty = true;
+        }
     }
 
     fn refresh(&mut self) {
@@ -147,7 +166,7 @@ impl App for FileManager {
         match key {
             0x48 => self.nav_up(),      // Up arrow
             0x50 => self.nav_down(),    // Down arrow
-            0x1C => {                   // Enter
+            0x1C => {                   // Enter - open directory
                 if self.selected < self.entries.len() {
                     let entry = &self.entries[self.selected];
                     let sep = if self.cwd.ends_with('/') { "" } else { "/" };
@@ -169,6 +188,8 @@ impl App for FileManager {
                     }
                 }
             }
+            0x2E => self.copy_selected(),    // C - copy
+            0x20 => self.delete_selected(),  // D - delete
             _ => {}
         }
     }
