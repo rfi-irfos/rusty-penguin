@@ -577,10 +577,10 @@ fn draw_taskbar_win_btns(fb: &mut Framebuffer, term_wins: &[TermWin]) {
         if x + w >= fw as i32 { break; }
         let is_focused   = slot == n - 1;
         let is_minimized = tw.win.minimized;
-        // Modern colors that match system palette
-        let bg  = if is_minimized { 0x1A1A24u32 } else { 0x2C2C38u32 };
-        let txt = if is_minimized { 0x6B7280u32 } else { WHITE };
-        let accent = if is_focused { BLUE } else { 0x3C3C48u32 };
+        // Apple graphite palette — consistent with window chrome + CSS engine.
+        let bg  = if is_minimized { 0x1C1C1Eu32 } else { 0x2C2C2Eu32 };
+        let txt = if is_minimized { 0x8E8E93u32 } else { WHITE };
+        let accent = if is_focused { 0x0A84FFu32 } else { 0x3A3A3Cu32 };  // macOS system blue
         // Rounded pill with subtle shadow
         fb.fill_rounded_rect(x - 1, y - 1, w + 2, h + 2, 5, 0x0A0A14);
         fb.fill_rounded_rect(x, y, w, h, 5, bg);
