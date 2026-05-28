@@ -9,6 +9,7 @@ mod font;
 mod input;
 mod term;
 mod trit;
+mod vfs;
 mod wm;
 
 use alloc::vec;

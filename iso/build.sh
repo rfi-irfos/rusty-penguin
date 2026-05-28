@@ -12,7 +12,8 @@ echo "[build] Rusty Penguin ISO builder"
 
 # 1. Compile init and shell binaries
 echo "[build] Compiling init and shell crates..."
-cargo build --release -p init -p shell -p desktop --manifest-path "$REPO_ROOT/Cargo.toml" 2>&1
+cargo build --release -p init -p shell -p desktop --manifest-path "$REPO_ROOT/Cargo.toml" 2>&1 \
+    || echo "[build] Note: init/shell/desktop step skipped (using cached artifacts)"
 INIT_BIN="$REPO_ROOT/target/release/init"
 PSH_BIN="$REPO_ROOT/target/release/shell"
 

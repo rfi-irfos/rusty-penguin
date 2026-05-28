@@ -1,11 +1,12 @@
-// Terminal emulator with built-in shell. No PTY, no fork — commands run inline.
-// VT100 parser kept intentionally minimal (newline, CR, backspace, CSI m).
+// Terminal emulator + psh shell + nano-style text editor.
+// No PTY, no fork — everything runs inline in the single ring-3 process.
 
 use alloc::vec::Vec;
 use alloc::string::String;
 use alloc::format;
 use crate::fb::Framebuffer;
 use crate::trit::{Trit, linear_layer, seed_trits};
+use crate::vfs;
 
 pub const COLS: usize = 80;
 pub const ROWS: usize = 24;
@@ -14,6 +15,8 @@ pub const TERM_PIX_H: u32 = (ROWS * 8) as u32;
 
 const DEFAULT_FG: u32 = 0x4ADE80;
 const DEFAULT_BG: u32 = 0x0F172A;
+
+// ── Cell ────────────────────────────────────────────────────────────────────
 
 #[derive(Clone, Copy)]
 pub struct Cell {
@@ -26,9 +29,132 @@ impl Default for Cell {
     fn default() -> Self { Cell { ch: b' ', fg: DEFAULT_FG, bg: DEFAULT_BG } }
 }
 
+// ── Editor state ─────────────────────────────────────────────────────────────
+
+pub struct EditorState {
+    pub filename:   String,
+    pub lines:      Vec<Vec<u8>>,
+    pub cursor_row: usize,
+    pub cursor_col: usize,
+    pub scroll_top: usize,
+    pub modified:   bool,
+    esc_state:      u8,   // 0=normal 1=saw-ESC 2=saw-CSI
+}
+
+impl EditorState {
+    fn new(filename: &str, data: &[u8]) -> Self {
+        let mut lines: Vec<Vec<u8>> = Vec::new();
+        let mut cur: Vec<u8> = Vec::new();
+        for &b in data {
+            if b == b'\n' { lines.push(core::mem::replace(&mut cur, Vec::new())); }
+            else { cur.push(b); }
+        }
+        lines.push(cur);
+        if lines.is_empty() { lines.push(Vec::new()); }
+        EditorState {
+            filename: String::from(filename),
+            lines,
+            cursor_row: 0,
+            cursor_col: 0,
+            scroll_top: 0,
+            modified: false,
+            esc_state: 0,
+        }
+    }
+
+    fn line_len(&self, row: usize) -> usize {
+        self.lines.get(row).map(|l| l.len()).unwrap_or(0)
+    }
+
+    fn clamp_col(&mut self) {
+        let max = self.line_len(self.cursor_row);
+        if self.cursor_col > max { self.cursor_col = max; }
+    }
+
+    fn clamp_scroll(&mut self) {
+        const CONTENT: usize = ROWS - 2;
+        if self.cursor_row < self.scroll_top {
+            self.scroll_top = self.cursor_row;
+        } else if self.cursor_row >= self.scroll_top + CONTENT {
+            self.scroll_top = self.cursor_row - CONTENT + 1;
+        }
+    }
+
+    fn move_up(&mut self) {
+        if self.cursor_row > 0 { self.cursor_row -= 1; self.clamp_col(); }
+    }
+    fn move_down(&mut self) {
+        if self.cursor_row + 1 < self.lines.len() { self.cursor_row += 1; self.clamp_col(); }
+    }
+    fn move_left(&mut self) {
+        if self.cursor_col > 0 { self.cursor_col -= 1; }
+        else if self.cursor_row > 0 {
+            self.cursor_row -= 1;
+            self.cursor_col = self.line_len(self.cursor_row);
+        }
+    }
+    fn move_right(&mut self) {
+        let ll = self.line_len(self.cursor_row);
+        if self.cursor_col < ll { self.cursor_col += 1; }
+        else if self.cursor_row + 1 < self.lines.len() { self.cursor_row += 1; self.cursor_col = 0; }
+    }
+
+    fn insert_char(&mut self, b: u8) {
+        if self.cursor_row < self.lines.len() {
+            let col = self.cursor_col;
+            self.lines[self.cursor_row].insert(col, b);
+            self.cursor_col += 1;
+            self.modified = true;
+        }
+    }
+
+    fn backspace(&mut self) {
+        let row = self.cursor_row;
+        let col = self.cursor_col;
+        if col > 0 {
+            self.lines[row].remove(col - 1);
+            self.cursor_col -= 1;
+            self.modified = true;
+        } else if row > 0 {
+            let cur_line = self.lines.remove(row);
+            self.cursor_row -= 1;
+            self.cursor_col = self.lines[self.cursor_row].len();
+            self.lines[self.cursor_row].extend_from_slice(&cur_line);
+            self.modified = true;
+        }
+    }
+
+    fn newline(&mut self) {
+        let row = self.cursor_row;
+        let col = self.cursor_col;
+        if row < self.lines.len() {
+            let rest = self.lines[row].split_off(col);
+            self.lines.insert(row + 1, rest);
+            self.cursor_row += 1;
+            self.cursor_col = 0;
+            self.modified = true;
+        }
+    }
+
+    fn to_bytes(&self) -> Vec<u8> {
+        let mut out: Vec<u8> = Vec::new();
+        for (i, line) in self.lines.iter().enumerate() {
+            out.extend_from_slice(line);
+            if i + 1 < self.lines.len() { out.push(b'\n'); }
+        }
+        out
+    }
+}
+
+// ── Escape-sequence parsing ──────────────────────────────────────────────────
+
 enum EscState { Normal, Esc, Csi(String) }
 
+// ── History ──────────────────────────────────────────────────────────────────
+
 const HISTORY_CAP: usize = 32;
+
+// ── Terminal ──────────────────────────────────────────────────────────────────
 
 pub struct Terminal {
     pub cells:       Vec<Cell>,
@@ -39,14 +165,13 @@ pub struct Terminal {
     esc:             EscState,
     pub dirty:       bool,
     pub wants_close: bool,
-    // Input line
     line_buf:        [u8; 256],
     line_len:        usize,
-    line_cursor:     usize,   // insertion point within line_buf, 0..=line_len
-    // Command history
+    line_cursor:     usize,
     history:         Vec<Vec<u8>>,
-    hist_pos:        usize,   // 0 = browsing oldest, history.len() = live input
-    saved_line:      Vec<u8>, // line saved when user starts browsing
+    hist_pos:        usize,
+    saved_line:      Vec<u8>,
+    pub editor:      Option<EditorState>,
 }
 
 // ── Syscall helpers ──────────────────────────────────────────────────────────
@@ -95,7 +220,7 @@ fn sys_ps_raw(buf: *mut u8, max: usize) -> usize {
     n as usize
 }
 
-// ── Terminal impl ────────────────────────────────────────────────────────────
+// ── Terminal impl ─────────────────────────────────────────────────────────────
 
 impl Terminal {
     pub fn spawn() -> Result<Self, String> {
@@ -113,6 +238,7 @@ impl Terminal {
             history:     Vec::new(),
             hist_pos:    0,
             saved_line:  Vec::new(),
+            editor:      None,
         };
         t.write_output(b"\x1b[32m  Rusty Penguin\x1b[0m \x1b[90mv1.0.0 \xB7 psh 1.0\x1b[0m\r\n");
         t.write_output(b"\x1b[36m  Binary hardware. Ternary mind.\x1b[0m\r\n");
@@ -156,8 +282,8 @@ impl Terminal {
         let new_esc = match &mut self.esc {
             EscState::Normal => match b {
                 b'\n' | 0x0A => { self.newline(); EscState::Normal }
-                b'\r' => { self.cur_col = 0; EscState::Normal }
-                0x08 | 0x7F => {
+                b'\r'        => { self.cur_col = 0; EscState::Normal }
+                0x08 | 0x7F  => {
                     if self.cur_col > 0 {
                         self.cur_col -= 1;
                         let blank = self.blank();
@@ -199,7 +325,7 @@ impl Terminal {
                     for part in p.split(';') {
                         match part.parse::<u32>().unwrap_or(0) {
                             0  => { self.cur_fg = DEFAULT_FG; self.cur_bg = DEFAULT_BG; }
-                            1  => {} // bold — ignored
+                            1  => {}
                             30 => self.cur_fg = 0x1E293B,
                             31 => self.cur_fg = 0xEF4444,
                             32 => self.cur_fg = 0x4ADE80,
@@ -226,14 +352,12 @@ impl Terminal {
                 for c in self.cells.iter_mut() { *c = blank; }
                 self.cur_col = 0; self.cur_row = 0;
             }
-            // Absolute cursor position (with params) — used by shell output, not line editing
             b'H' | b'f' if !p.is_empty() && p != ";" => {
                 let mut parts = p.splitn(2, ';');
                 let r = parts.next().and_then(|s| s.parse::<usize>().ok()).unwrap_or(1).max(1) - 1;
                 let c = parts.next().and_then(|s| s.parse::<usize>().ok()).unwrap_or(1).max(1) - 1;
                 self.cur_row = r.min(ROWS - 1); self.cur_col = c.min(COLS - 1);
             }
-            // Up/Down with no params → history navigation
             b'A' if p.is_empty() => {
                 if !self.history.is_empty() {
                     if self.hist_pos == self.history.len() {
@@ -257,33 +381,28 @@ impl Terminal {
                     self.load_history_line(&line);
                 }
             }
-            // Left arrow — move cursor back in input line
             b'D' if p.is_empty() => {
                 if self.line_cursor > 0 {
                     self.line_cursor -= 1;
                     self.cur_col = self.cur_col.saturating_sub(1);
                 }
             }
-            // Right arrow — move cursor forward in input line
             b'C' if p.is_empty() => {
                 if self.line_cursor < self.line_len {
                     self.line_cursor += 1;
                     self.cur_col = (self.cur_col + 1).min(COLS - 1);
                 }
             }
-            // Home — jump to start of input line
             b'H' if p.is_empty() => {
                 let back = self.line_cursor;
                 self.line_cursor = 0;
                 self.cur_col = self.cur_col.saturating_sub(back);
             }
-            // End — jump to end of input line
             b'F' if p.is_empty() => {
                 let fwd = self.line_len - self.line_cursor;
                 self.line_cursor = self.line_len;
                 self.cur_col = (self.cur_col + fwd).min(COLS - 1);
             }
-            // Delete key (ESC [ 3 ~) — forward delete at cursor
             b'~' if p == "3" => {
                 if self.line_cursor < self.line_len {
                     for i in self.line_cursor..self.line_len - 1 {
@@ -293,7 +412,6 @@ impl Terminal {
                     self.redraw_from(self.line_cursor);
                 }
             }
-            // Parameterised cursor movement (used by output sequences, not line editing)
             b'A' => { self.cur_row = self.cur_row.saturating_sub(n1()); }
             b'B' => { self.cur_row = (self.cur_row + n1()).min(ROWS - 1); }
             b'C' => { self.cur_col = (self.cur_col + n1()).min(COLS - 1); }
@@ -303,10 +421,6 @@ impl Terminal {
         self.dirty = true;
     }
 
-    /// Redraw line_buf[from..line_len] starting at the current terminal cursor column,
-    /// append one blank to erase any leftover char (needed after deletion),
-    /// then reposition the terminal cursor to match line_cursor.
-    /// Invariant: call only when cur_col == prompt_col + from.
     fn redraw_from(&mut self, from: usize) {
         let start_col = self.cur_col;
         for i in from..self.line_len {
@@ -317,13 +431,10 @@ impl Terminal {
                 self.cur_col += 1;
             }
         }
-        // Erase one trailing cell (accounts for deletion making the line shorter)
         if self.cur_col < COLS {
             self.cells[self.cur_row * COLS + self.cur_col] = self.blank();
             self.cur_col += 1;
         }
-        // Reposition: we drew (line_len - from + 1) chars forward from start_col;
-        // desired position is start_col + (line_cursor - from).
         let desired = start_col + self.line_cursor.saturating_sub(from);
         if desired <= self.cur_col { self.cur_col = desired; }
         self.dirty = true;
@@ -334,13 +445,9 @@ impl Terminal {
         self.dirty = true;
     }
 
-    pub fn write_input(&self, bytes: &[u8]) {
-        // No-op at the Terminal level. send_key handles echo+exec.
-        let _ = bytes;
-    }
+    pub fn write_input(&self, bytes: &[u8]) { let _ = bytes; }
 
     fn erase_line_input(&mut self) {
-        // Advance visual cursor to end of line before erasing backwards
         while self.line_cursor < self.line_len {
             self.cur_col = (self.cur_col + 1).min(COLS - 1);
             self.line_cursor += 1;
@@ -361,7 +468,13 @@ impl Terminal {
         for &b in &src[..n] { self.process_byte(b); }
     }
 
+    // ── send_key: route to editor or shell ─────────────────────────────────
+
     pub fn send_key(&mut self, b: u8) {
+        if self.editor.is_some() {
+            self.send_key_editor(b);
+            return;
+        }
         match b {
             b'\n' | b'\r' => {
                 self.process_byte(b'\n');
@@ -380,21 +493,19 @@ impl Terminal {
                     self.hist_pos = self.history.len();
                 }
                 self.exec_command(&line[..line_len]);
-                self.write_output(b"\x1b[32mring3\x1b[0m@\x1b[36mrusty-penguin\x1b[90m:~$\x1b[0m ");
+                if self.editor.is_none() {
+                    self.write_output(b"\x1b[32mring3\x1b[0m@\x1b[36mrusty-penguin\x1b[90m:~$\x1b[0m ");
+                }
             }
             0x08 | 0x7F => {
                 if self.line_cursor > 0 {
                     if self.line_cursor == self.line_len {
-                        // Cursor at end: fast path
                         self.line_len -= 1;
                         self.line_cursor -= 1;
                         self.process_byte(0x08);
                     } else {
-                        // Cursor in middle: shift left, redraw suffix
                         let from = self.line_cursor - 1;
-                        for i in from..self.line_len - 1 {
-                            self.line_buf[i] = self.line_buf[i + 1];
-                        }
+                        for i in from..self.line_len - 1 { self.line_buf[i] = self.line_buf[i + 1]; }
                         self.line_len -= 1;
                         self.line_cursor -= 1;
                         self.cur_col = self.cur_col.saturating_sub(1);
@@ -403,39 +514,28 @@ impl Terminal {
                 }
             }
             0x03 => {
-                // Ctrl+C — cancel current line
                 self.write_output(b"^C\r\n");
-                self.line_len = 0;
-                self.line_cursor = 0;
-                self.hist_pos = self.history.len();
-                self.saved_line.clear();
+                self.line_len = 0; self.line_cursor = 0;
+                self.hist_pos = self.history.len(); self.saved_line.clear();
                 self.write_output(b"\x1b[32mring3\x1b[0m@\x1b[36mrusty-penguin\x1b[90m:~$\x1b[0m ");
             }
             0x0C => {
-                // Ctrl+L — clear screen, redraw prompt and current line content
                 let blank = Cell::default();
                 for c in self.cells.iter_mut() { *c = blank; }
                 self.cur_col = 0; self.cur_row = 0;
                 self.write_output(b"\x1b[32mring3\x1b[0m@\x1b[36mrusty-penguin\x1b[90m:~$\x1b[0m ");
-                // Replay current line up to line_len
-                for i in 0..self.line_len {
-                    let ch = self.line_buf[i];
-                    self.process_byte(ch);
-                }
-                // Reposition cursor to line_cursor
+                for i in 0..self.line_len { let ch = self.line_buf[i]; self.process_byte(ch); }
                 let back = self.line_len - self.line_cursor;
                 self.cur_col = self.cur_col.saturating_sub(back);
                 self.dirty = true;
             }
             0x01 => {
-                // Ctrl+A — go to start of line
                 let back = self.line_cursor;
                 self.line_cursor = 0;
                 self.cur_col = self.cur_col.saturating_sub(back);
                 self.dirty = true;
             }
             0x05 => {
-                // Ctrl+E — go to end of line
                 let fwd = self.line_len - self.line_cursor;
                 self.line_cursor = self.line_len;
                 self.cur_col = (self.cur_col + fwd).min(COLS - 1);
@@ -443,13 +543,11 @@ impl Terminal {
             }
             b if b >= 0x20 && self.line_len < 255 => {
                 if self.line_cursor == self.line_len {
-                    // Append at end: fast path
                     self.line_buf[self.line_len] = b;
                     self.line_len += 1;
                     self.line_cursor += 1;
                     self.process_byte(b);
                 } else {
-                    // Insert in middle: shift right, redraw suffix
                     let from = self.line_cursor;
                     let mut i = self.line_len;
                     while i > from { self.line_buf[i] = self.line_buf[i - 1]; i -= 1; }
@@ -459,33 +557,351 @@ impl Terminal {
                     self.redraw_from(from);
                 }
             }
-            _ => {
-                // ESC sequences (arrows, etc.) pass through to the VT100 parser
-                self.process_byte(b);
-            }
+            _ => { self.process_byte(b); }
         }
     }
 
+    // ── Editor input handling ────────────────────────────────────────────────
+
+    fn send_key_editor(&mut self, b: u8) {
+        let mut ed = match self.editor.take() {
+            Some(e) => e,
+            None    => return,
+        };
+
+        // CSI sequence state machine
+        match ed.esc_state {
+            1 => {
+                ed.esc_state = if b == b'[' { 2 } else { 0 };
+                self.editor = Some(ed);
+                return;
+            }
+            2 => {
+                ed.esc_state = 0;
+                match b {
+                    b'A' => ed.move_up(),
+                    b'B' => ed.move_down(),
+                    b'C' => ed.move_right(),
+                    b'D' => ed.move_left(),
+                    b'H' => { ed.cursor_col = 0; }
+                    b'F' => { ed.cursor_col = ed.line_len(ed.cursor_row); }
+                    _    => {}
+                }
+                ed.clamp_scroll();
+                self.editor = Some(ed);
+                self.render_editor();
+                return;
+            }
+            _ => {}
+        }
+
+        let mut do_save = false;
+        let mut do_exit = false;
+
+        match b {
+            0x1B => { ed.esc_state = 1; }
+            0x13 => { do_save = true; }  // Ctrl+S
+            0x18 => { do_exit = true; }  // Ctrl+X
+            0x11 => { do_exit = true; }  // Ctrl+Q (force)
+            b'\r' | b'\n' => { ed.newline(); }
+            0x08 | 0x7F   => { ed.backspace(); }
+            b if b >= 0x20 => { ed.insert_char(b); }
+            _ => {}
+        }
+
+        ed.clamp_scroll();
+
+        if do_save {
+            let bytes = ed.to_bytes();
+            vfs::vfs().write(&ed.filename, &bytes);
+            ed.modified = false;
+            self.editor = Some(ed);
+            self.render_editor();
+        } else if do_exit {
+            // Return to shell: clear screen, reprint prompt
+            self.editor = None;
+            let blank = Cell::default();
+            for c in self.cells.iter_mut() { *c = blank; }
+            self.cur_col = 0; self.cur_row = 0;
+            self.write_output(b"\x1b[32mring3\x1b[0m@\x1b[36mrusty-penguin\x1b[90m:~$\x1b[0m ");
+        } else {
+            self.editor = Some(ed);
+            self.render_editor();
+        }
+        self.dirty = true;
+    }
+
+    // ── Editor renderer (writes directly into self.cells) ───────────────────
+
+    pub fn render_editor(&mut self) {
+        let ed = match &self.editor { Some(e) => e, None => return };
+        const CONTENT: usize = ROWS - 2;
+        const HDR_BG:  u32 = 0x1D4ED8;  // blue header
+        const HDR_FG:  u32 = 0xF8FAFC;
+        const SB_BG:   u32 = 0x1E3A5F;  // dark status bar
+        const SB_FG:   u32 = 0xCBD5E1;
+
+        // Header row (row 0)
+        for col in 0..COLS {
+            self.cells[col] = Cell { ch: b' ', fg: HDR_FG, bg: HDR_BG };
+        }
+        let hdr = {
+            let mut s = String::from("  nano: ");
+            s.push_str(&ed.filename);
+            if ed.modified { s.push_str("  [modified]"); }
+            s
+        };
+        for (col, &ch) in hdr.as_bytes().iter().enumerate().take(COLS) {
+            self.cells[col] = Cell { ch, fg: HDR_FG, bg: HDR_BG };
+        }
+
+        // Content rows (1..ROWS-1)
+        for vis in 0..CONTENT {
+            let doc_row = ed.scroll_top + vis;
+            let term_row = vis + 1;
+            // Line number gutter (4 chars wide)
+            let gutter_bg = 0x111827u32;
+            let gutter_fg = 0x374151u32;
+            for col in 0..4usize {
+                self.cells[term_row * COLS + col] = Cell { ch: b' ', fg: gutter_fg, bg: gutter_bg };
+            }
+            if doc_row < ed.lines.len() {
+                // Print line number (right-aligned in 3 chars + space)
+                let lnum = doc_row + 1;
+                let d2 = (lnum % 100 / 10) as u8 + b'0';
+                let d3 = (lnum % 10) as u8 + b'0';
+                if lnum < 10 {
+                    self.cells[term_row * COLS + 2] = Cell { ch: d3, fg: gutter_fg, bg: gutter_bg };
+                } else {
+                    self.cells[term_row * COLS + 1] = Cell { ch: d2, fg: gutter_fg, bg: gutter_bg };
+                    self.cells[term_row * COLS + 2] = Cell { ch: d3, fg: gutter_fg, bg: gutter_bg };
+                }
+            }
+            // Content area (cols 4..COLS)
+            for col in 4..COLS {
+                self.cells[term_row * COLS + col] = Cell { ch: b' ', fg: DEFAULT_FG, bg: DEFAULT_BG };
+            }
+            if let Some(line) = ed.lines.get(doc_row) {
+                for (i, &ch) in line.iter().enumerate() {
+                    let col = i + 4;
+                    if col >= COLS { break; }
+                    let is_cur = doc_row == ed.cursor_row && i == ed.cursor_col;
+                    let (fg, bg) = if is_cur { (DEFAULT_BG, DEFAULT_FG) } else { (DEFAULT_FG, DEFAULT_BG) };
+                    self.cells[term_row * COLS + col] = Cell { ch, fg, bg };
+                }
+                // Block cursor at end of line
+                if doc_row == ed.cursor_row && ed.cursor_col == line.len() {
+                    let col = line.len() + 4;
+                    if col < COLS {
+                        self.cells[term_row * COLS + col] = Cell { ch: b' ', fg: DEFAULT_BG, bg: DEFAULT_FG };
+                    }
+                }
+            }
+        }
+
+        // Status bar (last row)
+        for col in 0..COLS {
+            self.cells[(ROWS - 1) * COLS + col] = Cell { ch: b' ', fg: SB_FG, bg: SB_BG };
+        }
+        let sb = format!("  ^S Save  ^X Exit    Ln {}  Col {}  {}",
+            ed.cursor_row + 1, ed.cursor_col + 1,
+            if ed.modified { "modified" } else { "        " });
+        for (col, &ch) in sb.as_bytes().iter().enumerate().take(COLS) {
+            self.cells[(ROWS - 1) * COLS + col] = Cell { ch, fg: SB_FG, bg: SB_BG };
+        }
+
+        // Position terminal cursor
+        let vis_row = ed.cursor_row.saturating_sub(ed.scroll_top);
+        if vis_row < CONTENT {
+            self.cur_row = vis_row + 1;
+            self.cur_col = (ed.cursor_col + 4).min(COLS - 1);
+        }
+        self.dirty = true;
+    }
+
+    // ── Shell command dispatch ───────────────────────────────────────────────
+
     fn exec_command(&mut self, line: &[u8]) {
-        // strip trailing whitespace
         let mut end = line.len();
         while end > 0 && line[end - 1] == b' ' { end -= 1; }
         let line = &line[..end];
-
         if line.is_empty() { return; }
 
+        // Helper to extract the argument after the first space
+        let arg = |prefix: usize| {
+            core::str::from_utf8(&line[prefix..]).unwrap_or("").trim()
+        };
+
         if line == b"help" {
-            self.write_output(b"commands:\r\n");
-            self.write_output(b"  trit <n>           balanced ternary of n\r\n");
-            self.write_output(b"  trit add|sub|mul <a> <b>\r\n");
-            self.write_output(b"  ai [n]             sparse ternary inference (default 32)\r\n");
-            self.write_output(b"  ls                 list files\r\n");
-            self.write_output(b"  ps                 process table\r\n");
-            self.write_output(b"  pwd  date  sysinfo  uname  whoami\r\n");
-            self.write_output(b"  uptime  mem  echo  clear  exit\r\n");
-            self.write_output(b"  \x1b[90mUp/Down=history  Left/Right=cursor  Home/End\x1b[0m\r\n");
-            self.write_output(b"  \x1b[90mCtrl+C=cancel  Ctrl+L=clear  Ctrl+A/E=line start/end\x1b[0m\r\n");
-            self.write_output(b"  \x1b[90mCtrl+T=new term  Ctrl+W=close term\x1b[0m\r\n");
+            self.write_output(b"\x1b[36mFile system:\x1b[0m\r\n");
+            self.write_output(b"  ls           list files\r\n");
+            self.write_output(b"  cat <f>      print file\r\n");
+            self.write_output(b"  nano <f>     edit file  (^S save  ^X exit)\r\n");
+            self.write_output(b"  touch <f>    create empty file\r\n");
+            self.write_output(b"  rm <f>       delete file\r\n");
+            self.write_output(b"  cp <s> <d>   copy file\r\n");
+            self.write_output(b"  mv <s> <d>   rename file\r\n");
+            self.write_output(b"  wc <f>       word/line/byte count\r\n");
+            self.write_output(b"  head <f>     first 10 lines\r\n");
+            self.write_output(b"  tail <f>     last 10 lines\r\n");
+            self.write_output(b"  mkdir <d>    create directory\r\n");
+            self.write_output(b"\x1b[36mSystem:\x1b[0m\r\n");
+            self.write_output(b"  ps  mem  sysinfo  uname  whoami  uptime  date\r\n");
+            self.write_output(b"  trit <n|op a b>    balanced ternary\r\n");
+            self.write_output(b"  ai [n]             sparse ternary inference\r\n");
+            self.write_output(b"  echo  clear  pwd  exit\r\n");
+            self.write_output(b"\x1b[90m  Ctrl+T new term  Ctrl+W close  Ctrl+L clear\x1b[0m\r\n");
+            self.write_output(b"\x1b[90m  Up/Down history  Ctrl+A/E line start/end\x1b[0m\r\n");
+
+        } else if line == b"ls" || line.starts_with(b"ls ") {
+            let entries = vfs::vfs().list();
+            if entries.is_empty() {
+                self.write_output(b"\x1b[90m(empty)\x1b[0m\r\n");
+            } else {
+                for e in entries {
+                    if e.is_dir {
+                        let s = format!("\x1b[34m{}/\x1b[0m\r\n", e.name);
+                        self.write_output(s.as_bytes());
+                    } else {
+                        let s = format!("{}\x1b[90m  {} B\x1b[0m\r\n", e.name, e.data.len());
+                        self.write_output(s.as_bytes());
+                    }
+                }
+            }
+
+        } else if line.starts_with(b"cat ") {
+            let fname = arg(4);
+            match vfs::vfs().read(fname) {
+                Some(data) => {
+                    let data = data.to_vec(); // clone before potential re-borrow
+                    for chunk in data.split(|&b| b == b'\n') {
+                        self.write_output(chunk);
+                        self.write_output(b"\r\n");
+                    }
+                }
+                None => {
+                    let s = format!("\x1b[31mcat: {}: no such file\x1b[0m\r\n", fname);
+                    self.write_output(s.as_bytes());
+                }
+            }
+
+        } else if line.starts_with(b"nano ") || line.starts_with(b"vi ") || line.starts_with(b"edit ") {
+            let prefix = if line.starts_with(b"nano ") { 5 } else if line.starts_with(b"vi ") { 3 } else { 5 };
+            let fname = arg(prefix);
+            if fname.is_empty() {
+                self.write_output(b"usage: nano <filename>\r\n");
+            } else {
+                let data = vfs::vfs().read(fname).map(|d| d.to_vec()).unwrap_or_default();
+                let ed = EditorState::new(fname, &data);
+                self.editor = Some(ed);
+                self.render_editor();
+            }
+
+        } else if line.starts_with(b"touch ") {
+            let fname = arg(6);
+            if fname.is_empty() {
+                self.write_output(b"usage: touch <filename>\r\n");
+            } else {
+                if !vfs::vfs().exists(fname) {
+                    vfs::vfs().write(fname, b"");
+                }
+            }
+
+        } else if line.starts_with(b"rm ") {
+            let fname = arg(3);
+            if !vfs::vfs().delete(fname) {
+                let s = format!("\x1b[31mrm: {}: no such file\x1b[0m\r\n", fname);
+                self.write_output(s.as_bytes());
+            }
+
+        } else if line.starts_with(b"mkdir ") {
+            let dname = arg(6);
+            if dname.is_empty() {
+                self.write_output(b"usage: mkdir <dirname>\r\n");
+            } else {
+                vfs::vfs().mkdir(dname);
+            }
+
+        } else if line.starts_with(b"cp ") {
+            let rest = arg(3);
+            let mut sp = rest.splitn(2, ' ');
+            let src = sp.next().unwrap_or("").trim();
+            let dst = sp.next().unwrap_or("").trim();
+            if src.is_empty() || dst.is_empty() {
+                self.write_output(b"usage: cp <src> <dst>\r\n");
+            } else {
+                match vfs::vfs().read(src) {
+                    Some(d) => { let d = d.to_vec(); vfs::vfs().write(dst, &d); }
+                    None    => {
+                        let s = format!("\x1b[31mcp: {}: no such file\x1b[0m\r\n", src);
+                        self.write_output(s.as_bytes());
+                    }
+                }
+            }
+
+        } else if line.starts_with(b"mv ") {
+            let rest = arg(3);
+            let mut sp = rest.splitn(2, ' ');
+            let src = sp.next().unwrap_or("").trim();
+            let dst = sp.next().unwrap_or("").trim();
+            if src.is_empty() || dst.is_empty() {
+                self.write_output(b"usage: mv <src> <dst>\r\n");
+            } else if !vfs::vfs().rename(src, dst) {
+                let s = format!("\x1b[31mmv: {}: no such file\x1b[0m\r\n", src);
+                self.write_output(s.as_bytes());
+            }
+
+        } else if line.starts_with(b"wc ") {
+            let fname = arg(3);
+            match vfs::vfs().read(fname) {
+                Some(data) => {
+                    let bytes = data.len();
+                    let lines = data.iter().filter(|&&b| b == b'\n').count() + 1;
+                    let words = data.split(|b| *b == b' ' || *b == b'\n' || *b == b'\t')
+                        .filter(|w| !w.is_empty()).count();
+                    let s = format!("  {} lines  {} words  {} bytes  {}\r\n", lines, words, bytes, fname);
+                    self.write_output(s.as_bytes());
+                }
+                None => {
+                    let s = format!("\x1b[31mwc: {}: no such file\x1b[0m\r\n", fname);
+                    self.write_output(s.as_bytes());
+                }
+            }
+
+        } else if line.starts_with(b"head ") {
+            let fname = arg(5);
+            match vfs::vfs().read(fname) {
+                Some(data) => {
+                    let data = data.to_vec();
+                    for chunk in data.split(|&b| b == b'\n').take(10) {
+                        self.write_output(chunk);
+                        self.write_output(b"\r\n");
+                    }
+                }
+                None => {
+                    let s = format!("\x1b[31mhead: {}: no such file\x1b[0m\r\n", fname);
+                    self.write_output(s.as_bytes());
+                }
+            }
+
+        } else if line.starts_with(b"tail ") {
+            let fname = arg(5);
+            match vfs::vfs().read(fname) {
+                Some(data) => {
+                    let data = data.to_vec();
+                    let all_lines: Vec<&[u8]> = data.split(|&b| b == b'\n').collect();
+                    let start = all_lines.len().saturating_sub(10);
+                    for chunk in &all_lines[start..] {
+                        self.write_output(chunk);
+                        self.write_output(b"\r\n");
+                    }
+                }
+                None => {
+                    let s = format!("\x1b[31mtail: {}: no such file\x1b[0m\r\n", fname);
+                    self.write_output(s.as_bytes());
+                }
+            }
+
         } else if line == b"uname" || line == b"uname -a" {
             self.write_output(b"RustyPenguin 1.0.0 psh x86_64 GNU/Trit\r\n");
         } else if line == b"whoami" {
@@ -521,34 +937,25 @@ impl Terminal {
             for c in self.cells.iter_mut() { *c = blank; }
             self.cur_col = 0; self.cur_row = 0;
             self.dirty = true;
-        } else if line == b"ls" || line == b"ls /" || line == b"ls /bin" {
-            self.write_output(b"bin/\r\n");
-            self.write_output(b"  psh\r\n");
-            self.write_output(b"  desktop\r\n");
         } else if line == b"echo" {
             self.write_output(b"\r\n");
         } else if line.starts_with(b"echo ") {
             self.write_output(&line[5..]);
             self.write_output(b"\r\n");
         } else if line == b"ai" || line.starts_with(b"ai ") {
-            let arg = if line.starts_with(b"ai ") { &line[3..] } else { b"32" as &[u8] };
-            let n_tokens: usize = {
-                let mut v: usize = 0;
-                for &b in arg { if b >= b'0' && b <= b'9' { v = v.wrapping_mul(10).wrapping_add((b - b'0') as usize); } }
-                v.max(1).min(256)
-            };
-            self.run_ai_inference(n_tokens);
+            let a = if line.starts_with(b"ai ") { &line[3..] } else { b"32" as &[u8] };
+            let n: usize = { let mut v = 0usize; for &b in a { if b >= b'0' && b <= b'9' { v = v.wrapping_mul(10).wrapping_add((b - b'0') as usize); } } v.max(1).min(256) };
+            self.run_ai_inference(n);
         } else if line == b"trit" {
             self.write_output(b"usage: trit add|sub|mul|neg|cns <a> [b]\r\n");
         } else if line.starts_with(b"trit ") {
             self.exec_trit(&line[5..]);
         } else if line == b"pwd" {
-            self.write_output(b"/home/ring3\r\n");
+            self.write_output(b"/\r\n");
         } else if line == b"date" {
             let ticks = sys_ticks();
             let secs = ticks / 100;
-            let out = format!("uptime {:02}h {:02}m {:02}s\r\n",
-                secs / 3600, (secs % 3600) / 60, secs % 60);
+            let out = format!("uptime {:02}h {:02}m {:02}s\r\n", secs / 3600, (secs % 3600) / 60, secs % 60);
             self.write_output(out.as_bytes());
         } else if line == b"sysinfo" || line == b"neofetch" {
             let (free, total) = sys_meminfo();
@@ -560,11 +967,8 @@ impl Terminal {
             self.write_output(b"  \x1b[36mOS    \x1b[0m : RustyPenguin bare metal x86_64\r\n");
             self.write_output(b"  \x1b[36mKernel\x1b[0m : Rust + ternary STE\r\n");
             self.write_output(b"  \x1b[36mShell \x1b[0m : psh 1.0\r\n");
-            let mem = format!("  \x1b[36mMemory\x1b[0m : {}/{} MiB\r\n", used, total);
-            self.write_output(mem.as_bytes());
-            let up = format!("  \x1b[36mUptime\x1b[0m : {:02}:{:02}:{:02}\r\n",
-                secs / 3600, (secs % 3600) / 60, secs % 60);
-            self.write_output(up.as_bytes());
+            self.write_output(format!("  \x1b[36mMemory\x1b[0m : {}/{} MiB\r\n", used, total).as_bytes());
+            self.write_output(format!("  \x1b[36mUptime\x1b[0m : {:02}:{:02}:{:02}\r\n", secs / 3600, (secs % 3600) / 60, secs % 60).as_bytes());
             self.write_output(b"  \x1b[35mModel \x1b[0m : Binary hardware. Ternary mind.\r\n");
         } else if line == b"exit" {
             self.write_output(b"bye\r\n");
@@ -576,67 +980,53 @@ impl Terminal {
         }
     }
 
+    // ── AI inference ─────────────────────────────────────────────────────────
+
     fn run_ai_inference(&mut self, n_tokens: usize) {
         const DIM: usize = 8;
         const LAYERS: usize = 4;
-
         self.write_output(b"albert. [bare metal]\r\n");
         let s_line = format!("sparse ternary inference -- {} layers x {} tokens\r\n", LAYERS, n_tokens);
         self.write_output(s_line.as_bytes());
         self.write_output(b"\r\n");
-
         let seed = sys_ticks().wrapping_add(n_tokens as u64 * 7);
-
-        // Weight matrices for all layers (stack-allocated: 4 * 8 * 8 = 256 trits)
         let mut w_all = [Trit::Zero; LAYERS * DIM * DIM];
         seed_trits(&mut w_all, seed ^ 0xCAFE_BABE_DEAD_BEEF);
-
-        // Initial activation vector, seeded from n_tokens + ticks
         let mut act = [Trit::Zero; DIM];
         seed_trits(&mut act, seed);
-
-        // Show input
         self.write_output(b"  input  [");
         for t in &act { self.process_byte(t.to_byte()); }
         self.write_output(b"]\r\n");
-
         let mut total_total = 0usize;
         let mut total_skip  = 0usize;
-
         for l in 0..LAYERS {
             let in_act = act;
             let w = &w_all[l * DIM * DIM..(l + 1) * DIM * DIM];
             let mut out_act = [Trit::Zero; DIM];
             let (t, sk) = linear_layer(w, DIM, DIM, &in_act, &mut out_act);
-            total_total += t;
-            total_skip  += sk;
+            total_total += t; total_skip += sk;
             let dorm = if t > 0 { sk * 100 / t } else { 0 };
-
-            let prefix = format!("  L{}     [", l);
-            self.write_output(prefix.as_bytes());
+            self.write_output(format!("  L{}     [", l).as_bytes());
             for t in &in_act  { self.process_byte(t.to_byte()); }
             self.write_output(b"] -> [");
             for t in &out_act { self.process_byte(t.to_byte()); }
-            let suffix = format!("]  dormancy {}%\r\n", dorm);
-            self.write_output(suffix.as_bytes());
-
+            self.write_output(format!("]  dormancy {}%\r\n", dorm).as_bytes());
             act = out_act;
         }
-
         let avg_dorm = if total_total > 0 { total_skip * 100 / total_total } else { 0 };
         self.write_output(b"\r\n");
-        let summary = format!("{} tokens  avg dormancy {}%  skipped {}/{} ops\r\n",
-            n_tokens, avg_dorm, total_skip, total_total);
-        self.write_output(summary.as_bytes());
+        self.write_output(format!("{} tokens  avg dormancy {}%  skipped {}/{} ops\r\n",
+            n_tokens, avg_dorm, total_skip, total_total).as_bytes());
         self.write_output(b"ACTIVE -- Binary hardware. Ternary mind.\r\n");
     }
+
+    // ── Ternary helpers ──────────────────────────────────────────────────────
 
     fn to_tern(n: i64) -> String {
         if n == 0 { return String::from("0"); }
         let flip = n < 0;
         let mut v = if n < 0 { -n } else { n };
-        let mut digits = [0i8; 40];
-        let mut len = 0;
+        let mut digits = [0i8; 40]; let mut len = 0;
         while v != 0 {
             let rem = (v % 3) as i8; v /= 3;
             if rem == 2 { digits[len] = -1; v += 1; } else { digits[len] = rem; }
@@ -665,22 +1055,14 @@ impl Terminal {
     fn exec_trit(&mut self, args: &[u8]) {
         let mut parts = [b"" as &[u8]; 3];
         let mut count = 0usize;
-        let mut start = 0usize;
-        let mut in_word = false;
+        let mut start = 0usize; let mut in_word = false;
         for i in 0..=args.len() {
             let at_sp = i == args.len() || args[i] == b' ';
-            if at_sp && in_word {
-                if count < 3 { parts[count] = &args[start..i]; count += 1; }
-                in_word = false;
-            } else if !at_sp && !in_word {
-                start = i; in_word = true;
-            }
+            if at_sp && in_word { if count < 3 { parts[count] = &args[start..i]; count += 1; } in_word = false; }
+            else if !at_sp && !in_word { start = i; in_word = true; }
         }
         if count == 0 { self.write_output(b"usage: trit add|sub|mul|neg|cns <a> [b]\r\n"); return; }
-
         let op = parts[0];
-
-        // Plain number: "trit 42" → show balanced ternary representation
         let is_keyword = matches!(op, b"add" | b"sub" | b"mul" | b"neg" | b"cns");
         if !is_keyword && count == 1 {
             match Self::parse_i64(op) {
@@ -689,12 +1071,10 @@ impl Terminal {
             }
             return;
         }
-
         if op == b"neg" {
             if count < 2 { self.write_output(b"usage: trit neg <a>\r\n"); return; }
             if let Some(a) = Self::parse_i64(parts[1]) {
-                let r = -a;
-                self.write_output(format!("{}  ({})\r\n", r, Self::to_tern(r)).as_bytes());
+                self.write_output(format!("{}  ({})\r\n", -a, Self::to_tern(-a)).as_bytes());
             }
             return;
         }
@@ -703,13 +1083,14 @@ impl Terminal {
             (Some(a), Some(b)) => (a, b),
             _ => { self.write_output(b"bad number\r\n"); return; }
         };
-        let r: i64 = if op == b"add" { a + bv }
-            else if op == b"sub" { a - bv }
+        let r: i64 = if op == b"add" { a + bv } else if op == b"sub" { a - bv }
             else if op == b"mul" { a * bv }
             else if op == b"cns" { if a > 0 && bv > 0 { 1 } else if a < 0 && bv < 0 { -1 } else { 0 } }
             else { self.write_output(b"unknown op\r\n"); return; };
         self.write_output(format!("{}  ({})\r\n", r, Self::to_tern(r)).as_bytes());
     }
+
+    // ── Render ───────────────────────────────────────────────────────────────
 
     pub fn render(&self, fb: &mut Framebuffer, x: u32, y: u32, show_cursor: bool) {
         for row in 0..ROWS {
@@ -721,8 +1102,6 @@ impl Terminal {
         self.paint_cursor(fb, x, y, show_cursor);
     }
 
-    /// Redraw only the cursor cell — called every frame after restore_cursor_bg
-    /// so the cursor background buffer never contains a stale blink state.
     pub fn paint_cursor(&self, fb: &mut Framebuffer, x: u32, y: u32, show: bool) {
         let cx = x + self.cur_col as u32 * 8;
         let cy = y + self.cur_row as u32 * 8;
@@ -730,9 +1109,7 @@ impl Terminal {
         let cell = &self.cells[self.cur_row * COLS + self.cur_col];
         if show {
             fb.fill_rect(cx, cy, 8, 8, DEFAULT_FG);
-            if cell.ch > b' ' {
-                fb.draw_char(cx, cy, cell.ch as char, DEFAULT_BG, DEFAULT_FG);
-            }
+            if cell.ch > b' ' { fb.draw_char(cx, cy, cell.ch as char, DEFAULT_BG, DEFAULT_FG); }
         } else {
             fb.draw_char(cx, cy, cell.ch as char, cell.fg, cell.bg);
         }
