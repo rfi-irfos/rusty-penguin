@@ -124,10 +124,10 @@ const ICON_TRIT: [u8; 8] = [0x08, 0x1C, 0x36, 0x63, 0x63, 0x36, 0x1C, 0x08];  //
 #[rustfmt::skip]
 const ICON_KM: [u8; 8] = [0x18, 0x7E, 0x3C, 0xFF, 0xFF, 0x3C, 0x7E, 0x18];
 
-// Dingir — cuneiform divine determinative (wedge-shaped cross)
+// Dingir — cuneiform divine determinative (8-pointed star with wedges)
 #[rustfmt::skip]
 const DINGIR: [u8; 8] = [
-    0x24, 0x66, 0x7E, 0x3C, 0x3C, 0x7E, 0x66, 0x24,
+    0x18, 0x7E, 0x7E, 0x3C, 0x3C, 0x7E, 0x7E, 0x18,
 ];
 
 // ---- Cursor helpers ─────────────────────────────────────────────────────────
@@ -920,10 +920,10 @@ pub extern "C" fn _start() -> ! {
                     let ny2 = (cy - tw.win.drag_oy).max(TOPBAR_H as i32).min(h - tw.win.h - 28);
                     if nx2 != tw.win.x || ny2 != tw.win.y {
                         tw.win.x = nx2; tw.win.y = ny2;
-                        // Rate-limit drag recomposites to ~25Hz (4 ticks @ 100Hz).
+                        // Rate-limit drag recomposites to ~12Hz (8 ticks @ 100Hz).
                         // Cursor still updates every frame; only the window position
                         // repaints are throttled to cut framebuffer write pressure.
-                        if now_ticks.wrapping_sub(drag_tick) >= 4 {
+                        if now_ticks.wrapping_sub(drag_tick) >= 8 {
                             drag_tick = now_ticks;
                             scene_dirty = true;
                         }
@@ -935,7 +935,7 @@ pub extern "C" fn _start() -> ! {
                     let nh = nh.min(h - tw.win.y - 28);
                     if nw != tw.win.w || nh != tw.win.h {
                         tw.win.w = nw; tw.win.h = nh;
-                        if now_ticks.wrapping_sub(drag_tick) >= 4 {
+                        if now_ticks.wrapping_sub(drag_tick) >= 8 {
                             drag_tick = now_ticks;
                             scene_dirty = true;
                         }
