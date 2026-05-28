@@ -4,6 +4,25 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+### Added — Ternary CSS engine (brick 1) + browser strategy (2026-05-28)
+
+- New `desktop-metal/src/css.rs`: a pure-Rust, no_std **CSS-subset styling
+  engine**. Parses declarations (`background/color/border/accent/radius/
+  pad-x/pad-y/border-width/shadow`) into a `Style`, and paints Apple-like
+  panels (soft multi-layer shadow, rounded corners, hairline highlight +
+  border). Every component carries a ternary `state` Trit:
+  `+1` active (accent ring) / `0` normal / `-1` disabled (dimmed).
+- First migration: the desktop's center welcome card is now rendered through
+  the engine from a CSS string instead of hardcoded fill_rects — the start of
+  moving the whole frontend from the "debug look" to a declarative,
+  Apple-OS-grade aesthetic.
+- `docs/BROWSER_PLAN.md`: architecture decision + staged roadmap for running
+  real browsers. Two complementary paths: (a) this native ternary CSS engine
+  (pure Rust, owns the look, long road to web compat); (b) a real Linux X/Mesa
+  stack + Chrome/Firefox on the install-to-disk root (pragmatic route to
+  today's web; ISO grows to ~600 MB–1 GB). Honest: from-scratch web-platform
+  parity with Firefox is a long-horizon effort.
+
 ### Changed — Cache the static desktop background (drag perf groundwork, 2026-05-28)
 
 - The bare-metal compositor cached the static scene (gradient + logo + icon

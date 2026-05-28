@@ -7,6 +7,7 @@ mod allocator;
 mod ansi;
 mod app;
 mod clipboard;
+mod css;
 mod editor;
 mod fb;
 mod font;
@@ -332,22 +333,23 @@ fn draw_scene_static(fb: &mut Framebuffer) {
     let logo_ix = w.saturating_sub(LW) / 2;
     let logo_iy = TOPBAR_H + tb_y.saturating_sub(TOPBAR_H).saturating_sub(LH + 28) / 2;
     let lx = logo_ix as i32; let ly2 = logo_iy as i32;
-    // Soft shadow for depth (Ubuntu-style)
-    fb.fill_rect_s(lx + 3, ly2 + 3, LW as i32, LH as i32, 0x0A0A10);
-    // Card background — refined modern look
-    fb.fill_rounded_rect(lx, ly2, LW as i32, LH as i32, 10, 0x1A1A24);
-    // Accent bar at top (warm gradient-like effect with green)
-    fb.fill_rounded_rect(lx, ly2, LW as i32, 5, 3, GREEN);
-    // Subtle border for definition
-    fb.fill_rect_s(lx, ly2, LW as i32, 1, 0x3C3C48);
+    // Center welcome card — rendered through the ternary CSS engine (Apple-like:
+    // soft shadow, rounded corners, hairline edge). Hardcoded fill_rects are
+    // being migrated to declarative styles; this is the first component.
+    let card = css::parse(
+        "background:#1c1c1e; border:#3a3a3c; radius:16; accent:#0a84ff; \
+         pad-x:18; pad-y:16; shadow:1"
+    );
+    let inner_bg = card.bg;
+    css::paint_panel(fb, lx, ly2, LW as i32, LH as i32, &card, crate::trit::Trit::Zero);
     // Dingir 3× icon (24×24) centered near top
-    fb.draw_bitmap_3x(logo_ix + (LW - 24) / 2, logo_iy + 16, &DINGIR, GREEN, 0x1A1A24);
+    fb.draw_bitmap_3x(logo_ix + (LW - 24) / 2, logo_iy + 16, &DINGIR, GREEN, inner_bg);
     // "RUSTY" in 2× white with better spacing
-    fb.draw_str_2x(logo_ix + (LW - 5 * 16) / 2, logo_iy + 48, "RUSTY", WHITE, 0x1A1A24);
+    fb.draw_str_2x(logo_ix + (LW - 5 * 16) / 2, logo_iy + 48, "RUSTY", WHITE, inner_bg);
     // "PENGUIN" in 2× green
-    fb.draw_str_2x(logo_ix + (LW - 7 * 16) / 2, logo_iy + 70, "PENGUIN", GREEN, 0x1A1A24);
+    fb.draw_str_2x(logo_ix + (LW - 7 * 16) / 2, logo_iy + 70, "PENGUIN", GREEN, inner_bg);
     // Version — subtle
-    fb.draw_str(logo_ix + (LW - 10 * 8) / 2, logo_iy + 100, "v1.0.0-bm", DIM, 0x1A1A24);
+    fb.draw_str(logo_ix + (LW - 10 * 8) / 2, logo_iy + 100, "v1.0.0-bm", DIM, inner_bg);
     // Tagline
     let tag = "Bare-metal Rust OS · Sparse ternary inference";
     let tag_y = logo_iy + LH + 16;
