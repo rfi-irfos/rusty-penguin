@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Rusty Penguin Desktop Template</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <main class="desktop" id="desktop" aria-label="Rusty Penguin desktop">
+    <div class="wallpaper" aria-hidden="true">
+      <img class="wallpaper-mark" src="../../docs/penguin.svg" alt="">
+      <div class="wallpaper-title">
+        <span>Rusty Penguin</span>
+        <small>Binary hardware. Ternary mind.</small>
+      </div>
+    </div>
+
+    <section class="desktop-icons" aria-label="Desktop shortcuts">
+      <button class="desktop-icon" data-open="files">
+        <span class="icon glyph folder"></span>
+        <span>Home</span>
+      </button>
+      <button class="desktop-icon" data-open="terminal">
+        <span class="icon glyph terminal"></span>
+        <span>Terminal</span>
+      </button>
+      <button class="desktop-icon" data-open="editor">
+        <span class="icon glyph editor"></span>
+        <span>Notes</span>
+      </button>
+    </section>
+
+    <section class="window active" id="window-files" data-app="files" style="left: 88px; top: 72px; width: 690px; height: 440px;">
+      <header class="titlebar">
+        <div class="title"><span class="icon glyph folder"></span> Files</div>
+        <div class="controls"><button data-minimize></button><button data-maximize></button><button data-close></button></div>
+      </header>
+      <div class="file-app app-body">
+        <aside class="sidebar">
+          <button class="selected">Home</button>
+          <button>Desktop</button>
+          <button>Documents</button>
+          <button>Downloads</button>
+          <button>System</button>
+        </aside>
+        <div class="file-main">
+          <div class="toolbar"><span>/home/penguin</span><button>New Folder</button></div>
+          <div class="file-grid">
+            <button><span class="icon glyph folder"></span><strong>src</strong><small>12 items</small></button>
+            <button><span class="icon glyph folder"></span><strong>docs</strong><small>4 items</small></button>
+            <button><span class="icon glyph drive"></span><strong>kernel</strong><small>bare metal</small></button>
+            <button><span class="icon glyph editor"></span><strong>notes.tri</strong><small>2.1 KB</small></button>
+            <button><span class="icon glyph terminal"></span><strong>psh</strong><small>executable</small></button>
+            <button><span class="icon glyph browser"></span><strong>ternlang.url</strong><small>shortcut</small></button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="window" id="window-terminal" data-app="terminal" style="left: 430px; top: 128px; width: 640px; height: 360px;">
+      <header class="titlebar">
+        <div class="title"><span class="icon glyph terminal"></span> Terminal</div>
+        <div class="controls"><button data-minimize></button><button data-maximize></button><button data-close></button></div>
+      </header>
+      <div class="terminal-app app-body">
+        <pre><span class="dim">Rusty Penguin psh 0.3</span>
+<span class="prompt">penguin@rp</span>:~$ ps
+ PID  TRIT  STATE      NAME
+   1   +1   ACTIVE     init
+   2    0   DORMANT    compositor
+   3   +1   ACTIVE     psh
+<span class="prompt">penguin@rp</span>:~$ trit 42
+  +---+0
+<span class="prompt">penguin@rp</span>:~$ _</pre>
+      </div>
+    </section>
+
+    <section class="window" id="window-editor" data-app="editor" style="left: 220px; top: 110px; width: 600px; height: 410px;">
+      <header class="titlebar">
+        <div class="title"><span class="icon glyph editor"></span> Text Editor</div>
+        <div class="controls"><button data-minimize></button><button data-maximize></button><button data-close></button></div>
+      </header>
+      <div class="editor-app app-body">
+        <div class="toolbar"><span>notes.tri</span><button>Save</button></div>
+        <textarea spellcheck="false"># Rusty Penguin
+
+Tomorrow's OS surface:
+
+- calm desktop
+- fast launcher
+- real terminal
+- file navigator
+- process monitor
+- settings
+- browser shell
+
+Zero is not nothing.</textarea>
+      </div>
+    </section>
+
+    <section class="window" id="window-monitor" data-app="monitor" style="left: 620px; top: 82px; width: 560px; height: 420px;">
+      <header class="titlebar">
+        <div class="title"><span class="icon glyph monitor"></span> Process Monitor</div>
+        <div class="controls"><button data-minimize></button><button data-maximize></button><button data-close></button></div>
+      </header>
+      <div class="monitor-app app-body">
+        <div class="meter-row">
+          <div><span>CPU</span><meter min="0" max="100" value="18"></meter><strong>18%</strong></div>
+          <div><span>Memory</span><meter min="0" max="100" value="42"></meter><strong>42%</strong></div>
+          <div><span>Dormancy</span><meter min="0" max="100" value="67"></meter><strong>67%</strong></div>
+        </div>
+        <table>
+          <thead><tr><th>PID</th><th>Trit</th><th>Name</th><th>CPU</th><th>Memory</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td class="pos">+1</td><td>init</td><td>0.3</td><td>2M</td></tr>
+            <tr><td>2</td><td class="zero">0</td><td>desktop</td><td>4.1</td><td>18M</td></tr>
+            <tr><td>3</td><td class="pos">+1</td><td>terminal</td><td>1.7</td><td>6M</td></tr>
+            <tr><td>4</td><td class="neg">-1</td><td>stale-task</td><td>0.0</td><td>0M</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="window" id="window-settings" data-app="settings" style="left: 360px; top: 92px; width: 610px; height: 430px;">
+      <header class="titlebar">
+        <div class="title"><span class="icon glyph settings"></span> Settings</div>
+        <div class="controls"><button data-minimize></button><button data-maximize></button><button data-close></button></div>
+      </header>
+      <div class="settings-app app-body">
+        <aside class="sidebar">
+          <button class="selected">Appearance</button>
+          <button>Input</button>
+          <button>Network</button>
+          <button>Processes</button>
+          <button>About</button>
+        </aside>
+        <div class="settings-main">
+          <h2>Appearance</h2>
+          <label><span>Accent</span><input type="color" value="#32d583"></label>
+          <label><span>Panel density</span><input type="range" min="1" max="5" value="3"></label>
+          <label><span>Dark desktop</span><input type="checkbox" checked></label>
+          <label><span>Ternary status badges</span><input type="checkbox" checked></label>
+        </div>
+      </div>
+    </section>
+
+    <section class="window" id="window-browser" data-app="browser" style="left: 120px; top: 58px; width: 760px; height: 460px;">
+      <header class="titlebar">
+        <div class="title"><span class="icon glyph browser"></span> Browser</div>
+        <div class="controls"><button data-minimize></button><button data-maximize></button><button data-close></button></div>
+      </header>
+      <div class="browser-app app-body">
+        <div class="browser-bar"><button>&lt;</button><button>&gt;</button><input value="https://ternlang.local/start"></div>
+        <div class="browser-page">
+          <img src="../../docs/penguin.svg" alt="">
+          <h1>Ternary Intelligence Stack</h1>
+          <p>Balanced ternary primitives, sparse inference, and a Rust-first operating surface.</p>
+          <div class="browser-links"><button>Docs</button><button>Packages</button><button>System Report</button></div>
+        </div>
+      </div>
+    </section>
+
+    <nav class="start-menu" id="startMenu" aria-label="Start menu">
+      <div class="menu-head">
+        <button class="dingir large">𒀭</button>
+        <div><strong>Rusty Penguin</strong><span>Start</span></div>
+      </div>
+      <input id="launcherSearch" type="search" placeholder="Search apps and commands">
+      <div class="launcher-list">
+        <button data-open="terminal"><span class="icon glyph terminal"></span><span>Terminal</span><small>psh shell</small></button>
+        <button data-open="editor"><span class="icon glyph editor"></span><span>Text Editor</span><small>notes and configs</small></button>
+        <button data-open="files"><span class="icon glyph folder"></span><span>File Navigator</span><small>browse system</small></button>
+        <button data-open="monitor"><span class="icon glyph monitor"></span><span>Process Monitor</span><small>ternary states</small></button>
+        <button data-open="settings"><span class="icon glyph settings"></span><span>Settings</span><small>appearance and input</small></button>
+        <button data-open="browser"><span class="icon glyph browser"></span><span>Browser</span><small>web shell</small></button>
+      </div>
+    </nav>
+
+    <footer class="panel">
+      <button class="start-button dingir" id="startButton" aria-label="Open launcher">𒀭</button>
+      <div class="quick-launch">
+        <button data-open="files" title="Files"><span class="icon glyph folder"></span></button>
+        <button data-open="terminal" title="Terminal"><span class="icon glyph terminal"></span></button>
+        <button data-open="editor" title="Text Editor"><span class="icon glyph editor"></span></button>
+        <button data-open="browser" title="Browser"><span class="icon glyph browser"></span></button>
+      </div>
+      <div class="task-list" id="taskList"></div>
+      <div class="tray"><span>T[+0-]</span><span>Net</span><span id="clock">00:00</span></div>
+    </footer>
+  </main>
+  <script src="./app.js"></script>
+</body>
+</html>
+

@@ -38,42 +38,72 @@ unsafe fn ps2_read() -> u8 {
     port::inb(0x60)
 }
 
+fn ser(b: u8) { crate::serial::write_byte(b); }
+
 pub fn init() {
     unsafe {
+        ser(b'['); ser(b'I'); ser(b'N'); ser(b'I'); ser(b'T'); ser(b']'); ser(b'\n');
+
+        // Mask IRQ12 at the PIC slave (bit 4) to prevent the mouse's reset-response
+        // bytes from being consumed by irq_mouse during polled init reads.
+        // The BIOS may leave IRQ12 unmasked; pic::init() restores the BIOS mask.
+        let pic2_mask = port::inb(0xA1);
+        port::outb(0xA1, pic2_mask | 0x10);  // mask IRQ12 (slave PIC bit 4)
+
         // Enable auxiliary (mouse) port
         ps2_wait_write();
         port::outb(0x64, 0xA8);
+        ser(b'1'); ser(b'\n');
 
-        // Enable mouse interrupts: read, set bit 1, write back
+        // Enable mouse IRQs and both port clocks in the PS/2 command byte.
+        // IRQ12 is masked in the PIC, so enabling it here doesn't let the
+        // handler fire — it just allows the PS/2 output buffer to fill on
+        // mouse data (some controllers require bit 1 set to forward aux bytes).
         ps2_wait_write();
-        port::outb(0x64, 0x20);         // read current command byte
+        port::outb(0x64, 0x20);
         let mut cfg = ps2_read();
-        cfg |= 0x03;                    // bits 0+1: enable keyboard IRQ1 + mouse IRQ12
-        cfg &= !0x30;                   // bits 4+5: clear port-disable (enable both clocks)
+        cfg |= 0x03;    // bits 0+1: keyboard IRQ1 + mouse IRQ12 in PS/2 config
+        cfg &= !0x30;   // bits 4+5: enable both port clocks
         ps2_wait_write();
         port::outb(0x64, 0x60);
         ps2_wait_write();
         port::outb(0x60, cfg);
+        ser(b'2'); ser(b'\n');
 
-        // Reset mouse
+        // Reset mouse — IRQ12 is PIC-masked so polled reads get the bytes
         mouse_write(0xFF);
-        ps2_read();  // ACK (0xFA)
-        ps2_read();  // AA (reset OK)
-        ps2_read();  // 00 (device ID)
+        let ack1 = ps2_read();  // 0xFA ACK
+        let aa   = ps2_read();  // 0xAA self-test OK
+        let did  = ps2_read();  // 0x00 device ID
+        let hx = |v: u8, n: u8| -> u8 { let nib = (v >> (n*4)) & 0xF; if nib < 10 { b'0'+nib } else { b'a'+nib-10 } };
+        ser(b'3');
+        ser(hx(ack1,1)); ser(hx(ack1,0));
+        ser(hx(aa,1));   ser(hx(aa,0));
+        ser(hx(did,1));  ser(hx(did,0));
+        ser(b'\n');
 
         // Set default settings
         mouse_write(0xF6);
-        ps2_read();
+        let ack2 = ps2_read();
+        ser(b'4'); ser(hx(ack2,1)); ser(hx(ack2,0)); ser(b'\n');
 
         // Enable streaming mode
         mouse_write(0xF4);
-        ps2_read();
+        let ack3 = ps2_read();
+        ser(b'5'); ser(hx(ack3,1)); ser(hx(ack3,0)); ser(b'\n');
 
         // Centre cursor at screen midpoint
         let w = fb::width() as i32;
-        let h = fb::height() as i32;
+        let h2 = fb::height() as i32;
         MOUSE_X = if w > 0 { w / 2 } else { 320 };
-        MOUSE_Y = if h > 0 { h / 2 } else { 200 };
+        MOUSE_Y = if h2 > 0 { h2 / 2 } else { 200 };
+
+        // Leave IRQ12 masked in PIC — kernel main calls pic::unmask_mouse() next,
+        // which unmasks it now that the mouse is in streaming mode and the init
+        // polled reads are done.
+
+        ser(b'['); ser(b'M'); ser(b'S'); ser(b'E'); ser(b' ');
+        ser(b'O'); ser(b'K'); ser(b']'); ser(b'\n');
     }
 }
 
@@ -94,7 +124,10 @@ pub fn handle_irq() {
             let flags = PACKET[0];
 
             // Ignore if overflow bits set
-            if flags & 0xC0 != 0 { return; }
+            if flags & 0xC0 != 0 {
+                crate::serial::write_byte(b'!');  // overflow
+                return;
+            }
 
             let buttons = flags & 0x07;
 

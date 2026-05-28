@@ -8,6 +8,7 @@ pub struct MouseState {
     pub x: i32,
     pub y: i32,
     pub buttons: u8,
+    pub btn_pressed: u8,  // bits that transitioned 0→1 this poll cycle
 }
 
 // Up to 8 key bytes per poll (handles multi-byte ESC sequences like ESC [ 3 ~).
@@ -45,6 +46,8 @@ fn sys_input_poll() -> u64 {
 /// width/height kept for API compatibility but mouse coords are already clamped by kernel.
 pub fn poll(mouse: &mut MouseState, _width: i32, _height: i32) -> Keys {
     let mut keys = Keys::new();
+    mouse.btn_pressed = 0;
+    let mut cur = mouse.buttons;
     loop {
         let ev = sys_input_poll();
         if ev == 0 { break; }
@@ -57,10 +60,13 @@ pub fn poll(mouse: &mut MouseState, _width: i32, _height: i32) -> Keys {
                 // Absolute position from kernel-tracked MOUSE_X / MOUSE_Y
                 mouse.x = (ev & 0xFFFF) as u16 as i32;
                 mouse.y = ((ev >> 16) & 0xFFFF) as u16 as i32;
-                mouse.buttons = ((ev >> 32) & 0xFF) as u8;
+                let new_b = ((ev >> 32) & 0xFF) as u8;
+                mouse.btn_pressed |= new_b & !cur;  // capture 0→1 edges within this drain
+                cur = new_b;
             }
             _ => {}
         }
     }
+    mouse.buttons = cur;
     keys
 }

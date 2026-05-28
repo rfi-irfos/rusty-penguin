@@ -340,16 +340,6 @@ fn draw_scene_static(fb: &mut Framebuffer) {
     fb.fill_rect(w - 6, tb_y, 6, 28, 0x0E1C16);   // dark backing
     fb.fill_rect(w - 5, tb_y, 1, 28, 0x22C55E);   // green accent stripe
 
-    // ── Topbar — gradient top→bottom ──
-    for dy in 0..TOPBAR_H {
-        let blend = (dy * 10 / TOPBAR_H) as u8; // 0..10
-        let col = (0x06u8.saturating_add(blend) as u32) << 16
-                | (0x0Cu8.saturating_add(blend) as u32) << 8
-                |  0x18u8.saturating_add(blend) as u32;
-        fb.fill_rect(0, dy, w, 1, col);
-    }
-    fb.fill_rect(0, TOPBAR_H - 1, w, 1, 0x1A2F3A);
-    fb.fill_rect(0, 0, 3, TOPBAR_H, 0x22C55E); // green left accent
 }
 
 fn trit_indicator(ticks: u64) -> [u8; 7] {
@@ -709,7 +699,7 @@ pub extern "C" fn _start() -> ! {
     };
 
     let w = fb.width as i32; let h = fb.height as i32;
-    let mut mouse = MouseState { x: w / 2, y: h / 2, buttons: 0 };
+    let mut mouse = MouseState { x: w / 2, y: h / 2, buttons: 0, btn_pressed: 0 };
 
     let mut stats = sample_stats();
     draw_scene_static(&mut fb);
@@ -724,7 +714,6 @@ pub extern "C" fn _start() -> ! {
     save_cursor_bg(&fb, cx, cy, &mut cbuf);
     draw_cursor(&mut fb, cx, cy);
 
-    let mut prev_btn: u8 = 0;
     let mut last_topbar_tick: u64 = 0;
     let mut wins: Vec<TermWin> = Vec::new();
     let mut scene_dirty = false;
@@ -828,9 +817,9 @@ pub extern "C" fn _start() -> ! {
 
         // Click handling
         let left_down  = (btn & 0x01) != 0;
-        let left_edge  = left_down && (prev_btn & 0x01) == 0;
+        let left_edge  = (mouse.btn_pressed & 0x01) != 0;
         let right_down = (btn & 0x02) != 0;
-        let right_edge = right_down && (prev_btn & 0x02) == 0;
+        let right_edge = (mouse.btn_pressed & 0x02) != 0;
 
         // Right-click: open context menu on empty desktop area
         if right_edge {
@@ -958,7 +947,15 @@ pub extern "C" fn _start() -> ! {
             }
         }
 
-        prev_btn = btn;
+        // Render any scene changes produced by this frame's click/drag handling.
+        // Without this a new window only appears in the *next* loop iteration.
+        if scene_dirty || wins.iter().any(|tw| tw.win_dirty) {
+            restore_cursor_bg(&mut fb, cx, cy, &cbuf);
+            recomposite(&mut fb, &mut wins, start_menu_open, ctx_menu, &stats);
+            scene_dirty = false;
+            save_cursor_bg(&fb, cx, cy, &mut cbuf);
+            draw_cursor(&mut fb, cx, cy);
+        }
     }
 }
 
