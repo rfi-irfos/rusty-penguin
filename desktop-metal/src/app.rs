@@ -234,3 +234,63 @@ impl App for Calendar {
         "Calendar"
     }
 }
+
+/// Settings application
+pub struct Settings {
+    selected: usize,
+    pub dirty: bool,
+    pub wants_close: bool,
+}
+
+impl Settings {
+    pub fn new() -> Self {
+        Settings {
+            selected: 0,
+            dirty: true,
+            wants_close: false,
+        }
+    }
+}
+
+impl App for Settings {
+    fn render(&mut self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, h: u32) {
+        // Draw header
+        fb.fill_rect(x, y, w, 24, 0x2C2C38);
+        fb.draw_str(x + 8, y + 7, "System Settings", 0xF5F5F7, 0x2C2C38);
+        fb.fill_rect(x, y + 24, w, 1, 0x3C3C48);
+
+        // Settings options
+        let settings = [
+            "Theme: Dark",
+            "Window Snap: On",
+            "Taskbar: Bottom",
+            "Auto-Save: 30s",
+        ];
+
+        for (i, setting) in settings.iter().enumerate() {
+            let y_pos = y + 32 + (i as u32 * 20);
+            if y_pos + 20 > y + h { break; }
+
+            let bg_color = if i == self.selected { 0x4A5568 } else if i % 2 == 0 { 0x1A1A24 } else { 0x232333 };
+            fb.fill_rect(x, y_pos, w, 20, bg_color);
+
+            let text_color = if i == self.selected { 0xF5F5F7 } else { 0xB8B8B8 };
+            fb.draw_str(x + 12, y_pos + 5, setting, text_color, bg_color);
+        }
+
+        self.dirty = false;
+    }
+
+    fn on_key(&mut self, key: u8) {
+        match key {
+            0x48 => { if self.selected > 0 { self.selected -= 1; self.dirty = true; } }
+            0x50 => { if self.selected < 3 { self.selected += 1; self.dirty = true; } }
+            0x1C => { self.dirty = true; }
+            _ => {}
+        }
+    }
+
+    fn title(&self) -> &str {
+        "Settings"
+    }
+}
