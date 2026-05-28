@@ -2400,10 +2400,15 @@ impl Terminal {
     // ── Render ───────────────────────────────────────────────────────────────
 
     pub fn render(&self, fb: &mut Framebuffer, x: u32, y: u32, show_cursor: bool) {
-        for row in 0..ROWS {
-            for col in 0..COLS {
+        let max_col = ((fb.width.saturating_sub(x)) / 8).min(COLS as u32) as usize;
+        let max_row = ((fb.height.saturating_sub(y)) / 8).min(ROWS as u32) as usize;
+        for row in 0..max_row {
+            for col in 0..max_col {
+                let px = x + col as u32 * 8;
+                let py = y + row as u32 * 8;
+                if px + 8 > fb.width || py + 8 > fb.height { continue; }
                 let cell = &self.cells[row * COLS + col];
-                fb.draw_char(x + col as u32 * 8, y + row as u32 * 8, cell.ch as char, cell.fg, cell.bg);
+                fb.draw_char(px, py, cell.ch as char, cell.fg, cell.bg);
             }
         }
         self.paint_cursor(fb, x, y, show_cursor);
