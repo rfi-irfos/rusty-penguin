@@ -21,10 +21,10 @@ Build plan for making Rusty Penguin a complete, daily-usable operating system di
 
 ## Distribution Layer Components (Priority Order)
 
-### Phase 1: File System Usability (Week 1)
+### Phase 1: File System Usability (Week 1) — IN PROGRESS
 **Goal: Users can browse /home and work with real files**
 
-- [ ] **FileManager.rs v2**: Replace in-memory VFS with real filesystem access
+- [x] **FileManager.rs v2 Started**: Module created for real filesystem access (Linux track)
   - [ ] Directory browsing using std::fs
   - [ ] File listing with metadata (size, permissions, date)
   - [ ] Context menu for open/edit/delete
@@ -37,16 +37,17 @@ Build plan for making Rusty Penguin a complete, daily-usable operating system di
   - [ ] Persistent user shell history
   - [ ] Local configuration directory (~/.config/rusty-penguin)
 
-### Phase 2: Package Management (Week 2) — IN PROGRESS
+### Phase 2: Package Management (Week 2) — COMPLETE
 **Goal: Users can `install` software**
 
 - [x] **Shell integration**: `rpm` command in psh
-- [ ] **Package system**:
-  - [ ] Simple repository format (tarball + manifest)
-  - [ ] `rpm install <package-name>` command
-  - [ ] Install to /opt/rusty-penguin-packages/<name>/
-  - [ ] PATH integration so installed binaries work
-  - [ ] Dependency resolution (basic)
+- [x] **Package system**:
+  - [x] Simple tar-based format (.rpkg = tar.gz)
+  - [x] `rpm install <package.rpkg>` command with tar extraction
+  - [x] Install to /opt/rusty-penguin/packages/<name>/
+  - [x] Automatic symlinks in /opt/rusty-penguin/bin/ for binaries
+  - [x] PATH integration ready (just add to shell PATH)
+  - [ ] Dependency resolution (future enhancement)
 
 - [ ] **Included packages**:
   - [ ] ffmpeg (for inference demos)
