@@ -4,6 +4,7 @@
 extern crate alloc;
 
 mod allocator;
+mod ansi;
 mod app;
 mod clipboard;
 mod editor;

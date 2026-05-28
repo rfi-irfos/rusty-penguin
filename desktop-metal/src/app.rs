@@ -54,6 +54,7 @@ pub struct FileManager {
     clipboard: Option<String>,
     pub dirty: bool,
     pub wants_close: bool,
+    ansi: crate::ansi::AnsiParser,
 }
 
 unsafe fn sys_listdir(path: &[u8], buf: &mut [u8]) -> u64 {
@@ -95,6 +96,7 @@ impl FileManager {
             clipboard: None,
             dirty: true,
             wants_close: false,
+            ansi: crate::ansi::AnsiParser::new(),
         };
         fm.refresh();
         fm
@@ -207,10 +209,12 @@ impl App for FileManager {
     }
 
     fn on_key(&mut self, key: u8) {
-        match key {
-            0x48 => self.nav_up(),      // Up arrow
-            0x50 => self.nav_down(),    // Down arrow
-            0x1C => {                   // Enter - open directory
+        use crate::ansi::Key as AK;
+        match self.ansi.feed(key) {
+            AK::Up   => self.nav_up(),
+            AK::Down => self.nav_down(),
+            AK::Char(b'\n') | AK::Char(b'\r') => {
+                // Enter — descend into the selected directory.
                 if self.selected < self.entries.len() {
                     let entry = &self.entries[self.selected];
                     let sep = if self.cwd.ends_with('/') { "" } else { "/" };
@@ -219,21 +223,19 @@ impl App for FileManager {
                     self.dirty = true;
                 }
             }
-            0x0E => {                   // Backspace - go up directory
+            AK::Char(0x08) | AK::Char(0x7F) => {
+                // Backspace — go up a directory.
                 if self.cwd != "/" {
                     if let Some(pos) = self.cwd.rfind('/') {
-                        if pos == 0 {
-                            self.cwd = String::from("/");
-                        } else {
-                            self.cwd.truncate(pos);
-                        }
+                        if pos == 0 { self.cwd = String::from("/"); }
+                        else        { self.cwd.truncate(pos); }
                         self.refresh();
                         self.dirty = true;
                     }
                 }
             }
-            0x2E => self.copy_selected(),    // C - copy
-            0x20 => self.delete_selected(),  // D - delete
+            AK::Char(b'c') | AK::Char(b'C') => self.copy_selected(),
+            AK::Char(b'd') | AK::Char(b'D') => self.delete_selected(),
             _ => {}
         }
     }
@@ -323,6 +325,7 @@ pub struct Settings {
     taskbar_bottom: bool,
     auto_save_enabled: bool,
     auto_save_interval: u32, // seconds
+    ansi: crate::ansi::AnsiParser,
 }
 
 impl Settings {
@@ -336,6 +339,7 @@ impl Settings {
             taskbar_bottom: true,
             auto_save_enabled: true,
             auto_save_interval: 30,
+            ansi: crate::ansi::AnsiParser::new(),
         };
         s.load_from_disk();
         s
@@ -458,10 +462,11 @@ impl App for Settings {
     }
 
     fn on_key(&mut self, key: u8) {
-        match key {
-            0x48 => { if self.selected > 0 { self.selected -= 1; self.dirty = true; } }
-            0x50 => { if self.selected < 3 { self.selected += 1; self.dirty = true; } }
-            0x1C => { self.toggle_selected(); }
+        use crate::ansi::Key as AK;
+        match self.ansi.feed(key) {
+            AK::Up   => { if self.selected > 0 { self.selected -= 1; self.dirty = true; } }
+            AK::Down => { if self.selected < 3 { self.selected += 1; self.dirty = true; } }
+            AK::Char(b'\n') | AK::Char(b'\r') => { self.toggle_selected(); }
             _ => {}
         }
     }
@@ -590,10 +595,12 @@ impl App for TisConsole {
     }
 
     fn on_key(&mut self, key: u8) {
+        // Bytes come from the kernel as ASCII (Enter='\n', Backspace=0x08),
+        // not scancodes — the previous 0x1C/0x0E values never matched.
         match key {
-            0x1C => { self.execute_command(); }
-            0x0E => { self.input_buffer.pop(); self.dirty = true; }
-            b' '..=b'~' => {
+            b'\n' | b'\r' => { self.execute_command(); }
+            0x08 | 0x7F  => { self.input_buffer.pop(); self.dirty = true; }
+            b' '..=b'~'  => {
                 self.input_buffer.push(key as char);
                 self.dirty = true;
             }
@@ -944,6 +951,7 @@ pub struct HelpBrowser {
     scroll_offset: usize,
     pub dirty: bool,
     pub wants_close: bool,
+    ansi: crate::ansi::AnsiParser,
 }
 
 impl HelpBrowser {
@@ -952,6 +960,7 @@ impl HelpBrowser {
             scroll_offset: 0,
             dirty: true,
             wants_close: false,
+            ansi: crate::ansi::AnsiParser::new(),
         }
     }
 }
@@ -1024,14 +1033,15 @@ impl App for HelpBrowser {
     }
 
     fn on_key(&mut self, key: u8) {
-        match key {
-            0x48 => { // Up arrow
+        use crate::ansi::Key as AK;
+        match self.ansi.feed(key) {
+            AK::Up => {
                 if self.scroll_offset > 0 {
                     self.scroll_offset -= 1;
                     self.dirty = true;
                 }
             }
-            0x50 => { // Down arrow
+            AK::Down => {
                 self.scroll_offset = self.scroll_offset.saturating_add(1);
                 self.dirty = true;
             }
