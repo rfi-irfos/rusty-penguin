@@ -692,7 +692,6 @@ fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, 
     if start_menu { draw_start_menu(fb); }
     if let Some((cmx, cmy)) = ctx_menu { draw_ctx_menu(fb, cmx, cmy); }
     draw_topbar(fb, up.as_str(), stats, sys_ticks());
-    draw_taskbar_clock(fb, up.as_str());
 }
 
 // ── Entry point ──────────────────────────────────────────────────────────────
@@ -967,7 +966,6 @@ pub extern "C" fn _start() -> ! {
             if topbar_due && !any_chrome {
                 let up = rtc_str();
                 draw_topbar(&mut fb, up.as_str(), &stats, now_ticks);
-                draw_taskbar_clock(&mut fb, up.as_str());
             }
 
             // Re-stamp the focused terminal cursor over whatever restore_cursor_bg
