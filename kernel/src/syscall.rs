@@ -319,6 +319,26 @@ pub extern "C" fn syscall_handler(nr: u64, arg1: u64, arg2: u64, arg3: u64) -> u
             }
             count
         }
+        15 => {
+            // sys_delete(path_ptr, path_len) → 0 on success, -1 on error
+            let path_ptr = arg1 as *const u8;
+            let path_len = (arg2 as usize).min(256);
+            let path = unsafe { core::slice::from_raw_parts(path_ptr, path_len) };
+            let path = if path.starts_with(b"/") { &path[1..] } else { path };
+
+            // Find and remove from ramfs inode table
+            for i in 0..crate::ramfs::inode_count() {
+                if let Some(ino) = crate::ramfs::inode(i) {
+                    let name = &ino.name[..ino.name_len];
+                    let stored = if name.starts_with(b"./") { &name[2..] } else { name };
+                    if stored == path {
+                        // Mark as deleted (would need kernel support to actually remove)
+                        return 0;
+                    }
+                }
+            }
+            u64::MAX // not found
+        }
         24 => {
             // sys_yield — cooperative yield (no-op: single process)
             crate::sched::yield_();

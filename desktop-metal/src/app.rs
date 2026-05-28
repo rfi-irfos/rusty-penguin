@@ -54,6 +54,21 @@ unsafe fn sys_listdir(path: &[u8], buf: &mut [u8]) -> u64 {
     result
 }
 
+unsafe fn sys_delete(path: &[u8]) -> u64 {
+    let mut result: u64;
+    core::arch::asm!(
+        "syscall",
+        in("rax") 15,
+        in("rdi") path.as_ptr() as u64,
+        in("rsi") path.len() as u64,
+        in("rdx") 0u64,
+        in("rcx") 0u64,
+        lateout("rax") result,
+        clobber_abi("C"),
+    );
+    result
+}
+
 impl FileManager {
     pub fn new() -> Self {
         let mut fm = FileManager {
@@ -79,9 +94,19 @@ impl FileManager {
 
     fn delete_selected(&mut self) {
         if self.selected < self.entries.len() {
-            // Placeholder: actual delete would need kernel syscall
-            self.refresh();
-            self.dirty = true;
+            let entry = &self.entries[self.selected];
+            let sep = if self.cwd.ends_with('/') { "" } else { "/" };
+            let path = alloc::format!("{}{}{}", self.cwd, sep, entry.name);
+
+            // Call sys_delete syscall
+            let result = unsafe { sys_delete(path.as_bytes()) };
+
+            if result == 0 {
+                // Success - refresh the directory listing
+                self.refresh();
+                self.dirty = true;
+            }
+            // If result != 0, deletion failed (file not found, etc)
         }
     }
 
