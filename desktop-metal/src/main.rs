@@ -610,9 +610,37 @@ fn show_desktop_hit(fw: u32, fh: u32, mx: i32, my: i32) -> bool {
         && my >= fh as i32 - 28 && my < fh as i32
 }
 
+// Start menu items. The first 6 are graphical apps; the remaining are
+// command-line launches that boot a terminal with a preloaded command.
+#[derive(Copy, Clone)]
+enum MenuLaunch {
+    App(u8),           // dispatched in start_menu_open
+    Term(usize),       // index into LAUNCHERS
+}
+
+struct MenuItem {
+    label: &'static str,
+    color: u32,
+    kind: MenuLaunch,
+}
+
+const MENU_ITEMS: &[MenuItem] = &[
+    MenuItem { label: "Files",       color: BLUE,     kind: MenuLaunch::App(0) },
+    MenuItem { label: "Text Editor", color: AMBER,    kind: MenuLaunch::App(1) },
+    MenuItem { label: "Calculator",  color: 0xFFD700, kind: MenuLaunch::App(2) },
+    MenuItem { label: "Help",        color: 0x90EE90, kind: MenuLaunch::App(3) },
+    MenuItem { label: "Settings",    color: 0x9CA3AF, kind: MenuLaunch::App(4) },
+    MenuItem { label: "TIS Console", color: 0x4A9EFF, kind: MenuLaunch::App(5) },
+    MenuItem { label: "Terminal",    color: GREEN,    kind: MenuLaunch::Term(0) },
+    MenuItem { label: "ls -la",      color: BLUE,     kind: MenuLaunch::Term(1) },
+    MenuItem { label: "nano",        color: AMBER,    kind: MenuLaunch::Term(2) },
+    MenuItem { label: "ps",          color: 0xA0D0FF, kind: MenuLaunch::Term(3) },
+    MenuItem { label: "ai",          color: 0xFFD700, kind: MenuLaunch::Term(4) },
+];
+
 fn start_menu_bounds(fh: u32) -> (i32, i32, i32, i32) {
-    let h = 14 + LAUNCHERS.len() as i32 * 20 + 4;
-    let w = 160i32;
+    let h = 24 + MENU_ITEMS.len() as i32 * 20 + 4;
+    let w = 180i32;
     (2, fh as i32 - 28 - h, w, h)
 }
 
@@ -629,23 +657,21 @@ fn draw_start_menu(fb: &mut Framebuffer) {
     fb.draw_str((x + 23) as u32, (y + 6) as u32, "RUSTY PENGUIN", WHITE, 0x2C2C38);
     fb.fill_rect_s(x, y + 19, w, 1, 0x3C3C48);  // separator
     // Menu items
-    for (i, l) in LAUNCHERS.iter().enumerate() {
-        let iy = y + 20 + i as i32 * 20;
-        let bg = 0x1A1A24u32;  // consistent background
+    let bg = 0x1A1A24u32;
+    for (i, item) in MENU_ITEMS.iter().enumerate() {
+        let iy = y + 24 + i as i32 * 20;
         fb.fill_rect_s(x + 1, iy, w - 2, 20, bg);
         // Colored left accent bar per item
-        fb.fill_rect_s(x + 2, iy + 4, 2, 12, l.color);
-        fb.draw_str((x + 8) as u32, (iy + 6) as u32, l.label, l.color, bg);
-        let desc = l.title.split('-').nth(1).unwrap_or(l.title).trim();
-        fb.draw_str((x + 52) as u32, (iy + 6) as u32, desc, DIM, bg);
+        fb.fill_rect_s(x + 2, iy + 4, 2, 12, item.color);
+        fb.draw_str((x + 8) as u32, (iy + 6) as u32, item.label, item.color, bg);
     }
 }
 
 fn start_menu_hit(fh: u32, mx: i32, my: i32) -> Option<usize> {
     let (x, y, w, _) = start_menu_bounds(fh);
     if mx < x || mx >= x + w { return None; }
-    for i in 0..LAUNCHERS.len() {
-        let iy = y + 16 + i as i32 * 20;
+    for i in 0..MENU_ITEMS.len() {
+        let iy = y + 24 + i as i32 * 20;
         if my >= iy && my < iy + 20 { return Some(i); }
     }
     None
@@ -1134,10 +1160,18 @@ pub extern "C" fn _start() -> ! {
                 }
                 scene_dirty = true;
             } else if start_menu_open {
-                if let Some(li) = start_menu_hit(fb.height, cx, cy) {
-                    if let Some(tw) = open_term(w, h, wins.len(), &LAUNCHERS[li]) {
-                        wins.push(tw);
-                    }
+                if let Some(mi) = start_menu_hit(fb.height, cx, cy) {
+                    let opened = match MENU_ITEMS[mi].kind {
+                        MenuLaunch::Term(li) => open_term(w, h, wins.len(), &LAUNCHERS[li]),
+                        MenuLaunch::App(0)   => open_file_manager(w, h, wins.len()),
+                        MenuLaunch::App(1)   => open_editor(w, h, wins.len(), "readme.txt", "Text Editor"),
+                        MenuLaunch::App(2)   => open_calculator(w, h, wins.len()),
+                        MenuLaunch::App(3)   => open_help_browser(w, h, wins.len()),
+                        MenuLaunch::App(4)   => open_settings(w, h, wins.len()),
+                        MenuLaunch::App(5)   => open_tis_console(w, h, wins.len()),
+                        MenuLaunch::App(_)   => None,
+                    };
+                    if let Some(tw) = opened { wins.push(tw); }
                 }
                 start_menu_open = false;
                 scene_dirty = true;
