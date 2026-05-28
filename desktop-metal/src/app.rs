@@ -815,3 +815,63 @@ impl App for Calculator {
         "Calculator"
     }
 }
+
+/// System Clock and Status Display
+pub struct SystemClock {
+    pub dirty: bool,
+    pub wants_close: bool,
+}
+
+impl SystemClock {
+    pub fn new() -> Self {
+        SystemClock {
+            dirty: true,
+            wants_close: false,
+        }
+    }
+}
+
+impl App for SystemClock {
+    fn render(&mut self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, h: u32) {
+        // Header
+        fb.fill_rect(x, y, w, 24, 0x2C2C38);
+        fb.draw_str(x + 8, y + 7, "System Clock", 0xF5F5F7, 0x2C2C38);
+        fb.fill_rect(x, y + 24, w, 1, 0x3C3C48);
+
+        // Large time display
+        fb.fill_rect(x + 8, y + 32, w - 16, 48, 0x1A1A24);
+        fb.draw_str(x + 12, y + 45, "12:34:56", 0x4ADE80, 0x1A1A24);
+
+        // Date and info
+        fb.fill_rect(x, y + 90, w, 1, 0x3C3C48);
+
+        let items = [
+            "Date: 2026-05-28",
+            "Uptime: Running",
+            "Load: Minimal",
+            "",
+            "System Status:",
+            "CPU: Idle",
+            "Memory: 85% Free",
+            "Disk: 512MB Available",
+        ];
+
+        for (i, item) in items.iter().enumerate() {
+            let y_pos = y + 98 + (i as u32 * 14);
+            if y_pos + 14 > y + h { break; }
+
+            let color = if item.is_empty() { 0x1A1A24 } else { 0xB8B8B8 };
+            fb.draw_str(x + 12, y_pos, item, color, 0x0F172A);
+        }
+
+        self.dirty = false;
+    }
+
+    fn on_key(&mut self, _key: u8) {
+        // Clock display - read-only
+    }
+
+    fn title(&self) -> &str {
+        "System Clock"
+    }
+}

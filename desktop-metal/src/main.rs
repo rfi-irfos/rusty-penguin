@@ -460,6 +460,7 @@ const DESKTOP_ICONS: &[DesktopIcon] = &[
     DesktopIcon { label: "Procs", bitmap: &ICON_PROC,  color: 0xA0D0FF, launcher_idx: 3 },
     DesktopIcon { label: "Cal",   bitmap: &ICON_TRIT,  color: 0xC4B5FD,  launcher_idx: 4 },
     DesktopIcon { label: "Calc",  bitmap: &ICON_PROC,  color: 0xFFD700,  launcher_idx: 7 },
+    DesktopIcon { label: "Clock", bitmap: &ICON_TERM,  color: 0x87CEEB,  launcher_idx: 8 },
     DesktopIcon { label: "Prefs", bitmap: &ICON_PROC,  color: 0x9CA3AF,  launcher_idx: 5 },
     DesktopIcon { label: "TIS",   bitmap: &ICON_TRIT,  color: 0x4A9EFF,  launcher_idx: 6 },
 ];
@@ -874,6 +875,29 @@ fn open_calculator(w: i32, h: i32, n: usize) -> Option<TermWin> {
     }
 }
 
+fn open_system_clock(w: i32, h: i32, n: usize) -> Option<TermWin> {
+    match term::Terminal::spawn() {
+        Ok(t) => {
+            let clock = alloc::boxed::Box::new(app::SystemClock::new());
+            let off = n as i32 * 20;
+            let left_margin = 75;
+            let wx = ((w - left_margin - wm::WINDOW_W) / 2 + left_margin + off)
+                .max(left_margin)
+                .min(w - wm::WINDOW_W);
+            let wy = ((h - wm::WINDOW_H - 28) / 2 + off).max(TOPBAR_H as i32).min(h - wm::WINDOW_H - 28);
+            Some(TermWin {
+                win: wm::Window::new(wx, wy, "System Clock"),
+                term: t,
+                editor: None,
+                app: Some(clock),
+                win_dirty: true,
+                initial_cmd: None,
+            })
+        }
+        Err(_) => None,
+    }
+}
+
 // ---- Full scene recomposite ─────────────────────────────────────────────────
 
 fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, ctx_menu: Option<(i32,i32)>, stats: &SysStats, blink_on: bool, hover_icon: Option<usize>) {
@@ -1145,13 +1169,19 @@ pub extern "C" fn _start() -> ! {
                                     scene_dirty = true;
                                 }
                             }
-                            6 => { // Prefs icon → Settings app
+                            6 => { // Clock icon → System Clock app
+                                if let Some(tw) = open_system_clock(w, h, wins.len()) {
+                                    wins.push(tw);
+                                    scene_dirty = true;
+                                }
+                            }
+                            7 => { // Prefs icon → Settings app
                                 if let Some(tw) = open_settings(w, h, wins.len()) {
                                     wins.push(tw);
                                     scene_dirty = true;
                                 }
                             }
-                            7 => { // TIS icon → TIS Console
+                            8 => { // TIS icon → TIS Console
                                 if let Some(tw) = open_tis_console(w, h, wins.len()) {
                                     wins.push(tw);
                                     scene_dirty = true;
