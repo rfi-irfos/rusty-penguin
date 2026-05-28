@@ -200,6 +200,55 @@ fn parse_redir<'a>(seg: &'a [u8]) -> (&'a [u8], Option<(String, bool)>) {
     (seg, None)
 }
 
+// ── Simple arithmetic expression parser (recursive descent) ─────────────────
+
+fn calc_skip(s: &[u8]) -> &[u8] {
+    let i = s.iter().position(|&b| b != b' ' && b != b'\t').unwrap_or(s.len());
+    &s[i..]
+}
+fn calc_atom(s: &[u8]) -> Option<(i64, &[u8])> {
+    let s = calc_skip(s);
+    if s.is_empty() { return None; }
+    if s[0] == b'(' {
+        let (v, r) = calc_add(calc_skip(&s[1..]))?;
+        let r = calc_skip(r);
+        if r.first() != Some(&b')') { return None; }
+        return Some((v, &r[1..]));
+    }
+    let neg = s[0] == b'-';
+    let d = if neg { &s[1..] } else { s };
+    if d.is_empty() || !d[0].is_ascii_digit() { return None; }
+    let mut n: i64 = 0;
+    let mut i = 0;
+    while i < d.len() && d[i].is_ascii_digit() { n = n * 10 + (d[i] - b'0') as i64; i += 1; }
+    Some((if neg { -n } else { n }, &d[i..]))
+}
+fn calc_mul(s: &[u8]) -> Option<(i64, &[u8])> {
+    let (mut lhs, mut r) = calc_atom(s)?;
+    loop {
+        let r2 = calc_skip(r);
+        match r2.first().copied() {
+            Some(b'*') => { let (rhs, r3) = calc_atom(calc_skip(&r2[1..]))?; lhs = lhs.wrapping_mul(rhs); r = r3; }
+            Some(b'/') => { let (rhs, r3) = calc_atom(calc_skip(&r2[1..]))?; if rhs == 0 { return None; } lhs /= rhs; r = r3; }
+            Some(b'%') => { let (rhs, r3) = calc_atom(calc_skip(&r2[1..]))?; if rhs == 0 { return None; } lhs %= rhs; r = r3; }
+            _ => break,
+        }
+    }
+    Some((lhs, r))
+}
+fn calc_add(s: &[u8]) -> Option<(i64, &[u8])> {
+    let (mut lhs, mut r) = calc_mul(s)?;
+    loop {
+        let r2 = calc_skip(r);
+        match r2.first().copied() {
+            Some(b'+') => { let (rhs, r3) = calc_mul(calc_skip(&r2[1..]))?; lhs = lhs.wrapping_add(rhs); r = r3; }
+            Some(b'-') => { let (rhs, r3) = calc_mul(calc_skip(&r2[1..]))?; lhs = lhs.wrapping_sub(rhs); r = r3; }
+            _ => break,
+        }
+    }
+    Some((lhs, r))
+}
+
 // ── History ──────────────────────────────────────────────────────────────────
 
 const HISTORY_CAP: usize = 32;
@@ -599,6 +648,7 @@ impl Terminal {
                 self.cur_col = (self.cur_col + fwd).min(COLS - 1);
                 self.dirty = true;
             }
+            0x09 => { self.complete_tab(); } // Tab
             b if b >= 0x20 && self.line_len < 255 => {
                 if self.line_cursor == self.line_len {
                     self.line_buf[self.line_len] = b;
@@ -777,6 +827,79 @@ impl Terminal {
         self.dirty = true;
     }
 
+    // ── Tab completion ───────────────────────────────────────────────────────
+
+    fn tab_common_prefix(strs: &[String]) -> String {
+        if strs.is_empty() { return String::new(); }
+        let first = strs[0].as_bytes();
+        let mut len = first.len();
+        for s in &strs[1..] {
+            let n = first.iter().zip(s.as_bytes()).take_while(|(a, b)| a == b).count();
+            if n < len { len = n; }
+        }
+        String::from(core::str::from_utf8(&first[..len]).unwrap_or(""))
+    }
+
+    fn complete_tab(&mut self) {
+        if self.line_cursor != self.line_len { return; }
+        let word_start = self.line_buf[..self.line_len]
+            .iter().rposition(|&b| b == b' ').map(|i| i + 1).unwrap_or(0);
+        let prefix = core::str::from_utf8(&self.line_buf[word_start..self.line_len]).unwrap_or("");
+        let is_cmd = word_start == 0;
+
+        let matches: Vec<String> = if is_cmd {
+            const CMDS: &[&str] = &[
+                "ai","bc","calc","cat","clear","cp","date","df","echo","env","exit",
+                "find","free","grep","head","help","hexdump","history","kinstall","kver",
+                "ls","lscpu","mem","mkdir","mv","nano","neofetch","printenv","ps","psh",
+                "pwd","rev","rm","seq","sort","sysinfo","tail","touch","trit","uname",
+                "uniq","uptime","vi","wc","which","whoami","xxd",
+            ];
+            CMDS.iter().filter(|&&c| c.starts_with(prefix)).map(|&c| String::from(c)).collect()
+        } else {
+            let ents = vfs::vfs().list();
+            ents.iter()
+                .filter(|e| e.name.starts_with(prefix))
+                .map(|e| if e.is_dir { format!("{}/", e.name) } else { e.name.clone() })
+                .collect()
+        };
+
+        if matches.is_empty() { return; }
+
+        let common = Self::tab_common_prefix(&matches);
+        if common.len() > prefix.len() {
+            let addition = common.as_bytes()[prefix.len()..].to_vec();
+            for b in addition {
+                if self.line_len < 255 {
+                    let p = self.line_len;
+                    self.line_buf[p] = b;
+                    self.line_len += 1;
+                    self.line_cursor += 1;
+                    self.process_byte(b);
+                }
+            }
+            if matches.len() == 1 && is_cmd && self.line_len < 255 {
+                let p = self.line_len;
+                self.line_buf[p] = b' ';
+                self.line_len += 1;
+                self.line_cursor += 1;
+                self.process_byte(b' ');
+            }
+        } else {
+            // Show all candidates then redraw prompt + line
+            self.write_output(b"\r\n");
+            for (i, m) in matches.iter().enumerate() {
+                self.write_output(m.as_bytes());
+                if i + 1 < matches.len() { self.write_output(b"  "); }
+            }
+            self.write_output(b"\r\n");
+            self.write_output(b"\x1b[32mring3\x1b[0m@\x1b[36mrusty-penguin\x1b[90m:~$\x1b[0m ");
+            let ll = self.line_len;
+            for i in 0..ll { let b = self.line_buf[i]; self.process_byte(b); }
+        }
+        self.dirty = true;
+    }
+
     // ── Pipe / redirect parser ───────────────────────────────────────────────
 
     fn parse_and_exec(&mut self, raw: &[u8]) {
@@ -847,15 +970,18 @@ impl Terminal {
         if line == b"help" {
             self.write_output(b"\x1b[36mFiles:\x1b[0m\r\n");
             self.write_output(b"  ls  cat  nano  touch  rm  cp  mv  mkdir\r\n");
-            self.write_output(b"  wc  head  tail  find  xxd\r\n");
+            self.write_output(b"  wc  head  tail  find  xxd  rev\r\n");
             self.write_output(b"\x1b[36mText filters (pipe-aware):\x1b[0m\r\n");
             self.write_output(b"  grep <pat> [f]   sort [f]   uniq [f]\r\n");
             self.write_output(b"\x1b[36mPipes & redirect:\x1b[0m\r\n");
-            self.write_output(b"  cmd | cmd        pipe output to next command\r\n");
-            self.write_output(b"  cmd > file       redirect output to file\r\n");
-            self.write_output(b"  cmd >> file      append output to file\r\n");
+            self.write_output(b"  cmd | cmd     cmd > file     cmd >> file\r\n");
+            self.write_output(b"\x1b[36mScripting:\x1b[0m\r\n");
+            self.write_output(b"  psh <script>       run VFS file as script\r\n");
+            self.write_output(b"  seq [s] e [step]   generate number sequence\r\n");
+            self.write_output(b"  calc <expr>        arithmetic (+ - * / % ())\r\n");
             self.write_output(b"\x1b[36mSystem:\x1b[0m\r\n");
-            self.write_output(b"  ps  mem  sysinfo  uname  whoami  uptime  date\r\n");
+            self.write_output(b"  ps  mem  free  df  lscpu  sysinfo\r\n");
+            self.write_output(b"  uname  whoami  uptime  date\r\n");
             self.write_output(b"  env  history  which <cmd>\r\n");
             self.write_output(b"  trit <n|op a b>    balanced ternary\r\n");
             self.write_output(b"  ai [n]             sparse ternary inference\r\n");
@@ -863,8 +989,8 @@ impl Terminal {
             self.write_output(b"\x1b[36mKernel:\x1b[0m\r\n");
             self.write_output(b"  kver               show kernel version + ABI\r\n");
             self.write_output(b"  kinstall <f>       stage custom kernel ELF\r\n");
+            self.write_output(b"\x1b[90m  Tab completion  Up/Down history\x1b[0m\r\n");
             self.write_output(b"\x1b[90m  Ctrl+T new term  Ctrl+W close  Ctrl+L clear\x1b[0m\r\n");
-            self.write_output(b"\x1b[90m  Up/Down history  Ctrl+A/E line start/end\x1b[0m\r\n");
 
         } else if line == b"ls" || line.starts_with(b"ls ") {
             let entries = vfs::vfs().list();
@@ -1290,6 +1416,111 @@ impl Terminal {
             self.write_output(b"OS=RustyPenguin\r\n");
             self.write_output(b"ARCH=x86_64\r\n");
             self.write_output(b"KERNEL=bare-metal-rust\r\n");
+
+        } else if line.starts_with(b"psh ") {
+            // Run a VFS file as a shell script (line by line)
+            let fname = arg(4);
+            match vfs::vfs().read(fname) {
+                None => {
+                    let s = format!("\x1b[31mpsh: {}: no such file\x1b[0m\r\n", fname);
+                    self.write_output(s.as_bytes());
+                }
+                Some(script_raw) => {
+                    let script = script_raw.to_vec();
+                    let script_lines: Vec<Vec<u8>> = script.split(|&b| b == b'\n')
+                        .map(|l| l.to_vec()).collect();
+                    for sl in script_lines {
+                        let t = trim_ws(&sl);
+                        if t.is_empty() || t[0] == b'#' { continue; }
+                        let echo = format!("\x1b[90m+ {}\x1b[0m\r\n",
+                            core::str::from_utf8(t).unwrap_or("?"));
+                        self.write_output(echo.as_bytes());
+                        let cmd_copy = t.to_vec();
+                        self.parse_and_exec(&cmd_copy);
+                        if self.wants_close { break; }
+                    }
+                }
+            }
+
+        } else if line == b"seq" || line.starts_with(b"seq ") {
+            let rest = if line.starts_with(b"seq ") { arg(4) } else { "" };
+            let mut parts = rest.split_ascii_whitespace();
+            let a = parts.next().and_then(|s| s.parse::<i64>().ok());
+            let b2 = parts.next().and_then(|s| s.parse::<i64>().ok());
+            let c2 = parts.next().and_then(|s| s.parse::<i64>().ok());
+            let (start, end, step) = match (a, b2, c2) {
+                (Some(e), None, _)        => (1i64, e, 1i64),
+                (Some(s), Some(e), None)  => (s, e, 1),
+                (Some(s), Some(e), Some(st)) => (s, e, st),
+                _ => { self.write_output(b"usage: seq [start] end [step]\r\n"); return; }
+            };
+            if step == 0 { self.write_output(b"seq: step cannot be 0\r\n"); return; }
+            let mut n = start;
+            let mut count = 0usize;
+            while (step > 0 && n <= end) || (step < 0 && n >= end) {
+                if count >= 10000 { self.write_output(b"...(truncated)\r\n"); break; }
+                let s = format!("{}\r\n", n);
+                self.write_output(s.as_bytes());
+                n = n.wrapping_add(step);
+                count += 1;
+            }
+
+        } else if line.starts_with(b"bc ") || line.starts_with(b"calc ") || line == b"bc" || line == b"calc" {
+            let expr_start = if line.starts_with(b"calc ") { 5usize }
+                             else if line.starts_with(b"bc ") { 3 } else { 0 };
+            let expr = if expr_start > 0 { &line[expr_start..] } else { b"" as &[u8] };
+            if expr.is_empty() {
+                self.write_output(b"usage: calc <expression>\r\n");
+                self.write_output(b"  supports: + - * / % ( )\r\n");
+            } else {
+                match calc_add(expr) {
+                    Some((val, rest)) if trim_ws(rest).is_empty() => {
+                        let s = format!("{}\r\n", val);
+                        self.write_output(s.as_bytes());
+                    }
+                    _ => { self.write_output(b"\x1b[31mcalc: syntax error\x1b[0m\r\n"); }
+                }
+            }
+
+        } else if line == b"rev" || line.starts_with(b"rev ") {
+            let data: Vec<u8> = if line.starts_with(b"rev ") {
+                let fname = arg(4);
+                match vfs::vfs().read(fname) {
+                    Some(d) => d.to_vec(),
+                    None => {
+                        let s = format!("\x1b[31mrev: {}: no such file\x1b[0m\r\n", fname);
+                        self.write_output(s.as_bytes()); return;
+                    }
+                }
+            } else { self.stdin_data.clone() };
+            for chunk in data.split(|&b| b == b'\n') {
+                if chunk.is_empty() { continue; }
+                let mut rev = chunk.to_vec(); rev.reverse();
+                self.write_output(&rev); self.write_output(b"\r\n");
+            }
+
+        } else if line == b"df" {
+            let (free, total) = sys_meminfo();
+            self.write_output(b"\x1b[36mFilesystem      Size  Used  Avail  Use%  Mounted on\x1b[0m\r\n");
+            let s = format!("vfs (memory)  {:4}M  {:4}M  {:4}M   {}%  /\r\n",
+                total, total.saturating_sub(free), free,
+                if total > 0 { (total.saturating_sub(free)) * 100 / total } else { 0 });
+            self.write_output(s.as_bytes());
+
+        } else if line == b"free" {
+            let (free, total) = sys_meminfo();
+            let used = total.saturating_sub(free);
+            self.write_output(b"\x1b[36m              total        used        free\x1b[0m\r\n");
+            let s = format!("Mem:       {:8}M  {:8}M  {:8}M\r\n", total, used, free);
+            self.write_output(s.as_bytes());
+
+        } else if line == b"lscpu" {
+            self.write_output(b"Architecture:   x86_64\r\n");
+            self.write_output(b"CPU op-mode:    64-bit\r\n");
+            self.write_output(b"Byte order:     Little Endian\r\n");
+            self.write_output(b"Model name:     RustyPenguin vCPU (QEMU/VirtualBox)\r\n");
+            self.write_output(b"Scheduler:      bare-metal cooperative\r\n");
+            self.write_output(b"Cache:          none (ring-3 only)\r\n");
 
         } else if line.starts_with(b"which ") {
             let cmd_name = arg(6);
