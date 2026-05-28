@@ -19,6 +19,7 @@
 use crate::fb::Framebuffer;
 use crate::trit::Trit;
 use alloc::string::String;
+use alloc::vec::Vec;
 
 #[derive(Clone, Copy)]
 pub struct Style {
@@ -132,7 +133,39 @@ pub fn panel_css(fb: &mut Framebuffer, x: i32, y: i32, w: i32, h: i32,
     paint_panel(fb, x, y, w, h, &style, state)
 }
 
-/// Keep `String` referenced so the engine can grow to own parsed stylesheets
-/// without an import churn later.
-#[allow(dead_code)]
-pub type StyleSheet = String;
+/// A parsed stylesheet: selector → Style rules. Supports the CSS subset
+/// `.selector { decl; decl; } .other { … }`. Selectors are simple names
+/// (class-like); cascading/specificity comes in a later brick.
+pub struct StyleSheet {
+    rules: Vec<(String, Style)>,
+}
+
+impl StyleSheet {
+    /// Parse `.name { props } .name2 { props }` into selector→Style rules.
+    pub fn parse(css: &str) -> Self {
+        let mut rules = Vec::new();
+        let bytes = css;
+        let mut rest = bytes;
+        while let Some(open) = rest.find('{') {
+            let selector = rest[..open].trim().trim_start_matches('.').trim();
+            let after = &rest[open + 1..];
+            let close = match after.find('}') { Some(c) => c, None => break };
+            let block = &after[..close];
+            if !selector.is_empty() {
+                rules.push((String::from(selector), parse(block)));
+            }
+            rest = &after[close + 1..];
+        }
+        StyleSheet { rules }
+    }
+
+    /// Look up a selector's Style (name with or without leading `.`),
+    /// falling back to the engine default if absent.
+    pub fn get(&self, selector: &str) -> Style {
+        let name = selector.trim_start_matches('.');
+        for (sel, style) in &self.rules {
+            if sel == name { return *style; }
+        }
+        Style::new()
+    }
+}

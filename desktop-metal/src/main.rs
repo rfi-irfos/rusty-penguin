@@ -676,26 +676,30 @@ fn start_menu_bounds(fh: u32) -> (i32, i32, i32, i32) {
     (2, fh as i32 - 28 - h, w, h)
 }
 
+// Desktop stylesheet (CSS subset). The frontend is migrating to declarative
+// styles via the ternary CSS engine — Apple-like surfaces, hairline borders.
+const THEME: &str = ".menu { background:#1c1c1e; border:#3a3a3c; radius:12; \
+                              accent:#0a84ff; pad-x:0; pad-y:0; shadow:1 }";
+
 fn draw_start_menu(fb: &mut Framebuffer) {
     let (x, y, w, h) = start_menu_bounds(fb.height);
-    // Modern drop shadow (multi-layer)
-    fb.fill_rounded_rect(x + 2, y + 2, w, h, 8, 0x00000080.min(0x0A0A14));
-    // Panel background — refined
-    fb.fill_rounded_rect(x, y, w, h, 8, 0x1A1A24);
-    // Header with accent
-    fb.fill_rounded_rect(x, y, w, 20, 6, 0x2C2C38);
-    fb.fill_rect_s(x, y, w, 3, GREEN);  // top accent stripe
-    fb.draw_bitmap_2x((x + 3) as u32, (y + 4) as u32, &DINGIR, GREEN, 0x2C2C38);
-    fb.draw_str((x + 23) as u32, (y + 6) as u32, "RUSTY PENGUIN", WHITE, 0x2C2C38);
-    fb.fill_rect_s(x, y + 19, w, 1, 0x3C3C48);  // separator
-    // Menu items
-    let bg = 0x1A1A24u32;
+    // Panel rendered through the ternary CSS engine (soft shadow, rounded
+    // corners, hairline edge). Item geometry below is unchanged so the existing
+    // hit-testing (start_menu_hit) stays valid.
+    let menu = css::StyleSheet::parse(THEME).get(".menu");
+    let bg = menu.bg;
+    css::paint_panel(fb, x, y, w, h, &menu, crate::trit::Trit::Zero);
+    // Header
+    fb.fill_rect_s(x + 1, y + 2, w - 2, 20, 0x2C2C2E);
+    fb.draw_bitmap_2x((x + 6) as u32, (y + 5) as u32, &DINGIR, GREEN, 0x2C2C2E);
+    fb.draw_str((x + 26) as u32, (y + 7) as u32, "RUSTY PENGUIN", WHITE, 0x2C2C2E);
+    fb.fill_rect_s(x + 1, y + 22, w - 2, 1, 0x3A3A3C);  // hairline separator
+    // Menu items (same offsets as start_menu_hit).
     for (i, item) in MENU_ITEMS.iter().enumerate() {
         let iy = y + 24 + i as i32 * 20;
-        fb.fill_rect_s(x + 1, iy, w - 2, 20, bg);
-        // Colored left accent bar per item
-        fb.fill_rect_s(x + 2, iy + 4, 2, 12, item.color);
-        fb.draw_str((x + 8) as u32, (iy + 6) as u32, item.label, item.color, bg);
+        fb.fill_rect_s(x + 2, iy, w - 4, 20, bg);
+        fb.fill_rect_s(x + 5, iy + 4, 2, 12, item.color);  // accent bar
+        fb.draw_str((x + 12) as u32, (iy + 6) as u32, item.label, item.color, bg);
     }
 }
 

@@ -16,6 +16,10 @@ All notable changes to this project will be documented here.
   the engine from a CSS string instead of hardcoded fill_rects — the start of
   moving the whole frontend from the "debug look" to a declarative,
   Apple-OS-grade aesthetic.
+- **Brick 2:** CSS *selectors* via `StyleSheet` (`.name { … } .other { … }` →
+  selector→Style lookup), and the **start menu** migrated to the engine — a
+  rounded Apple-like panel (soft shadow, hairline header). Item geometry
+  unchanged so hit-testing stays valid. Verified via screenshot.
 - `docs/BROWSER_PLAN.md`: architecture decision + staged roadmap for running
   real browsers. Two complementary paths: (a) this native ternary CSS engine
   (pure Rust, owns the look, long road to web compat); (b) a real Linux X/Mesa
