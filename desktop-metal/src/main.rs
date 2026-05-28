@@ -383,22 +383,40 @@ fn draw_topbar(fb: &mut Framebuffer, time: &str, s: &SysStats, ticks: u64) {
     let cx = (fw - time.len() as u32 * 8) / 2;
     fb.draw_str(cx, ty, time, WHITE, TOPBAR);
 
-    // RIGHT: trit indicator + labeled memory
-    let mut mem_buf = Strbuf::new();
-    mem_buf.push_bytes(b"MEM: ");
-    mem_buf.push_u64(s.used_mib as u64);
-    mem_buf.push(b'/');
-    mem_buf.push_u64(s.total_mib as u64);
-    mem_buf.push(b'M');
-    let mem_str = mem_buf.as_str();
+    // RIGHT: trit indicator + memory bar + pct label
     let ind = trit_indicator(ticks);
     let ind_str = core::str::from_utf8(&ind).unwrap_or("T[+--+]");
-    let mut rx = fw as i32 - 8;
-    rx -= mem_str.len() as i32 * 8;
-    if rx > 120 { fb.draw_str(rx as u32, ty, &mem_str, GREEN, TOPBAR); }
-    rx -= 16;
+    let mut rx = fw as i32 - 6;
+
+    // Trit indicator
     rx -= ind_str.len() as i32 * 8;
-    if rx > 120 { fb.draw_str(rx as u32, ty, ind_str, AMBER, TOPBAR); }
+    if rx > 120 { fb.draw_str(rx as u32, ty, ind_str, AMBER, 0x090F1B); }
+    rx -= 8;
+
+    // Memory percentage text ("xx%")
+    let mut pct_buf = Strbuf::new();
+    pct_buf.push_u64(s.mem_pct as u64);
+    pct_buf.push(b'%');
+    let pct_str = pct_buf.as_str();
+    rx -= pct_str.len() as i32 * 8;
+    let mem_col = if s.mem_pct > 80 { 0xEF4444u32 } else if s.mem_pct > 60 { AMBER } else { GREEN };
+    if rx > 120 { fb.draw_str(rx as u32, ty, pct_str, mem_col, 0x090F1B); }
+    rx -= 4;
+
+    // Memory bar (52×8, inside a 1px dark track)
+    const BAR_W: i32 = 52;
+    rx -= BAR_W + 2;
+    let bar_y = ty as i32 - 1;
+    if rx > 120 {
+        fb.fill_rect_s(rx, bar_y, BAR_W + 2, 10, 0x060C18);      // outer track
+        fb.fill_rect_s(rx + 1, bar_y + 1, BAR_W, 8, 0x0E1C2C);   // inner track
+        let fill = (BAR_W * s.mem_pct as i32 / 100).max(2);
+        fb.fill_rect_s(rx + 1, bar_y + 1, fill, 8, mem_col);
+    }
+    rx -= 6;
+
+    // "MEM" label
+    if rx > 120 { fb.draw_str((rx - 24) as u32, ty, "MEM", DIM, 0x090F1B); }
 }
 
 // ---- Launcher buttons ───────────────────────────────────────────────────────
