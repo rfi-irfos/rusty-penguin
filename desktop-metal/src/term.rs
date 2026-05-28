@@ -718,16 +718,23 @@ impl Terminal {
                 fb.draw_char(x + col as u32 * 8, y + row as u32 * 8, cell.ch as char, cell.fg, cell.bg);
             }
         }
-        if show_cursor {
-            let cx = x + self.cur_col as u32 * 8;
-            let cy = y + self.cur_row as u32 * 8;
-            if cx + 8 <= fb.width && cy + 8 <= fb.height {
-                fb.fill_rect(cx, cy, 8, 8, DEFAULT_FG);
-                let cell = &self.cells[self.cur_row * COLS + self.cur_col];
-                if cell.ch > b' ' {
-                    fb.draw_char(cx, cy, cell.ch as char, DEFAULT_BG, DEFAULT_FG);
-                }
+        self.paint_cursor(fb, x, y, show_cursor);
+    }
+
+    /// Redraw only the cursor cell — called every frame after restore_cursor_bg
+    /// so the cursor background buffer never contains a stale blink state.
+    pub fn paint_cursor(&self, fb: &mut Framebuffer, x: u32, y: u32, show: bool) {
+        let cx = x + self.cur_col as u32 * 8;
+        let cy = y + self.cur_row as u32 * 8;
+        if cx + 8 > fb.width || cy + 8 > fb.height { return; }
+        let cell = &self.cells[self.cur_row * COLS + self.cur_col];
+        if show {
+            fb.fill_rect(cx, cy, 8, 8, DEFAULT_FG);
+            if cell.ch > b' ' {
+                fb.draw_char(cx, cy, cell.ch as char, DEFAULT_BG, DEFAULT_FG);
             }
+        } else {
+            fb.draw_char(cx, cy, cell.ch as char, cell.fg, cell.bg);
         }
     }
 }

@@ -955,6 +955,18 @@ pub extern "C" fn _start() -> ! {
                 draw_topbar(&mut fb, up.as_str(), &stats, now_ticks);
             }
 
+            // Re-stamp the focused terminal cursor over whatever restore_cursor_bg
+            // put back, so cbuf always captures the correct blink state — not a
+            // stale frame from when the mouse was elsewhere.
+            {
+                let n = wins.len();
+                if let Some((fi, tw)) = wins.iter_mut().enumerate().rev().find(|(_, tw)| !tw.win.minimized) {
+                    let focused = fi == n - 1;
+                    let (ox, oy) = wm::content_origin(&tw.win);
+                    tw.term.paint_cursor(&mut fb, ox as u32, oy as u32, focused && blink_on);
+                }
+            }
+
             save_cursor_bg(&fb, cx, cy, &mut cbuf);
             draw_cursor(&mut fb, cx, cy);
         }
