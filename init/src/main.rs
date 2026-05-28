@@ -85,10 +85,59 @@ fn run_ok(cmd: &str, args: &[&str]) -> bool {
     Command::new(cmd).args(args).status().map(|s| s.success()).unwrap_or(false)
 }
 
-fn detect_disk() -> Option<String> {
-    // Probe the usual writable block devices (the ISO itself is the CD-ROM).
-    for d in ["/dev/vda", "/dev/vdb", "/dev/sda", "/dev/sdb", "/dev/nvme0n1"] {
-        if Path::new(d).exists() { return Some(d.to_string()); }
+/// Enumerate real block devices from /sys/class/block as (name, is_partition),
+/// skipping loop/ram/CD devices.
+fn list_block_devices() -> Vec<(String, bool)> {
+    let mut v = Vec::new();
+    if let Ok(rd) = fs::read_dir("/sys/class/block") {
+        for e in rd.flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if name.starts_with("loop") || name.starts_with("ram") || name.starts_with("sr") {
+                continue;
+            }
+            let is_part = Path::new(&format!("/sys/class/block/{}/partition", name)).exists();
+            v.push((name, is_part));
+        }
+    }
+    v
+}
+
+/// Read the ext2/3/4 volume label directly from the superblock (no blkid needed).
+/// Superblock starts at byte 1024; s_magic at +0x38 (0xEF53), s_volume_name at +0x78.
+fn ext_label(dev: &str) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = fs::File::open(dev).ok()?;
+    let mut magic = [0u8; 2];
+    f.seek(SeekFrom::Start(1024 + 0x38)).ok()?;
+    f.read_exact(&mut magic).ok()?;
+    if u16::from_le_bytes(magic) != 0xEF53 { return None; } // not an ext filesystem
+    let mut label = [0u8; 16];
+    f.seek(SeekFrom::Start(1024 + 0x78)).ok()?;
+    f.read_exact(&mut label).ok()?;
+    let end = label.iter().position(|&b| b == 0).unwrap_or(16);
+    Some(String::from_utf8_lossy(&label[..end]).into_owned())
+}
+
+/// Find a partition holding our RPDATA-labeled filesystem (an installed system).
+fn find_rpdata_partition() -> Option<String> {
+    for (name, is_part) in list_block_devices() {
+        if !is_part { continue; }
+        let dev = format!("/dev/{}", name);
+        if ext_label(&dev).as_deref() == Some("RPDATA") { return Some(dev); }
+    }
+    None
+}
+
+/// Find a whole disk with NO partition table — the only thing safe to
+/// auto-provision. A disk that already has partitions belongs to an installed
+/// system; reformatting it would destroy the partition table (data loss).
+fn find_blank_disk() -> Option<String> {
+    let devs = list_block_devices();
+    for (name, is_part) in &devs {
+        if *is_part { continue; }
+        let has_children = devs.iter().any(|(n, p)| *p && n.starts_with(name.as_str()));
+        if has_children { continue; }
+        return Some(format!("/dev/{}", name));
     }
     None
 }
@@ -111,19 +160,34 @@ fn bind_mount(src: &str, dst: &str) -> bool {
 }
 
 /// Bring up persistent storage. Returns the storage state as a Trit.
+///
+/// Resolution order (partition-aware so it never clobbers an installed system):
+///   1. an existing RPDATA-labeled partition  → mount it (installed-to-disk)
+///   2. a whole BLANK disk (no partition table) → mount or auto-provision (live)
+///   3. nothing writable                        → suppressed (ephemeral)
 fn setup_persistence() -> Trit {
-    let disk = match detect_disk() {
+    // 1. Installed system: a partition labeled RPDATA.
+    if let Some(part) = find_rpdata_partition() {
+        if mount_ext4(&part, PERSIST_MNT) || mount_fs(&part, PERSIST_MNT, "ext2") {
+            finish_persist_setup();
+            return Trit::Pos;
+        }
+    }
+
+    // 2. Live system: a genuinely blank whole disk we may provision. Never a
+    //    disk that already has a partition table (that would be data loss).
+    let disk = match find_blank_disk() {
         Some(d) => d,
-        None => return Trit::Neg, // suppressed — no writable disk, ephemeral boot
+        None => return Trit::Neg, // no safe writable disk → ephemeral boot
     };
 
-    // +1 if it already holds a filesystem we can mount.
-    if mount_ext4(&disk, PERSIST_MNT) {
+    // Maybe it already holds a whole-device fs from a previous live boot.
+    if mount_ext4(&disk, PERSIST_MNT) || mount_fs(&disk, PERSIST_MNT, "ext2") {
         finish_persist_setup();
         return Trit::Pos;
     }
 
-    // 0 → dormant: present but blank. Provision it. busybox mke2fs is a static,
+    // 0 → dormant: blank. Provision it. busybox mke2fs is a static,
     // dependency-free formatter; it doesn't take util-linux's `-t`, so we ask
     // for an ext-family fs with journaling via `-j` (ext3 layout, which the
     // kernel's ext4 driver mounts fine). `-F` forces a whole-device fs.
@@ -140,7 +204,6 @@ fn setup_persistence() -> Trit {
         }
         Err(e) => { eprintln!("[init] mke2fs not runnable: {}", e); return Trit::Neg; }
     }
-    // ext4 driver mounts ext2/3/4; fall back to explicit ext2 if needed.
     if mount_ext4(&disk, PERSIST_MNT) || mount_fs(&disk, PERSIST_MNT, "ext2") {
         finish_persist_setup();
         Trit::Pos

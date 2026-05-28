@@ -4,6 +4,17 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+### Fixed — Partition-aware persistence (data-loss footgun + installer prereq, 2026-05-28)
+
+- Persistence no longer blindly `mke2fs`-es the first disk it finds — which
+  would have **destroyed the partition table of an installed system**. New
+  resolution order: (1) mount an existing `RPDATA`-labeled partition, (2) else
+  auto-provision only a genuinely *blank* whole disk (no partition table), (3)
+  else ephemeral. The ext label is read straight from the superblock (no blkid).
+- Verified in QEMU: a pre-partitioned disk with an `RPDATA` ext4 partition is
+  mounted as-is (marker file preserved, not wiped); a blank disk still
+  auto-provisions. This is the prerequisite for install-to-disk.
+
 ### Added — Network package install + persistent packages + recovery console (2026-05-28)
 
 - **`rpm install <url>`** — the package manager now installs over the network,
