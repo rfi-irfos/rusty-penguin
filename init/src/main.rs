@@ -5,18 +5,22 @@ use std::path::Path;
 fn main() {
     println!("Rusty Penguin init (PID 1) starting...");
 
-    // Set up basic environment
     setup_environment();
-
-    // Create home directory if needed
     setup_home_directory();
 
-    // Try to launch shell
-    if let Err(e) = launch_shell() {
-        eprintln!("Failed to launch shell: {}", e);
-        loop {
-            std::thread::sleep(std::time::Duration::from_secs(1));
+    // Phase 1 substrate: try to launch the graphical desktop first. If the
+    // desktop binary isn't bundled or fails, fall back to the shell so the
+    // system stays usable instead of looping forever.
+    match launch_session() {
+        Ok(()) => {
+            println!("[init] Session exited cleanly. Halting init loop.");
         }
+        Err(e) => {
+            eprintln!("[init] Session launch failed: {}", e);
+        }
+    }
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(1));
     }
 }
 
@@ -58,25 +62,35 @@ fn setup_home_directory() {
     std::env::set_var("HOME", home);
 }
 
-fn launch_shell() -> Result<(), Box<dyn std::error::Error>> {
-    println!("[init] Launching shell...\n");
+fn launch_session() -> Result<(), Box<dyn std::error::Error>> {
+    // Preferred: graphical desktop (rp-compositor on Linux substrate).
+    let desktop_paths = ["/bin/desktop", "/usr/local/bin/desktop"];
+    for path in &desktop_paths {
+        if Path::new(path).exists() {
+            println!("[init] Found desktop: {} — launching...", path);
+            match Command::new(path).status() {
+                Ok(status) => {
+                    println!("[init] Desktop exited with status: {:?}", status.code());
+                    return Ok(());
+                }
+                Err(e) => {
+                    eprintln!("[init] Desktop failed to spawn ({}). Falling back to shell.", e);
+                    break;
+                }
+            }
+        }
+    }
 
-    // Try to find shell binary
-    let shell_paths = [
-        "/bin/shell",
-        "/usr/local/bin/shell",
-        "/bin/psh",
-        "/usr/local/bin/psh",
-    ];
-
+    // Fallback: shell. The system is still usable as a text console.
+    let shell_paths = ["/bin/shell", "/usr/local/bin/shell", "/bin/psh", "/usr/local/bin/psh"];
     for path in &shell_paths {
         if Path::new(path).exists() {
-            println!("[init] Found shell: {}", path);
+            println!("[init] Found shell: {} — launching...", path);
             let status = Command::new(path).status()?;
             println!("[init] Shell exited with status: {:?}", status.code());
             return Ok(());
         }
     }
 
-    Err("No shell binary found".into())
+    Err("No desktop or shell binary found".into())
 }
