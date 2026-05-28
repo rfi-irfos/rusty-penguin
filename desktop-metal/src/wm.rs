@@ -123,10 +123,11 @@ pub fn draw_window(fb: &mut Framebuffer, win: &Window, focused: bool) {
 
     let x = win.x; let y = win.y; let w = win.w; let h = win.h;
 
-    // Drop shadow
-    if x + 5 >= 0 && y + 5 >= 0 {
-        fb.fill_rect((x + 4) as u32, (y + 4) as u32, w as u32, h as u32, SHADOW);
-    }
+    // Graduated soft shadow — three layers from outermost to innermost.
+    // Each inner layer overwrites the previous, leaving only the ring visible.
+    fb.fill_rect_s(x + 7, y + 7, w, h, 0x030709);
+    fb.fill_rect_s(x + 5, y + 5, w, h, 0x040C12);
+    fb.fill_rect_s(x + 3, y + 3, w, h, SHADOW);
 
     // Outer border (1px) — color signals focus
     let border = if focused { BORDER_ACT } else { BORDER_DIM };
