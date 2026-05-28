@@ -11,3 +11,5 @@ path = "src/main.rs"
 
 [dependencies]
 scheduler = { path = "../scheduler" }
+ai-runtime = { path = "../ai-runtime" }
+ternary-core = { path = "../ternary-core" }

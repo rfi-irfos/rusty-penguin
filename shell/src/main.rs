@@ -54,6 +54,7 @@ fn run_shell() {
             "help" => println!(
                 "Commands:\n  ps             list processes with ternary state\n  \
                  kill <pid> <st>   transition pid to +1 (resume), 0 (stop), -1 (terminate)\n  \
+                 tis [dim]      sparse-skip forward pass; reports dormancy %\n  \
                  desktop        launch graphical session\n  \
                  ls / pwd / cd / exit  standard"
             ),
@@ -62,6 +63,7 @@ fn run_shell() {
             }
             "ps" => print_ternary_ps(),
             "kill" => kill_transition(&parts[1..]),
+            "tis" => tis_demo(&parts[1..]),
             _ => {
                 if !parts.is_empty() {
                     let _ = Command::new(parts[0])
@@ -71,6 +73,52 @@ fn run_shell() {
             }
         }
     }
+}
+
+/// `tis [dim]` — run a sparse-skip forward pass through ai-runtime to
+/// demonstrate the doctrine's "Sparse Execution" + "Ternary" principles.
+/// Generates a deterministic ternary weight matrix and input vector, runs
+/// the dense layer, and reports how many of the multiply-accumulate
+/// operations were skipped because at least one operand was Trit::Zero.
+fn tis_demo(args: &[&str]) {
+    use ai_runtime::{TernaryLinear, TernaryTensor};
+    use ternary_core::Trit;
+
+    let dim: usize = args.first()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(64);
+    if dim == 0 || dim > 4096 {
+        println!("tis: dim must be 1..=4096");
+        return;
+    }
+
+    // Deterministic LCG so the demo is reproducible across runs.
+    let mut state: u64 = 0x9E3779B97F4A7C15;
+    let mut next_trit = || -> Trit {
+        state = state.wrapping_mul(6_364_136_223_846_793_005)
+                     .wrapping_add(1_442_695_040_888_963_407);
+        match (state >> 33) % 3 {
+            0 => Trit::Neg, 1 => Trit::Zero, _ => Trit::Pos,
+        }
+    };
+
+    let in_features = dim;
+    let out_features = dim;
+    let mut layer = TernaryLinear::new(in_features, out_features);
+    for w in layer.weights.data.iter_mut() { *w = next_trit(); }
+    let input: Vec<Trit> = (0..in_features).map(|_| next_trit()).collect();
+    let input = TernaryTensor::new(input, vec![in_features]);
+
+    let (output, total_ops, skipped) = layer.forward(&input);
+    let dormancy_pct = if total_ops > 0 { skipped * 100 / total_ops } else { 0 };
+
+    let pos = output.data.iter().filter(|&&t| t == Trit::Pos).count();
+    let neg = output.data.iter().filter(|&&t| t == Trit::Neg).count();
+    let zer = output.data.len() - pos - neg;
+
+    println!("tis: {}x{} layer, {} ops, {} skipped ({}% dormancy)",
+             out_features, in_features, total_ops, skipped, dormancy_pct);
+    println!("     output trits: +{}  0:{}  -{}", pos, zer, neg);
 }
 
 /// `kill <pid> <state>` — drive scheduler::ProcessController::transition()
