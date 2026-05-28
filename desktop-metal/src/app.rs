@@ -875,3 +875,108 @@ impl App for SystemClock {
         "System Clock"
     }
 }
+
+/// Help and Reference Browser
+pub struct HelpBrowser {
+    scroll_offset: usize,
+    pub dirty: bool,
+    pub wants_close: bool,
+}
+
+impl HelpBrowser {
+    pub fn new() -> Self {
+        HelpBrowser {
+            scroll_offset: 0,
+            dirty: true,
+            wants_close: false,
+        }
+    }
+}
+
+impl App for HelpBrowser {
+    fn render(&mut self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, h: u32) {
+        // Header
+        fb.fill_rect(x, y, w, 24, 0x2C2C38);
+        fb.draw_str(x + 8, y + 7, "Help & Reference", 0xF5F5F7, 0x2C2C38);
+        fb.fill_rect(x, y + 24, w, 1, 0x3C3C48);
+
+        let help_text = [
+            "KEYBOARD SHORTCUTS",
+            "===================",
+            "",
+            "File Manager:",
+            "  Up/Down  - Navigate files",
+            "  Enter    - Open directory",
+            "  Backspace- Go up directory",
+            "  C        - Copy path",
+            "  D        - Delete file",
+            "",
+            "Text Editor:",
+            "  Ctrl+S   - Save file",
+            "  Ctrl+Q   - Quit editor",
+            "  Arrows   - Navigate",
+            "",
+            "Terminal:",
+            "  Ctrl+C   - Interrupt",
+            "  Ctrl+T   - New window",
+            "  Ctrl+W   - Close window",
+            "",
+            "Desktop:",
+            "  Right-click - Context menu",
+            "  Click icons - Launch apps",
+            "",
+            "AVAILABLE COMMANDS",
+            "===================",
+            "",
+            "File: ls, cat, touch, rm, mkdir, cp, mv",
+            "Text: nano, vi, edit, grep, head, tail",
+            "Util: echo, date, pwd, cd, whoami",
+            "Sys: ps, mem, free, df, uptime, cal",
+            "Math: calc, bc, trit, mul, div",
+            "Pkg: rpm install <package.rpkg>",
+            "",
+            "Use 'help' in Terminal for full list",
+        ];
+
+        let mut y_pos = y + 32;
+        for (i, line) in help_text.iter().enumerate() {
+            if i < self.scroll_offset { continue; }
+            if y_pos + 14 > y + h { break; }
+
+            let color = if line.is_empty() {
+                0x0F172A
+            } else if line.contains("=") {
+                0x4A9EFF
+            } else if line.starts_with("  ") {
+                0x9CA3AF
+            } else {
+                0xB8B8B8
+            };
+
+            fb.draw_str(x + 8, y_pos, line, color, 0x0F172A);
+            y_pos += 14;
+        }
+
+        self.dirty = false;
+    }
+
+    fn on_key(&mut self, key: u8) {
+        match key {
+            0x48 => { // Up arrow
+                if self.scroll_offset > 0 {
+                    self.scroll_offset -= 1;
+                    self.dirty = true;
+                }
+            }
+            0x50 => { // Down arrow
+                self.scroll_offset = self.scroll_offset.saturating_add(1);
+                self.dirty = true;
+            }
+            _ => {}
+        }
+    }
+
+    fn title(&self) -> &str {
+        "Help Browser"
+    }
+}

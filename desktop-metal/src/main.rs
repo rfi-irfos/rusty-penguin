@@ -461,6 +461,7 @@ const DESKTOP_ICONS: &[DesktopIcon] = &[
     DesktopIcon { label: "Cal",   bitmap: &ICON_TRIT,  color: 0xC4B5FD,  launcher_idx: 4 },
     DesktopIcon { label: "Calc",  bitmap: &ICON_PROC,  color: 0xFFD700,  launcher_idx: 7 },
     DesktopIcon { label: "Clock", bitmap: &ICON_TERM,  color: 0x87CEEB,  launcher_idx: 8 },
+    DesktopIcon { label: "Help",  bitmap: &ICON_FILES, color: 0x90EE90,  launcher_idx: 9 },
     DesktopIcon { label: "Prefs", bitmap: &ICON_PROC,  color: 0x9CA3AF,  launcher_idx: 5 },
     DesktopIcon { label: "TIS",   bitmap: &ICON_TRIT,  color: 0x4A9EFF,  launcher_idx: 6 },
 ];
@@ -898,6 +899,29 @@ fn open_system_clock(w: i32, h: i32, n: usize) -> Option<TermWin> {
     }
 }
 
+fn open_help_browser(w: i32, h: i32, n: usize) -> Option<TermWin> {
+    match term::Terminal::spawn() {
+        Ok(t) => {
+            let help = alloc::boxed::Box::new(app::HelpBrowser::new());
+            let off = n as i32 * 20;
+            let left_margin = 75;
+            let wx = ((w - left_margin - wm::WINDOW_W) / 2 + left_margin + off)
+                .max(left_margin)
+                .min(w - wm::WINDOW_W);
+            let wy = ((h - wm::WINDOW_H - 28) / 2 + off).max(TOPBAR_H as i32).min(h - wm::WINDOW_H - 28);
+            Some(TermWin {
+                win: wm::Window::new(wx, wy, "Help Browser"),
+                term: t,
+                editor: None,
+                app: Some(help),
+                win_dirty: true,
+                initial_cmd: None,
+            })
+        }
+        Err(_) => None,
+    }
+}
+
 // ---- Full scene recomposite ─────────────────────────────────────────────────
 
 fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, ctx_menu: Option<(i32,i32)>, stats: &SysStats, blink_on: bool, hover_icon: Option<usize>) {
@@ -1175,13 +1199,19 @@ pub extern "C" fn _start() -> ! {
                                     scene_dirty = true;
                                 }
                             }
-                            7 => { // Prefs icon → Settings app
+                            7 => { // Help icon → Help Browser
+                                if let Some(tw) = open_help_browser(w, h, wins.len()) {
+                                    wins.push(tw);
+                                    scene_dirty = true;
+                                }
+                            }
+                            8 => { // Prefs icon → Settings app
                                 if let Some(tw) = open_settings(w, h, wins.len()) {
                                     wins.push(tw);
                                     scene_dirty = true;
                                 }
                             }
-                            8 => { // TIS icon → TIS Console
+                            9 => { // TIS icon → TIS Console
                                 if let Some(tw) = open_tis_console(w, h, wins.len()) {
                                     wins.push(tw);
                                     scene_dirty = true;
