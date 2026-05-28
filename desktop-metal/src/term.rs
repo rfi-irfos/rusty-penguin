@@ -1111,10 +1111,10 @@ impl Terminal {
 
         let matches: Vec<String> = if is_cmd {
             const CMDS: &[&str] = &[
-                "ai","alias","bc","calc","cat","cd","clear","cp","date","df","du","echo","env","exit",
+                "ai","alias","bc","calc","cat","cd","clear","cp","cut","date","df","du","echo","env","exit",
                 "file","find","free","grep","head","help","hexdump","history","kinstall","kmanager","kver",
                 "ls","lscpu","mem","mkdir","mv","nano","neofetch","printf","printenv","ps","psh",
-                "pwd","rev","rm","seq","sort","stat","sysinfo","tail","touch","trit","uname",
+                "pwd","rev","rm","seq","sort","stat","sysinfo","tail","touch","tr","trit","uname",
                 "unalias","uniq","uptime","vi","wc","which","whoami","xxd",
             ];
             CMDS.iter().filter(|&&c| c.starts_with(prefix)).map(|&c| String::from(c)).collect()
@@ -1401,6 +1401,7 @@ impl Terminal {
             self.write_output(b"  wc  head  tail  find  xxd  rev  stat  file  du\r\n");
             self.write_output(b"\x1b[36mText filters (pipe-aware):\x1b[0m\r\n");
             self.write_output(b"  grep <pat> [f]   sort [f]   uniq [f]\r\n");
+            self.write_output(b"  cut <-f N>  tr <from> <to>\r\n");
             self.write_output(b"\x1b[36mPipes & redirect:\x1b[0m\r\n");
             self.write_output(b"  cmd | cmd     cmd > file     cmd >> file\r\n");
             self.write_output(b"\x1b[36mScripting:\x1b[0m\r\n");
@@ -1925,6 +1926,50 @@ impl Terminal {
                 }
             }
 
+        } else if line.starts_with(b"cut ") {
+            let rest = arg(4);
+            let data = if rest.contains('-') {
+                self.stdin_data.clone()
+            } else {
+                let fname = rest;
+                match vfs::vfs().read(fname) {
+                    Some(d) => d.to_vec(),
+                    None => {
+                        let s = format!("\x1b[31mcut: {}: no such file\x1b[0m\r\n", fname);
+                        self.write_output(s.as_bytes());
+                        return;
+                    }
+                }
+            };
+            for line in data.split(|&b| b == b'\n') {
+                if line.is_empty() { continue; }
+                let mut field_num = 1;
+                for chunk in line.split(|&b| b == b'\t') {
+                    if field_num == 1 {
+                        self.write_output(chunk);
+                    }
+                    field_num += 1;
+                }
+                self.write_output(b"\r\n");
+            }
+
+        } else if line.starts_with(b"tr ") {
+            let rest = arg(3);
+            let parts: Vec<&str> = rest.split(' ').collect();
+            if parts.len() < 2 {
+                self.write_output(b"usage: tr <from> <to>\r\n");
+                return;
+            }
+            let from = parts[0];
+            let to = parts[1];
+            let data = self.stdin_data.clone();
+            for &b in &data {
+                if let Some(idx) = from.as_bytes().iter().position(|&c| c == b) {
+                    if idx < to.len() { self.write_output(&[to.as_bytes()[idx]]); continue; }
+                }
+                self.write_output(&[b]);
+            }
+
         } else if line == b"find" || line.starts_with(b"find ") {
             let pat = if line.starts_with(b"find ") { arg(5) } else { "" };
             let entries = vfs::vfs().list();
@@ -2183,7 +2228,7 @@ impl Terminal {
             const BUILTINS: &[&str] = &[
                 "ls","cat","nano","vi","edit","touch","rm","mkdir","cp","mv",
                 "wc","head","tail","grep","sort","uniq","find","xxd","hexdump",
-                "history","env","printenv","which","set","export","unset",
+                "cut","tr","history","env","printenv","which","set","export","unset",
                 "ps","mem","free","df","du","lscpu","sysinfo","neofetch",
                 "uname","whoami","uptime","date","trit","ai","stat","file",
                 "echo","clear","pwd","cd","exit","kver","kinstall","kmanager",
