@@ -1,0 +1,76 @@
+RustyPenguin Syscall ABI v1
+===========================
+
+Calling convention: x86_64 SYSCALL instruction.
+  rax = syscall number (in), return value (out)
+  rdi = arg0
+  rsi = arg1
+  rdx = arg2
+  rcx, r11 = clobbered (SYSCALL/SYSRET semantics)
+
+All other registers preserved by kernel.
+
+To implement a compatible kernel:
+  - Load at 1MB (0x100000) or higher, multiboot2 header at start.
+  - Map framebuffer at 0xFD000000 (800x600x24bpp, Bochs/VESA).
+  - Set IA32_LSTAR to your syscall handler.
+  - Launch ring-3 binary from initramfs (bin/desktop).
+
+Syscall table
+-------------
+
+Nr  Name            Args              Return
+--  ----            ----              ------
+ 4  sys_ticks       —                 u64: monotonic tick count (100 Hz)
+ 5  sys_meminfo     —                 (free_mib << 32) | total_mib  (u64)
+ 7  sys_input_poll  —                 event u64, 0 if ring empty
+                                        bits[63:56]=type
+                                        0x01=Key: bits[7:0]=ascii [15:8]=scancode
+                                        0x02=Mouse: bits[15:0]=abs_x [31:16]=abs_y
+                                                    bits[39:32]=buttons
+ 9  sys_ps          buf*u8, max_ent   number of entries written
+                                        each entry 32 bytes:
+                                          [0..8]  pid u64 LE
+                                          [8]     state (1=run 2=sleep)
+                                          [16..32] name NUL-terminated
+12  sys_serial      byte u8           — (write byte to debug serial)
+13  sys_rtc         —                 packed BCD u64:
+                                        [7:0]=weekday [15:8]=sec [23:16]=min
+                                        [31:24]=hour [39:32]=mday [47:40]=month
+24  sys_yield       —                 — (sleep until next hardware interrupt)
+
+Mouse coordinates
+-----------------
+abs_x and abs_y are kernel-clamped to [0, fb_width-1] x [0, fb_height-1].
+The kernel tracks cumulative PS/2 deltas and clamps them. The desktop binary
+reads absolute coordinates directly from the event; no client-side clamping
+needed.
+
+Framebuffer
+-----------
+Identity-mapped at 0xFD000000.
+Format: 24bpp packed RGB, stride = width * 3 bytes.
+Default resolution: 800x600 (VESA mode 0x118 via Bochs VGA).
+Write pixels directly; no vsync, no double buffer.
+
+Ring-3 binary
+-------------
+ELF64, static, no dynamic linker. Entry point = ELF e_entry.
+Stack: kernel sets RSP to top of a 64KiB region before jumping to ring-3.
+No libc. No OS services beyond the syscall table above.
+
+Kernel swap procedure
+---------------------
+1. Build your kernel as an ELF64 multiboot2 binary.
+2. Copy to iso/boot/kernel.elf in the repo tree.
+3. Run: bash iso/build.sh
+4. Boot the resulting rusty-penguin.iso.
+
+The desktop binary (bin/desktop) and its syscall expectations are fixed.
+A replacement kernel must implement the table above. Extensions are allowed
+at higher syscall numbers (>= 64) without breaking the existing desktop.
+
+Compatibility promise
+---------------------
+Syscall numbers 4, 5, 7, 9, 12, 13, 24 are stable. We will not renumber them.
+New syscalls will be allocated from 64 upward.

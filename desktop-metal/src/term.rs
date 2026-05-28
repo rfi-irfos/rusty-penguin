@@ -750,6 +750,9 @@ impl Terminal {
             self.write_output(b"  trit <n|op a b>    balanced ternary\r\n");
             self.write_output(b"  ai [n]             sparse ternary inference\r\n");
             self.write_output(b"  echo  clear  pwd  exit\r\n");
+            self.write_output(b"\x1b[36mKernel:\x1b[0m\r\n");
+            self.write_output(b"  kver               show kernel version + ABI\r\n");
+            self.write_output(b"  kinstall <f>       stage custom kernel ELF\r\n");
             self.write_output(b"\x1b[90m  Ctrl+T new term  Ctrl+W close  Ctrl+L clear\x1b[0m\r\n");
             self.write_output(b"\x1b[90m  Up/Down history  Ctrl+A/E line start/end\x1b[0m\r\n");
 
@@ -970,6 +973,56 @@ impl Terminal {
             self.write_output(format!("  \x1b[36mMemory\x1b[0m : {}/{} MiB\r\n", used, total).as_bytes());
             self.write_output(format!("  \x1b[36mUptime\x1b[0m : {:02}:{:02}:{:02}\r\n", secs / 3600, (secs % 3600) / 60, secs % 60).as_bytes());
             self.write_output(b"  \x1b[35mModel \x1b[0m : Binary hardware. Ternary mind.\r\n");
+        } else if line == b"kver" || line == b"uname -r" {
+            // Show current kernel identity baked into this build
+            self.write_output(b"\x1b[32mRustyPenguin\x1b[0m 1.0.0 x86_64\r\n");
+            self.write_output(b"kernel: rusty-penguin-kernel (bare metal, Rust)\r\n");
+            self.write_output(b"ABI: psh syscall table v1\r\n");
+            self.write_output(b"\r\n");
+            self.write_output(b"\x1b[90mTo boot a custom kernel:\x1b[0m\r\n");
+            self.write_output(b"  1. Build your kernel ELF (multiboot2 header required)\r\n");
+            self.write_output(b"  2. Drop it into iso/boot/kernel.elf\r\n");
+            self.write_output(b"  3. Run  bash iso/build.sh  to repack\r\n");
+            self.write_output(b"  Or use 'kinstall <path>' to stage it via the shell.\r\n");
+
+        } else if line.starts_with(b"kinstall ") {
+            // Stage a kernel ELF for next boot. Writes a manifest note into VFS.
+            // On bare-metal with no real disk, the VFS entry documents the intent;
+            // rebuild the ISO to make it permanent.
+            let fname = arg(9);
+            if fname.is_empty() {
+                self.write_output(b"usage: kinstall <kernel.elf>\r\n");
+                self.write_output(b"  Stages a custom kernel for next boot.\r\n");
+                self.write_output(b"  Rebuild the ISO after this to make it permanent.\r\n");
+            } else {
+                // Write a boot manifest into VFS so build tooling can pick it up
+                let manifest = {
+                    let mut m = String::from("kernel_elf=");
+                    m.push_str(fname);
+                    m.push('\n');
+                    m.push_str("staged_by=psh kinstall\n");
+                    m
+                };
+                vfs::vfs().write("boot.manifest", manifest.as_bytes());
+                self.write_output(b"\x1b[32m[kinstall]\x1b[0m Kernel staged:\r\n");
+                let s = format!("  source : {}\r\n", fname);
+                self.write_output(s.as_bytes());
+                self.write_output(b"  target : iso/boot/kernel.elf\r\n");
+                self.write_output(b"\r\n");
+                self.write_output(b"Next steps to make it permanent:\r\n");
+                self.write_output(b"  cp <your-kernel.elf> iso/boot/kernel.elf\r\n");
+                self.write_output(b"  bash iso/build.sh\r\n");
+                self.write_output(b"\r\n");
+                self.write_output(b"\x1b[90mMultiboot2 header required. Syscall ABI:\x1b[0m\r\n");
+                self.write_output(b"  sys 4  -> ticks u64\r\n");
+                self.write_output(b"  sys 5  -> meminfo (free<<32|total) MiB\r\n");
+                self.write_output(b"  sys 7  -> input_poll event u64\r\n");
+                self.write_output(b"  sys 12 -> serial_write byte\r\n");
+                self.write_output(b"  sys 13 -> rtc packed BCD\r\n");
+                self.write_output(b"  sys 24 -> yield (sleep until next IRQ)\r\n");
+                self.write_output(b"See docs/syscall-abi.txt for full ABI.\r\n");
+            }
+
         } else if line == b"exit" {
             self.write_output(b"bye\r\n");
             self.wants_close = true;
