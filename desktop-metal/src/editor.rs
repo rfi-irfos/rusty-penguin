@@ -20,6 +20,10 @@ pub struct TextEditor {
     filename: String,
     dirty: bool,                // unsaved changes
     pub wants_close: bool,
+    // ANSI escape state for arrow / Home / End / Delete keys, which the
+    // kernel translates to ESC [ A/B/C/D, ESC [ H, ESC [ F, ESC [ 3 ~.
+    // 0 = normal, 1 = saw ESC, 2 = saw ESC [, 3 = saw ESC [ 3
+    esc_state: u8,
 }
 
 impl TextEditor {
@@ -36,6 +40,7 @@ impl TextEditor {
             filename: filename.to_string(),
             dirty: false,
             wants_close: false,
+            esc_state: 0,
         }
     }
 
@@ -52,6 +57,7 @@ impl TextEditor {
             filename: filename.to_string(),
             dirty: false,
             wants_close: false,
+            esc_state: 0,
         };
     }
 
@@ -62,6 +68,70 @@ impl TextEditor {
     }
 
     pub fn send_key(&mut self, key: u8) {
+        // ANSI escape state machine: arrows / Home / End / Delete arrive as
+        // multi-byte sequences from the kernel keyboard handler.
+        match self.esc_state {
+            1 => {
+                self.esc_state = if key == b'[' { 2 } else { 0 };
+                return;
+            }
+            2 => {
+                self.esc_state = 0;
+                match key {
+                    b'A' => { // Up
+                        if self.cursor_line > 0 { self.cursor_line -= 1; self.clamp_cursor(); }
+                    }
+                    b'B' => { // Down
+                        if self.cursor_line + 1 < self.lines.len() {
+                            self.cursor_line += 1; self.clamp_cursor();
+                        }
+                    }
+                    b'C' => { // Right
+                        let line_len = self.lines[self.cursor_line].len();
+                        if self.cursor_col < line_len {
+                            self.cursor_col += 1;
+                        } else if self.cursor_line + 1 < self.lines.len() {
+                            self.cursor_line += 1;
+                            self.cursor_col = 0;
+                        }
+                    }
+                    b'D' => { // Left
+                        if self.cursor_col > 0 {
+                            self.cursor_col -= 1;
+                        } else if self.cursor_line > 0 {
+                            self.cursor_line -= 1;
+                            self.cursor_col = self.lines[self.cursor_line].len();
+                        }
+                    }
+                    b'H' => self.cursor_col = 0,                                        // Home
+                    b'F' => self.cursor_col = self.lines[self.cursor_line].len(),       // End
+                    b'3' => self.esc_state = 3,                                         // Delete: expect '~'
+                    _ => {}
+                }
+                return;
+            }
+            3 => {
+                self.esc_state = 0;
+                if key == b'~' {
+                    let line_len = self.lines[self.cursor_line].len();
+                    if self.cursor_col < line_len {
+                        self.lines[self.cursor_line].remove(self.cursor_col);
+                        self.dirty = true;
+                    } else if self.cursor_line + 1 < self.lines.len() {
+                        let next = self.lines.remove(self.cursor_line + 1);
+                        self.lines[self.cursor_line].push_str(&next);
+                        self.dirty = true;
+                    }
+                }
+                return;
+            }
+            _ => {}
+        }
+        if key == 0x1B {
+            self.esc_state = 1;
+            return;
+        }
+
         match key {
             b'\n' | b'\r' => {
                 let line = &self.lines[self.cursor_line];
