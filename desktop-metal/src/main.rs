@@ -1023,17 +1023,18 @@ pub extern "C" fn _start() -> ! {
         }
 
         // ── Single unified render pass per frame ──────────────────────────────
-        // Cursor is always restored from prev_cx/prev_cy (old position) and
-        // saved + drawn at cx/cy (new position). This guarantees exactly one
-        // composite per frame regardless of how many state changes occurred.
+        // With multiple windows, always do full recomposite to avoid flickering.
+        // Single window can use partial rendering for efficiency.
         let cursor_moved = prev_cx != cx || prev_cy != cy;
         let any_chrome   = scene_dirty || wins.iter().any(|tw| tw.win_dirty);
         let any_content  = wins.iter().any(|tw| (tw.term.dirty || tw.editor.is_some()) && !tw.win.minimized);
+        let multi_window = wins.len() > 1;
+        let force_full_composite = any_chrome || multi_window;
 
         if any_chrome || any_content || cursor_moved || topbar_due {
             restore_cursor_bg(&mut fb, prev_cx, prev_cy, &cbuf);
 
-            if any_chrome {
+            if force_full_composite {
                 recomposite(&mut fb, &mut wins, start_menu_open, ctx_menu, &stats, blink_on, hover_icon);
                 scene_dirty = false;
             } else if any_content {
