@@ -150,6 +150,56 @@ impl EditorState {
 
 enum EscState { Normal, Esc, Csi(String) }
 
+// ── Pipeline helpers ─────────────────────────────────────────────────────────
+
+fn trim_ws(b: &[u8]) -> &[u8] {
+    let s = b.iter().position(|&x| x != b' ' && x != b'\t').unwrap_or(b.len());
+    let e = b.iter().rposition(|&x| x != b' ' && x != b'\t').map(|i| i + 1).unwrap_or(0);
+    if s < e { &b[s..e] } else { b"" }
+}
+
+fn strip_ansi(input: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(input.len());
+    let mut i = 0;
+    while i < input.len() {
+        if input[i] == 0x1B {
+            i += 1;
+            if i < input.len() && input[i] == b'[' {
+                i += 1;
+                while i < input.len() && !input[i].is_ascii_alphabetic() { i += 1; }
+                if i < input.len() { i += 1; }
+            }
+        } else {
+            if input[i] != b'\r' { out.push(input[i]); }
+            i += 1;
+        }
+    }
+    out
+}
+
+// Returns (cmd_part, Option<(filename, is_append)>)
+fn parse_redir<'a>(seg: &'a [u8]) -> (&'a [u8], Option<(String, bool)>) {
+    // Search >> first
+    let mut i = 0;
+    while i + 1 < seg.len() {
+        if seg[i] == b'>' && seg[i + 1] == b'>' {
+            let cmd = trim_ws(&seg[..i]);
+            let fname = core::str::from_utf8(trim_ws(&seg[i + 2..])).unwrap_or("").trim();
+            if !fname.is_empty() { return (cmd, Some((String::from(fname), true))); }
+        }
+        i += 1;
+    }
+    // Single >
+    for i in 0..seg.len() {
+        if seg[i] == b'>' && !(i + 1 < seg.len() && seg[i + 1] == b'>') {
+            let cmd = trim_ws(&seg[..i]);
+            let fname = core::str::from_utf8(trim_ws(&seg[i + 1..])).unwrap_or("").trim();
+            if !fname.is_empty() { return (cmd, Some((String::from(fname), false))); }
+        }
+    }
+    (seg, None)
+}
+
 // ── History ──────────────────────────────────────────────────────────────────
 
 const HISTORY_CAP: usize = 32;
@@ -172,6 +222,8 @@ pub struct Terminal {
     hist_pos:        usize,
     saved_line:      Vec<u8>,
     pub editor:      Option<EditorState>,
+    capture:         Option<Vec<u8>>,   // when Some, write_output feeds this instead of cells
+    stdin_data:      Vec<u8>,           // pipe input for the current command
 }
 
 // ── Syscall helpers ──────────────────────────────────────────────────────────
@@ -239,6 +291,8 @@ impl Terminal {
             hist_pos:    0,
             saved_line:  Vec::new(),
             editor:      None,
+            capture:     None,
+            stdin_data:  Vec::new(),
         };
         t.write_output(b"\x1b[32m  Rusty Penguin\x1b[0m \x1b[90mv1.0.0 \xB7 psh 1.0\x1b[0m\r\n");
         t.write_output(b"\x1b[36m  Binary hardware. Ternary mind.\x1b[0m\r\n");
@@ -441,6 +495,10 @@ impl Terminal {
     }
 
     pub fn write_output(&mut self, bytes: &[u8]) {
+        if let Some(cap) = &mut self.capture {
+            cap.extend_from_slice(bytes);
+            return;
+        }
         for &b in bytes { self.process_byte(b); }
         self.dirty = true;
     }
@@ -492,7 +550,7 @@ impl Terminal {
                     }
                     self.hist_pos = self.history.len();
                 }
-                self.exec_command(&line[..line_len]);
+                self.parse_and_exec(&line[..line_len]);
                 if self.editor.is_none() {
                     self.write_output(b"\x1b[32mring3\x1b[0m@\x1b[36mrusty-penguin\x1b[90m:~$\x1b[0m ");
                 }
@@ -719,6 +777,60 @@ impl Terminal {
         self.dirty = true;
     }
 
+    // ── Pipe / redirect parser ───────────────────────────────────────────────
+
+    fn parse_and_exec(&mut self, raw: &[u8]) {
+        // Split on unquoted |
+        let mut segs: Vec<&[u8]> = Vec::new();
+        let mut start = 0usize;
+        for i in 0..raw.len() {
+            if raw[i] == b'|' {
+                segs.push(trim_ws(&raw[start..i]));
+                start = i + 1;
+            }
+        }
+        segs.push(trim_ws(&raw[start..]));
+        segs.retain(|s| !s.is_empty());
+        if segs.is_empty() { return; }
+
+        self.stdin_data.clear();
+
+        let n = segs.len();
+        for idx in 0..n {
+            let seg: &[u8] = segs[idx];
+            let is_last = idx + 1 == n;
+
+            let (cmd, redir) = if is_last { parse_redir(seg) } else { (seg, None) };
+            if cmd.is_empty() { continue; }
+
+            let capturing = !is_last || redir.is_some();
+            if capturing { self.capture = Some(Vec::new()); }
+
+            self.exec_command(cmd);
+
+            if !is_last {
+                let raw_cap = self.capture.take().unwrap_or_default();
+                self.stdin_data = strip_ansi(&raw_cap);
+            } else if let Some((fname, append)) = redir {
+                let raw_cap = self.capture.take().unwrap_or_default();
+                let clean = strip_ansi(&raw_cap);
+                if append {
+                    let mut existing = vfs::vfs().read(&fname).map(|d| d.to_vec()).unwrap_or_default();
+                    existing.extend_from_slice(&clean);
+                    vfs::vfs().write(&fname, &existing);
+                } else {
+                    vfs::vfs().write(&fname, &clean);
+                }
+                let s = format!("\x1b[90mwrote {} bytes to {}\x1b[0m\r\n", clean.len(), fname);
+                self.write_output(s.as_bytes());
+            } else {
+                self.capture = None;
+            }
+        }
+
+        self.stdin_data.clear();
+    }
+
     // ── Shell command dispatch ───────────────────────────────────────────────
 
     fn exec_command(&mut self, line: &[u8]) {
@@ -733,20 +845,18 @@ impl Terminal {
         };
 
         if line == b"help" {
-            self.write_output(b"\x1b[36mFile system:\x1b[0m\r\n");
-            self.write_output(b"  ls           list files\r\n");
-            self.write_output(b"  cat <f>      print file\r\n");
-            self.write_output(b"  nano <f>     edit file  (^S save  ^X exit)\r\n");
-            self.write_output(b"  touch <f>    create empty file\r\n");
-            self.write_output(b"  rm <f>       delete file\r\n");
-            self.write_output(b"  cp <s> <d>   copy file\r\n");
-            self.write_output(b"  mv <s> <d>   rename file\r\n");
-            self.write_output(b"  wc <f>       word/line/byte count\r\n");
-            self.write_output(b"  head <f>     first 10 lines\r\n");
-            self.write_output(b"  tail <f>     last 10 lines\r\n");
-            self.write_output(b"  mkdir <d>    create directory\r\n");
+            self.write_output(b"\x1b[36mFiles:\x1b[0m\r\n");
+            self.write_output(b"  ls  cat  nano  touch  rm  cp  mv  mkdir\r\n");
+            self.write_output(b"  wc  head  tail  find  xxd\r\n");
+            self.write_output(b"\x1b[36mText filters (pipe-aware):\x1b[0m\r\n");
+            self.write_output(b"  grep <pat> [f]   sort [f]   uniq [f]\r\n");
+            self.write_output(b"\x1b[36mPipes & redirect:\x1b[0m\r\n");
+            self.write_output(b"  cmd | cmd        pipe output to next command\r\n");
+            self.write_output(b"  cmd > file       redirect output to file\r\n");
+            self.write_output(b"  cmd >> file      append output to file\r\n");
             self.write_output(b"\x1b[36mSystem:\x1b[0m\r\n");
             self.write_output(b"  ps  mem  sysinfo  uname  whoami  uptime  date\r\n");
+            self.write_output(b"  env  history  which <cmd>\r\n");
             self.write_output(b"  trit <n|op a b>    balanced ternary\r\n");
             self.write_output(b"  ai [n]             sparse ternary inference\r\n");
             self.write_output(b"  echo  clear  pwd  exit\r\n");
@@ -770,6 +880,13 @@ impl Terminal {
                         self.write_output(s.as_bytes());
                     }
                 }
+            }
+
+        } else if line == b"cat" {
+            let data = self.stdin_data.clone();
+            for chunk in data.split(|&b| b == b'\n') {
+                self.write_output(chunk);
+                self.write_output(b"\r\n");
             }
 
         } else if line.starts_with(b"cat ") {
@@ -854,55 +971,61 @@ impl Terminal {
                 self.write_output(s.as_bytes());
             }
 
-        } else if line.starts_with(b"wc ") {
-            let fname = arg(3);
-            match vfs::vfs().read(fname) {
-                Some(data) => {
-                    let bytes = data.len();
-                    let lines = data.iter().filter(|&&b| b == b'\n').count() + 1;
-                    let words = data.split(|b| *b == b' ' || *b == b'\n' || *b == b'\t')
-                        .filter(|w| !w.is_empty()).count();
-                    let s = format!("  {} lines  {} words  {} bytes  {}\r\n", lines, words, bytes, fname);
-                    self.write_output(s.as_bytes());
-                }
-                None => {
-                    let s = format!("\x1b[31mwc: {}: no such file\x1b[0m\r\n", fname);
-                    self.write_output(s.as_bytes());
-                }
-            }
-
-        } else if line.starts_with(b"head ") {
-            let fname = arg(5);
-            match vfs::vfs().read(fname) {
-                Some(data) => {
-                    let data = data.to_vec();
-                    for chunk in data.split(|&b| b == b'\n').take(10) {
-                        self.write_output(chunk);
-                        self.write_output(b"\r\n");
+        } else if line == b"wc" || line.starts_with(b"wc ") {
+            let (data, label) = if line.starts_with(b"wc ") {
+                let fname = arg(3);
+                match vfs::vfs().read(fname) {
+                    Some(d) => (d.to_vec(), String::from(fname)),
+                    None => {
+                        let s = format!("\x1b[31mwc: {}: no such file\x1b[0m\r\n", fname);
+                        self.write_output(s.as_bytes());
+                        return;
                     }
                 }
-                None => {
-                    let s = format!("\x1b[31mhead: {}: no such file\x1b[0m\r\n", fname);
-                    self.write_output(s.as_bytes());
-                }
-            }
+            } else {
+                (self.stdin_data.clone(), String::from("stdin"))
+            };
+            let bytes = data.len();
+            let lines_count = data.iter().filter(|&&b| b == b'\n').count() + 1;
+            let words = data.split(|b| *b == b' ' || *b == b'\n' || *b == b'\t')
+                .filter(|w| !w.is_empty()).count();
+            let s = format!("  {} lines  {} words  {} bytes  {}\r\n", lines_count, words, bytes, label);
+            self.write_output(s.as_bytes());
 
-        } else if line.starts_with(b"tail ") {
-            let fname = arg(5);
-            match vfs::vfs().read(fname) {
-                Some(data) => {
-                    let data = data.to_vec();
-                    let all_lines: Vec<&[u8]> = data.split(|&b| b == b'\n').collect();
-                    let start = all_lines.len().saturating_sub(10);
-                    for chunk in &all_lines[start..] {
-                        self.write_output(chunk);
-                        self.write_output(b"\r\n");
+        } else if line == b"head" || line.starts_with(b"head ") {
+            let data: Vec<u8> = if line.starts_with(b"head ") {
+                let fname = arg(5);
+                match vfs::vfs().read(fname) {
+                    Some(d) => d.to_vec(),
+                    None => {
+                        let s = format!("\x1b[31mhead: {}: no such file\x1b[0m\r\n", fname);
+                        self.write_output(s.as_bytes());
+                        return;
                     }
                 }
-                None => {
-                    let s = format!("\x1b[31mtail: {}: no such file\x1b[0m\r\n", fname);
-                    self.write_output(s.as_bytes());
+            } else { self.stdin_data.clone() };
+            for chunk in data.split(|&b| b == b'\n').take(10) {
+                self.write_output(chunk);
+                self.write_output(b"\r\n");
+            }
+
+        } else if line == b"tail" || line.starts_with(b"tail ") {
+            let data: Vec<u8> = if line.starts_with(b"tail ") {
+                let fname = arg(5);
+                match vfs::vfs().read(fname) {
+                    Some(d) => d.to_vec(),
+                    None => {
+                        let s = format!("\x1b[31mtail: {}: no such file\x1b[0m\r\n", fname);
+                        self.write_output(s.as_bytes());
+                        return;
+                    }
                 }
+            } else { self.stdin_data.clone() };
+            let all_lines: Vec<&[u8]> = data.split(|&b| b == b'\n').collect();
+            let start = all_lines.len().saturating_sub(10);
+            for chunk in &all_lines[start..] {
+                self.write_output(chunk);
+                self.write_output(b"\r\n");
             }
 
         } else if line == b"uname" || line == b"uname -a" {
@@ -1021,6 +1144,168 @@ impl Terminal {
                 self.write_output(b"  sys 13 -> rtc packed BCD\r\n");
                 self.write_output(b"  sys 24 -> yield (sleep until next IRQ)\r\n");
                 self.write_output(b"See docs/syscall-abi.txt for full ABI.\r\n");
+            }
+
+        } else if line.starts_with(b"grep ") || line == b"grep" {
+            let (pat_vec, data) = if line.starts_with(b"grep ") {
+                let rest = core::str::from_utf8(&line[5..]).unwrap_or("").trim();
+                let mut sp = rest.splitn(2, ' ');
+                let pat = sp.next().unwrap_or("").trim();
+                let fname = sp.next().map(|s| s.trim()).unwrap_or("");
+                let dat: Vec<u8> = if !fname.is_empty() {
+                    match vfs::vfs().read(fname) {
+                        Some(d) => d.to_vec(),
+                        None => {
+                            let s = format!("\x1b[31mgrep: {}: no such file\x1b[0m\r\n", fname);
+                            self.write_output(s.as_bytes());
+                            return;
+                        }
+                    }
+                } else { self.stdin_data.clone() };
+                (pat.as_bytes().to_vec(), dat)
+            } else { (Vec::new(), self.stdin_data.clone()) };
+            if pat_vec.is_empty() {
+                self.write_output(b"usage: grep <pattern> [file]\r\n");
+            } else {
+                let mut matched = false;
+                for chunk in data.split(|&b| b == b'\n') {
+                    if !chunk.is_empty() && chunk.windows(pat_vec.len()).any(|w| w == pat_vec.as_slice()) {
+                        self.write_output(chunk);
+                        self.write_output(b"\r\n");
+                        matched = true;
+                    }
+                }
+                if !matched && data.is_empty() {
+                    self.write_output(b"\x1b[90m(no input - pipe something first)\x1b[0m\r\n");
+                }
+            }
+
+        } else if line == b"sort" || line.starts_with(b"sort ") {
+            let data: Vec<u8> = if line.starts_with(b"sort ") {
+                let fname = arg(5);
+                match vfs::vfs().read(fname) {
+                    Some(d) => d.to_vec(),
+                    None => {
+                        let s = format!("\x1b[31msort: {}: no such file\x1b[0m\r\n", fname);
+                        self.write_output(s.as_bytes());
+                        return;
+                    }
+                }
+            } else { self.stdin_data.clone() };
+            let mut lines_v: Vec<Vec<u8>> = data.split(|&b| b == b'\n')
+                .filter(|l| !l.is_empty()).map(|l| l.to_vec()).collect();
+            lines_v.sort_unstable();
+            for l in &lines_v { self.write_output(l); self.write_output(b"\r\n"); }
+
+        } else if line == b"uniq" || line.starts_with(b"uniq ") {
+            let data: Vec<u8> = if line.starts_with(b"uniq ") {
+                let fname = arg(5);
+                match vfs::vfs().read(fname) {
+                    Some(d) => d.to_vec(),
+                    None => {
+                        let s = format!("\x1b[31muniq: {}: no such file\x1b[0m\r\n", fname);
+                        self.write_output(s.as_bytes());
+                        return;
+                    }
+                }
+            } else { self.stdin_data.clone() };
+            let mut prev: Option<Vec<u8>> = None;
+            for chunk in data.split(|&b| b == b'\n') {
+                if chunk.is_empty() { continue; }
+                if prev.as_deref() != Some(chunk) {
+                    self.write_output(chunk);
+                    self.write_output(b"\r\n");
+                    prev = Some(chunk.to_vec());
+                }
+            }
+
+        } else if line == b"find" || line.starts_with(b"find ") {
+            let pat = if line.starts_with(b"find ") { arg(5) } else { "" };
+            let entries = vfs::vfs().list();
+            let mut any = false;
+            for e in entries {
+                let matches = pat.is_empty()
+                    || e.name.as_bytes().windows(pat.len()).any(|w| w == pat.as_bytes());
+                if matches {
+                    let prefix = if e.is_dir { "\x1b[34m./" } else { "./" };
+                    let suffix = if e.is_dir { "/\x1b[0m" } else { "" };
+                    let s = format!("{}{}{}\r\n", prefix, e.name, suffix);
+                    self.write_output(s.as_bytes());
+                    any = true;
+                }
+            }
+            if !any { self.write_output(b"\x1b[90m(no match)\x1b[0m\r\n"); }
+
+        } else if line.starts_with(b"xxd ") || line.starts_with(b"hexdump ") {
+            let prefix = if line.starts_with(b"xxd ") { 4usize } else { 8 };
+            let fname = arg(prefix);
+            match vfs::vfs().read(fname) {
+                None => {
+                    let s = format!("\x1b[31mxxd: {}: no such file\x1b[0m\r\n", fname);
+                    self.write_output(s.as_bytes());
+                }
+                Some(raw_data) => {
+                    let raw_data = raw_data.to_vec();
+                    let mut offset = 0usize;
+                    for chunk in raw_data.chunks(16) {
+                        let mut row = format!("{:08x}: ", offset);
+                        for (i, &b) in chunk.iter().enumerate() {
+                            if i == 8 { row.push(' '); }
+                            let hi = b >> 4; let lo = b & 0xF;
+                            row.push(if hi < 10 { (b'0' + hi) as char } else { (b'a' + hi - 10) as char });
+                            row.push(if lo < 10 { (b'0' + lo) as char } else { (b'a' + lo - 10) as char });
+                            row.push(' ');
+                        }
+                        // pad short rows
+                        for i in 0..(16 - chunk.len()) {
+                            if chunk.len() + i == 8 { row.push(' '); }
+                            row.push_str("   ");
+                        }
+                        row.push(' ');
+                        for &b in chunk { row.push(if b >= 0x20 && b < 0x7F { b as char } else { '.' }); }
+                        row.push_str("\r\n");
+                        self.write_output(row.as_bytes());
+                        offset += chunk.len();
+                    }
+                }
+            }
+
+        } else if line == b"history" {
+            let hist = self.history.clone();
+            if hist.is_empty() {
+                self.write_output(b"\x1b[90m(no history)\x1b[0m\r\n");
+            } else {
+                for (i, entry) in hist.iter().enumerate() {
+                    let s = format!("  {:3}  {}\r\n", i + 1,
+                        core::str::from_utf8(entry).unwrap_or("?"));
+                    self.write_output(s.as_bytes());
+                }
+            }
+
+        } else if line == b"env" || line == b"printenv" {
+            self.write_output(b"SHELL=/bin/psh\r\n");
+            self.write_output(b"PATH=/bin:/usr/local/bin\r\n");
+            self.write_output(b"HOME=/\r\n");
+            self.write_output(b"USER=ring3\r\n");
+            self.write_output(b"OS=RustyPenguin\r\n");
+            self.write_output(b"ARCH=x86_64\r\n");
+            self.write_output(b"KERNEL=bare-metal-rust\r\n");
+
+        } else if line.starts_with(b"which ") {
+            let cmd_name = arg(6);
+            const BUILTINS: &[&str] = &[
+                "ls","cat","nano","vi","edit","touch","rm","mkdir","cp","mv",
+                "wc","head","tail","grep","sort","uniq","find","xxd","hexdump",
+                "history","env","printenv","which",
+                "ps","mem","sysinfo","neofetch","uname","whoami","uptime","date",
+                "trit","ai","echo","clear","pwd","exit","kver","kinstall",
+            ];
+            if BUILTINS.iter().any(|&b| b == cmd_name) {
+                let s = format!("psh builtin: {}\r\n", cmd_name);
+                self.write_output(s.as_bytes());
+            } else {
+                let s = format!("\x1b[31m{}: not found\x1b[0m\r\n", cmd_name);
+                self.write_output(s.as_bytes());
             }
 
         } else if line == b"exit" {
