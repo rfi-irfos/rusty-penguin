@@ -10,8 +10,10 @@ pub struct Framebuffer {
     pub height: u32,
     pub bpp: u32,
     pub stride: u32,
-    pub data: *mut u8,
+    pub data: *mut u8,           // points at backbuffer
     pub len: usize,
+    real: *mut u8,                // mmap'd /dev/fb0
+    back: Box<[u8]>,              // RAM backbuffer; pointer is stable
     _file: fs::File,
 }
 
@@ -87,7 +89,7 @@ impl Framebuffer {
 
         let len = (stride * height) as usize;
 
-        let data = unsafe {
+        let real = unsafe {
             let ptr = nix::sys::mman::mmap(
                 None,
                 std::num::NonZeroUsize::new(len).ok_or("zero len")?,
@@ -99,7 +101,21 @@ impl Framebuffer {
             ptr as *mut u8
         };
 
-        Ok(Framebuffer { width, height, bpp, stride, data, len, _file: file })
+        // Allocate a stable-pointer backbuffer. All draw ops target this;
+        // present() pushes it to the real mmap'd framebuffer in one block,
+        // so the user never sees intermediate paint states.
+        let mut back: Box<[u8]> = vec![0u8; len].into_boxed_slice();
+        let data = back.as_mut_ptr();
+
+        Ok(Framebuffer { width, height, bpp, stride, data, len, real, back, _file: file })
+    }
+
+    /// Flush backbuffer to the real /dev/fb0 mmap in one memcpy. Call once
+    /// per frame after all draw ops complete.
+    pub fn present(&mut self) {
+        unsafe {
+            std::ptr::copy_nonoverlapping(self.back.as_ptr(), self.real, self.len);
+        }
     }
 
     #[inline]

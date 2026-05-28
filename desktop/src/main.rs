@@ -512,6 +512,7 @@ fn main() {
     { let s = mouse.lock().unwrap(); cx = s.x; cy = s.y; }
     save_cursor_bg(&fb, cx, cy, &mut cbuf);
     draw_cursor(&mut fb, cx, cy);
+    fb.present();  // flush initial paint to /dev/fb0
 
     let mut prev_btn: u8 = 0;
     let mut tick: u64 = 0;
@@ -575,6 +576,7 @@ fn main() {
             if cursor_moved { cx = nx; cy = ny; }
             save_cursor_bg(&fb, cx, cy, &mut cbuf);
             draw_cursor(&mut fb, cx, cy);
+            fb.present();
         }
 
         // Top bar: clock + live stats, update every ~2s
@@ -584,6 +586,7 @@ fn main() {
             draw_topbar(&mut fb, &read_rtc(), &sampler.stats);
             save_cursor_bg(&fb, cx, cy, &mut cbuf);
             draw_cursor(&mut fb, cx, cy);
+            fb.present();
         }
         tick = tick.wrapping_add(1);
 
