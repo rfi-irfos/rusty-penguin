@@ -104,7 +104,9 @@ impl FileManager {
         if self.selected < self.entries.len() {
             let entry = &self.entries[self.selected];
             let sep = if self.cwd.ends_with('/') { "" } else { "/" };
-            self.clipboard = Some(alloc::format!("{}{}{}", self.cwd, sep, entry.name));
+            let path = alloc::format!("{}{}{}", self.cwd, sep, entry.name);
+            crate::clipboard::set(&path);
+            self.clipboard = Some(path);
             self.dirty = true;
         }
     }

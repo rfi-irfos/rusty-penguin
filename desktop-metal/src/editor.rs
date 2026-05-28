@@ -132,6 +132,35 @@ impl TextEditor {
             return;
         }
 
+        // Ctrl+C (0x03) — copy current line to clipboard.
+        if key == 0x03 {
+            let line = self.lines[self.cursor_line].clone();
+            crate::clipboard::set(&line);
+            return;
+        }
+
+        // Ctrl+V (0x16) — paste clipboard at cursor.
+        if key == 0x16 {
+            if let Some(text) = crate::clipboard::get() {
+                for ch in text.chars() {
+                    if ch == '\n' {
+                        let line = &self.lines[self.cursor_line];
+                        let tail = line[self.cursor_col..].to_string();
+                        self.lines[self.cursor_line].truncate(self.cursor_col);
+                        self.lines.insert(self.cursor_line + 1, tail);
+                        self.cursor_line += 1;
+                        self.cursor_col = 0;
+                    } else if (ch as u32) >= 0x20 && (ch as u32) < 0x7F {
+                        self.lines[self.cursor_line].insert(self.cursor_col, ch);
+                        self.cursor_col += 1;
+                    }
+                }
+                self.dirty = true;
+                self.clamp_cursor();
+            }
+            return;
+        }
+
         match key {
             b'\n' | b'\r' => {
                 let line = &self.lines[self.cursor_line];

@@ -5,6 +5,7 @@ extern crate alloc;
 
 mod allocator;
 mod app;
+mod clipboard;
 mod editor;
 mod fb;
 mod font;
