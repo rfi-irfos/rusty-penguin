@@ -458,6 +458,7 @@ const DESKTOP_ICONS: &[DesktopIcon] = &[
     DesktopIcon { label: "Files", bitmap: &ICON_FILES, color: BLUE,    launcher_idx: 1 },
     DesktopIcon { label: "Edit",  bitmap: &ICON_AI,    color: AMBER,   launcher_idx: 2 },
     DesktopIcon { label: "Procs", bitmap: &ICON_PROC,  color: 0xA0D0FF, launcher_idx: 3 },
+    DesktopIcon { label: "Cal",   bitmap: &ICON_TRIT,  color: 0xC4B5FD,  launcher_idx: 4 },
 ];
 
 // 56px wide keeps icons safely left of the default window start (x=79)
@@ -682,6 +683,7 @@ struct TermWin {
     win:         wm::Window,
     term:        term::Terminal,
     editor:      Option<editor::TextEditor>,
+    app:         Option<alloc::boxed::Box<dyn app::App>>,
     win_dirty:   bool,
     initial_cmd: Option<&'static [u8]>,
 }
@@ -699,6 +701,7 @@ fn open_term(w: i32, h: i32, n: usize, l: &Launcher) -> Option<TermWin> {
                 win: wm::Window::new(wx, wy, l.title),
                 term: t,
                 editor: None,
+                app: None,
                 win_dirty: true,
                 initial_cmd: l.cmd.map(|s| s.as_bytes()),
             })
@@ -721,6 +724,53 @@ fn open_editor(w: i32, h: i32, n: usize, filename: &str, title: &str) -> Option<
                 win: wm::Window::new(wx, wy, title),
                 term: t,
                 editor: Some(ed),
+                app: None,
+                win_dirty: true,
+                initial_cmd: None,
+            })
+        }
+        Err(_) => None,
+    }
+}
+
+fn open_file_manager(w: i32, h: i32, n: usize) -> Option<TermWin> {
+    match term::Terminal::spawn() {
+        Ok(t) => {
+            let fm = alloc::boxed::Box::new(app::FileManager::new());
+            let off = n as i32 * 20;
+            let left_margin = 75;
+            let wx = ((w - left_margin - wm::WINDOW_W) / 2 + left_margin + off)
+                .max(left_margin)
+                .min(w - wm::WINDOW_W);
+            let wy = ((h - wm::WINDOW_H - 28) / 2 + off).max(TOPBAR_H as i32).min(h - wm::WINDOW_H - 28);
+            Some(TermWin {
+                win: wm::Window::new(wx, wy, "File Manager"),
+                term: t,
+                editor: None,
+                app: Some(fm),
+                win_dirty: true,
+                initial_cmd: None,
+            })
+        }
+        Err(_) => None,
+    }
+}
+
+fn open_calendar(w: i32, h: i32, n: usize) -> Option<TermWin> {
+    match term::Terminal::spawn() {
+        Ok(t) => {
+            let cal = alloc::boxed::Box::new(app::Calendar::new());
+            let off = n as i32 * 20;
+            let left_margin = 75;
+            let wx = ((w - left_margin - wm::WINDOW_W) / 2 + left_margin + off)
+                .max(left_margin)
+                .min(w - wm::WINDOW_W);
+            let wy = ((h - wm::WINDOW_H - 28) / 2 + off).max(TOPBAR_H as i32).min(h - wm::WINDOW_H - 28);
+            Some(TermWin {
+                win: wm::Window::new(wx, wy, "Calendar"),
+                term: t,
+                editor: None,
+                app: Some(cal),
                 win_dirty: true,
                 initial_cmd: None,
             })
@@ -744,7 +794,9 @@ fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, 
         let (ox, oy) = wm::content_origin(&tw.win);
         let cw = (tw.win.w - 2).max(0) as u32;
         let ch = (tw.win.h - 3 - wm::TITLEBAR_H).max(0) as u32;
-        if let Some(ed) = &mut tw.editor {
+        if let Some(app) = &mut tw.app {
+            app.render(fb, ox as u32, oy as u32, cw, ch);
+        } else if let Some(ed) = &mut tw.editor {
             ed.render(fb, ox as u32, oy as u32, cw, ch);
         } else {
             tw.term.render(fb, ox as u32, oy as u32, cw, ch, focused && blink_on);
@@ -967,16 +1019,32 @@ pub extern "C" fn _start() -> ! {
                         let tw = wins.remove(mi); wins.push(tw);
                         scene_dirty = true;
                     } else if let Some(di) = desktop_icon_hit(cx, cy) {
-                        let li = DESKTOP_ICONS[di].launcher_idx;
-                        // Special case: Edit icon (launcher_idx 2) opens graphical editor
-                        if li == 2 {
-                            if let Some(tw) = open_editor(w, h, wins.len(), "readme.txt", "Text Editor") {
-                                wins.push(tw);
-                                scene_dirty = true;
+                        match di {
+                            1 => { // Files icon → FileManager app
+                                if let Some(tw) = open_file_manager(w, h, wins.len()) {
+                                    wins.push(tw);
+                                    scene_dirty = true;
+                                }
                             }
-                        } else if let Some(tw) = open_term(w, h, wins.len(), &LAUNCHERS[li]) {
-                            wins.push(tw);
-                            scene_dirty = true;
+                            2 => { // Edit icon → graphical text editor
+                                if let Some(tw) = open_editor(w, h, wins.len(), "readme.txt", "Text Editor") {
+                                    wins.push(tw);
+                                    scene_dirty = true;
+                                }
+                            }
+                            4 => { // Cal icon → Calendar app
+                                if let Some(tw) = open_calendar(w, h, wins.len()) {
+                                    wins.push(tw);
+                                    scene_dirty = true;
+                                }
+                            }
+                            _ => { // Other icons → terminal with launcher command
+                                let li = DESKTOP_ICONS[di].launcher_idx;
+                                if let Some(tw) = open_term(w, h, wins.len(), &LAUNCHERS[li]) {
+                                    wins.push(tw);
+                                    scene_dirty = true;
+                                }
+                            }
                         }
                     }
                 }
