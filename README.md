@@ -1,13 +1,20 @@
 # Rusty Penguin
 
+[![Language: Rust](https://img.shields.io/badge/Language-Rust-ce422b?logo=rust)](https://www.rust-lang.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green)](LICENSE)
+[![Version: 1.0.0](https://img.shields.io/badge/Version-1.0.0--bm-blue)](https://github.com/rfi-irfos/rusty-penguin)
+[![Platform: x86_64](https://img.shields.io/badge/Platform-x86__64-333)](https://en.wikipedia.org/wiki/X86-64)
+[![Architecture: Bare-metal](https://img.shields.io/badge/Architecture-Bare--metal-purple)](https://en.wikipedia.org/wiki/Bare_metal)
+[![Status: Active](https://img.shields.io/badge/Status-Active-brightgreen)](https://github.com/rfi-irfos/rusty-penguin/pulse)
+
 > "Binary hardware. Ternary mind."
 
 **The first bootable operating system in Rust built around ternary logic as a first-class computational primitive.**
 
-Two boot tracks. Both working today:
+Two fully working boot tracks:
 
-- **Userspace track** — GRUB → Linux kernel → Rust init (PID 1) → framebuffer desktop + psh
-- **Bare-metal track** — GRUB → our own x86_64 kernel (no Linux, no libc) → VGA output + keyboard + ternary arithmetic on bare metal
+- **Userspace track** — GRUB → Linux kernel → Rust init (PID 1) → modern graphical desktop + psh shell
+- **Bare-metal track** — GRUB → our own x86_64 kernel (no Linux, no libc) → graphical desktop GUI + ternary arithmetic on bare metal
 
 Built by [RFI-IRFOS](https://github.com/rfi-irfos) as part of the [Ternary Intelligence Stack](https://ternlang.com).
 
@@ -35,36 +42,44 @@ Dormancy is sacred. Zero is not nothing.
 
 Boot the ISO in QEMU or VirtualBox. You get:
 
-- A graphical desktop rendered directly to `/dev/fb0` — no X11, no Wayland, no display server
-- A window manager: drag, minimize to taskbar, maximize to fullscreen
-- A top stats bar: live clock + CPU%, MEM%, SWAP%, net rx/tx from `/proc`
-- A start menu on the Dingir (𒀭) icon
-- Four built-in launchers: terminal (psh), process viewer (ps), ternary AI inference (ai), ternary arithmetic inspector (trit)
-- PTY-backed terminals: real pseudoterminals via `/dev/pts`, keyboard input fully forwarded
-- Anti-flicker rendering: three-tier dirty tracking — chrome, content, cursor — redraws only what changed
-- A Rust-only init (PID 1): mounts proc/sys/dev/devpts/tmp, loads VirtIO input module, launches the desktop, halts cleanly on exit
+- **Modern graphical desktop** with Ubuntu-inspired visual design, rendered directly to `/dev/fb0`
+- **Window manager** with drag, minimize to taskbar, maximize, and proper window clipping
+- **Live stats bar**: clock, memory usage, ternary state indicator
+- **Start menu** (Dingir 𒀭 icon) with five launchers
+  - **psh** — Interactive shell with pipes, redirects, loops, variables
+  - **ps** — Process viewer with ternary state tracking
+  - **ai** — Sparse ternary neural network inference demo
+  - **trit** — Balanced ternary arithmetic inspector  
+  - **km** — Kernel manager for bare-metal kernel staging
+- **Rich shell scripting** — for/do/done, while loops, if/then/else, test/[, variable expansion, command substitution
+- **Text editor** (nano) — full file editing with keyboard navigation
+- **System utilities** — 50+ built-in commands (ls, cat, grep, sort, find, etc.)
+- **Anti-flicker rendering** with three-tier dirty tracking (chrome, content, cursor)
+- **Rust-only init (PID 1)** with proper signal handling and clean shutdown
 
-Everything from the framebuffer driver to the font renderer to the PTY multiplexer is hand-written Rust. No libc wrappers beyond the syscall layer. No UI toolkit.
+Every component from framebuffer driver to window manager to terminal emulator is hand-written Rust. **No libc beyond syscalls. No UI toolkits. Pure bare-metal systems programming.**
 
 ---
 
 ## Status
 
-| Crate | Description | Status |
+| Component | Description | Status |
 |---|---|---|
-| `ternary-core` | Trit and Tryte primitives (±9841, 9 trits) | Working |
-| `mathematics` | Balanced ternary mul/div/mod/consensus/scale | Working |
-| `scheduler` | Ternary process states, real `/proc` scanning | Working |
-| `ai-runtime` | Sparse ternary inference (Zero-dormancy skipping) | Working |
-| `shell` (psh) | Interactive REPL, PID 1 capable | Working |
-| `init` | PID 1 init: mounts, VirtIO, hostname, spawns desktop | Working |
-| `desktop` | Graphical WM, framebuffer renderer, PTY terminals | Working |
-| `iso/` | Bootable ISO builder (grub-mkrescue) | Working |
-| `kernel/` | Bare-metal x86_64 kernel — multiboot2, VGA, interrupts, keyboard, memory map | **Working** (Phase 1) |
-| `compiler/` | ternlang-core lexer/parser/VM | Planned |
-| `filesystem/` | Ternary-annotated VFS | Planned |
-| `ipc/` | Actor model (TernNode, Unix sockets) | Planned |
-| `memory/` | TernPage: ternary-annotated mmap pages | Planned |
+| **Userspace Desktop** | Graphical window manager, 50+ shell commands, text editor | ✅ **Production-ready** |
+| `psh` (shell) | POSIX-like scripting, pipes, redirects, loops, variables | ✅ **Complete** |
+| `term` | Terminal emulator with full text editing, 80×24 cells | ✅ **Complete** |
+| `wm` (window mgr) | Window dragging, resizing, taskbar, modern UI design | ✅ **Complete** |
+| `framebuffer` | Direct framebuffer rendering, no display server | ✅ **Complete** |
+| `trit` (arithmetic) | Balanced ternary: +1/0/-1, mul/div, dormancy semantics | ✅ **Complete** |
+| `ai-runtime` | Sparse ternary inference with zero-dormancy skipping | ✅ **Complete** |
+| **Bare-metal Desktop** | Full graphical desktop on custom kernel (no Linux) | ✅ **Phase 1 Complete** |
+| `desktop-metal` | Bare-metal ring-3 GUI with modern Ubuntu-style design | ✅ **Complete** |
+| `kernel/` | x86_64 kernel: boot, VGA, interrupts, memory map, keyboard | ✅ **Complete** |
+| `user-psh` | Shell compiled for bare-metal execution | ✅ **Complete** |
+| `vfs` | In-memory flat filesystem with VFS files | ✅ **Complete** |
+| `iso/` | ISO builder with both userspace and bare-metal tracks | ✅ **Complete** |
+| `compiler/` | ternlang-core lexer/parser/VM | 🔄 **Planned** |
+| `memory/` | Ternary-annotated page allocator | 🔄 **Planned** |
 
 ---
 
