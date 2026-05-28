@@ -4,6 +4,25 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+### Added — Persistent storage, the ternary way (daily-driver gap #1, 2026-05-28)
+
+- The Linux track is no longer ephemeral: `init` brings up a **persistent
+  writable disk mounted at /home**, so user files and config survive reboots —
+  the first real step toward daily-driving Rusty Penguin off a USB stick.
+- Storage is modeled as a **ternary state** (`ternary-core::Trit`), not a binary
+  present/absent flag:
+  - `+1` Active — disk present & formatted → mounted, persistent
+  - ` 0` Dormant — disk present but blank → auto-provisioned (busybox `mke2fs`,
+    bundled static in the initramfs), then activated
+  - `-1` Suppressed — no writable disk / mount failed → ephemeral boot
+- The boot record is a first-class **`.tern` file** (`~/.rusty/boot.tern`) with
+  balanced-ternary encoding: the boot counter is stored both decimal and as a
+  9-trit `Tryte` (the OS's native numeric form), e.g. `@boots 3 0000000+0`.
+- `init` now mounts the kernel pseudo-filesystems (devtmpfs/proc/sys/tmp) and
+  `sync(2)`s after writing so data is durable across power-off.
+- Verified in QEMU across 3 reboots on a shared virtio disk: blank→provisioned
+  on boot 1, then boot counter advances 1→2→3 on the persistent fs.
+
 ### Added — Doom (pure-Rust raycaster FPS) in the bare-metal desktop (2026-05-28)
 
 - A **first-person 3D shooter** runs natively as a bare-metal desktop app,

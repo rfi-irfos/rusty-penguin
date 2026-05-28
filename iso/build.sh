@@ -92,6 +92,18 @@ if [ -f "$DESKTOP_BIN" ]; then
     chmod +x "$INITRAMFS_DIR/bin/desktop" "$INITRAMFS_DIR/usr/local/bin/desktop"
 fi
 
+# Bundle static busybox — provides mke2fs (format the persistence disk), mount,
+# fdisk, etc. in a single dependency-free binary. init shells out to it to
+# provision a blank disk for persistent /home.
+BUSYBOX_SRC=$(command -v busybox || echo /usr/bin/busybox)
+if [ -x "$BUSYBOX_SRC" ] && file "$BUSYBOX_SRC" | grep -q "statically linked"; then
+    cp "$BUSYBOX_SRC" "$INITRAMFS_DIR/bin/busybox"
+    chmod +x "$INITRAMFS_DIR/bin/busybox"
+    echo "[build] bundled static busybox (mke2fs/mount/fdisk)"
+else
+    echo "[build] WARNING: static busybox not found — disk auto-provisioning disabled"
+fi
+
 # Bundle shared libraries required by the dynamically-linked init binary
 for lib in libc.so.6 libgcc_s.so.1; do
     src=$(ldconfig -p 2>/dev/null | awk "/$lib/"'{print $NF}' | head -1)
