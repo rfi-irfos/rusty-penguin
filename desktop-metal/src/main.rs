@@ -102,8 +102,11 @@ const BLUE:     u32 = 0x60A5FA;
 const CURSOR:   u32 = 0xF8FAFC;
 const TEAL:     u32 = 0x2DD4BF;
 
-const CURSOR_W: u32 = 14;
-const CURSOR_H: u32 = 22;
+// Fill area (hot-spot at (0,0)).  Save/restore adds 1px border on all four sides.
+const CURSOR_W:  u32 = 13;
+const CURSOR_H:  u32 = 21;
+const CURSOR_BW: u32 = CURSOR_W + 2;   // buffer width
+const CURSOR_BH: u32 = CURSOR_H + 2;   // buffer height
 
 // ---- Desktop icon bitmaps ───────────────────────────────────────────────────
 // 8×8 bitmaps for desktop icon graphics
@@ -127,10 +130,10 @@ const DINGIR: [u8; 8] = [
 // the pointer tip, so hit testing and drawing use the same point.
 
 fn save_cursor_bg(fb: &Framebuffer, x: i32, y: i32, buf: &mut [u32]) {
-    for row in 0..CURSOR_H as i32 {
-        for col in 0..CURSOR_W as i32 {
-            let px = x + col; let py = y + row;
-            let idx = (row * CURSOR_W as i32 + col) as usize;
+    for row in 0..CURSOR_BH as i32 {
+        for col in 0..CURSOR_BW as i32 {
+            let px = x - 1 + col; let py = y - 1 + row;
+            let idx = (row * CURSOR_BW as i32 + col) as usize;
             buf[idx] = if px >= 0 && py >= 0 && (px as u32) < fb.width && (py as u32) < fb.height {
                 fb.get_pixel(px as u32, py as u32)
             } else { BG };
@@ -139,53 +142,50 @@ fn save_cursor_bg(fb: &Framebuffer, x: i32, y: i32, buf: &mut [u32]) {
 }
 
 fn restore_cursor_bg(fb: &mut Framebuffer, x: i32, y: i32, buf: &[u32]) {
-    for row in 0..CURSOR_H as i32 {
-        for col in 0..CURSOR_W as i32 {
-            let px = x + col; let py = y + row;
+    for row in 0..CURSOR_BH as i32 {
+        for col in 0..CURSOR_BW as i32 {
+            let px = x - 1 + col; let py = y - 1 + row;
             if px >= 0 && py >= 0 && (px as u32) < fb.width && (py as u32) < fb.height {
-                fb.set_pixel(px as u32, py as u32, buf[(row * CURSOR_W as i32 + col) as usize]);
+                fb.set_pixel(px as u32, py as u32, buf[(row * CURSOR_BW as i32 + col) as usize]);
             }
         }
     }
 }
 
 fn cursor_mask(col: i32, row: i32) -> bool {
-    if row < 0 || col < 0 { return false; }
-    // Arrow head: right triangle expanding 1px/row over 10 rows → 11px wide at row 10
-    // Arrow shaft: 3px wide from row 11 down
-    if row <= 10 { col <= row }
-    else         { col <= 2 }
+    if row < 0 || col < 0 || row >= CURSOR_H as i32 || col >= CURSOR_W as i32 { return false; }
+    if row <= 10 { col <= row }   // expanding triangle head (11 rows)
+    else         { col <= 1 }     // 2px shaft
 }
 
 fn draw_cursor(fb: &mut Framebuffer, x: i32, y: i32) {
-    let outline = 0x000000u32; // black — visible against any background
+    let outline = 0x000000u32;
     let put = |fb: &mut Framebuffer, px: i32, py: i32, c: u32| {
         if px >= 0 && py >= 0 && (px as u32) < fb.width && (py as u32) < fb.height {
             fb.set_pixel(px as u32, py as u32, c);
         }
     };
 
-    // Outline — clamped to [0, CURSOR_W) × [0, CURSOR_H) so all pixels stay
-    // inside the save/restore bounding box. Pixels at -1 offsets would never
-    // be restored and leave permanent trails.
-    for row in 0..CURSOR_H as i32 {
-        for col in 0..CURSOR_W as i32 {
-            if !cursor_mask(col, row)
-                && (cursor_mask(col - 1, row)
-                    || cursor_mask(col + 1, row)
-                    || cursor_mask(col, row - 1)
-                    || cursor_mask(col, row + 1))
-            {
-                put(fb, x + col, y + row, outline);
+    // Outline — iterate the full extended bounding box (including -1 offsets)
+    // so the top and left edges of the cursor get a black border too.
+    // 8-neighbor check produces a clean 1px outline around all edges including
+    // the diagonal hypotenuse.
+    for row in -1..CURSOR_H as i32 + 1 {
+        for col in -1..CURSOR_W as i32 + 1 {
+            if !cursor_mask(col, row) {
+                let near =
+                    cursor_mask(col-1, row-1) || cursor_mask(col, row-1) || cursor_mask(col+1, row-1) ||
+                    cursor_mask(col-1, row  ) ||                            cursor_mask(col+1, row  ) ||
+                    cursor_mask(col-1, row+1) || cursor_mask(col, row+1) || cursor_mask(col+1, row+1);
+                if near { put(fb, x + col, y + row, outline); }
             }
         }
     }
 
+    // White fill drawn on top of outline
     for row in 0..CURSOR_H as i32 {
         for col in 0..CURSOR_W as i32 {
-            if cursor_mask(col, row) {
-                put(fb, x + col, y + row, CURSOR);
-            }
+            if cursor_mask(col, row) { put(fb, x + col, y + row, CURSOR); }
         }
     }
 }
@@ -665,7 +665,7 @@ pub extern "C" fn _start() -> ! {
     draw_topbar(&mut fb, up0.as_str(), &stats, sys_ticks());
     draw_taskbar_clock(&mut fb, up0.as_str());
 
-    let cbl = (CURSOR_W * CURSOR_H) as usize;
+    let cbl = (CURSOR_BW * CURSOR_BH) as usize;
     let mut cbuf = vec![BG; cbl];
     let mut cx = mouse.x; let mut cy = mouse.y;
     save_cursor_bg(&fb, cx, cy, &mut cbuf);
