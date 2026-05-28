@@ -188,6 +188,32 @@ pub fn update_repo(url: &str) -> Result<String, String> {
     Ok(format!("repo updated: {} package(s){}", n, note))
 }
 
+/// `rpm key <url>` — provision the repo public key (raw 32-byte ed25519),
+/// enabling signed-mode verification. `rpm key clear` removes it (unsigned).
+pub fn provision_key(arg: &str) -> Result<String, String> {
+    fs::create_dir_all(PKG_DIR).map_err(|e| e.to_string())?;
+    if arg == "clear" {
+        let _ = fs::remove_file(REPO_PUBKEY_PATH);
+        return Ok("repo key cleared — repos are now treated as unsigned".to_string());
+    }
+    if !is_url(arg) {
+        return Err("usage: rpm key <url-to-32-byte-ed25519-pubkey | clear>".to_string());
+    }
+    let tmp = "/tmp/repo.pub";
+    let ok = std::process::Command::new("/bin/busybox")
+        .args(["wget", "-q", "-O", tmp, arg])
+        .status().map(|s| s.success()).unwrap_or(false);
+    if !ok { return Err(format!("could not fetch key: {}", arg)); }
+    let bytes = fs::read(tmp).map_err(|e| e.to_string())?;
+    if bytes.len() != 32 {
+        let _ = fs::remove_file(tmp);
+        return Err(format!("invalid key: expected 32 bytes, got {}", bytes.len()));
+    }
+    fs::write(REPO_PUBKEY_PATH, &bytes).map_err(|e| e.to_string())?;
+    let _ = fs::remove_file(tmp);
+    Ok(format!("repo key provisioned ({} bytes) — signed mode enabled", bytes.len()))
+}
+
 /// `rpm install <name>` — resolve deps from the cached repo and install all.
 pub fn install_by_name(name: &str) -> Result<String, String> {
     let text = fs::read_to_string(REPO_CACHE)
@@ -376,6 +402,10 @@ pub fn cmd_rpm(args: &[&str]) -> Result<String, String> {
             let url = args.get(1).ok_or("Usage: rpm update <index-url>")?;
             update_repo(url)
         }
+        Some("key") => {
+            let arg = args.get(1).ok_or("Usage: rpm key <pubkey-url | clear>")?;
+            provision_key(arg)
+        }
         Some("list") => PackageManager::list(),
         Some("info") => {
             let pkg_name = args.get(1).ok_or("Usage: rpm info <package>")?;
@@ -390,9 +420,10 @@ pub fn cmd_rpm(args: &[&str]) -> Result<String, String> {
             PackageManager::search(query)
         }
         _ => {
-            Err("Usage: rpm [install|update|list|info|remove|search] [args...]\n\
+            Err("Usage: rpm [install|update|key|list|info|remove|search] [args...]\n\
                  install accepts a repo name, a local .rpkg, or an http(s) URL;\n\
-                 update <url> refreshes the package index".to_string())
+                 update <url> refreshes the package index;\n\
+                 key <url|clear> provisions the repo signing key (signed mode)".to_string())
         }
     }
 }
