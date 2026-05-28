@@ -4,13 +4,9 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-repository.workspace = true
-description.workspace = true
+
+[[bin]]
+name = "shell"
+path = "src/main.rs"
 
 [dependencies]
-ternary-core = { path = "../ternary-core" }
-mathematics = { path = "../mathematics" }
-scheduler = { path = "../scheduler" }
-ai-runtime = { path = "../ai-runtime" }
-tar = "0.4"
-flate2 = "1.0"
