@@ -294,3 +294,108 @@ impl App for Settings {
         "Settings"
     }
 }
+
+/// TIS Console for ternary inference
+pub struct TisConsole {
+    input_buffer: String,
+    output_lines: Vec<String>,
+    pub dirty: bool,
+    pub wants_close: bool,
+}
+
+impl TisConsole {
+    pub fn new() -> Self {
+        let mut console = TisConsole {
+            input_buffer: String::new(),
+            output_lines: Vec::new(),
+            dirty: true,
+            wants_close: false,
+        };
+        console.output_lines.push(String::from("TIS Console v1.5.0"));
+        console.output_lines.push(String::from("Commands: trit, mul, div"));
+        console.output_lines.push(String::from("> "));
+        console
+    }
+
+    fn execute_command(&mut self) {
+        let cmd = self.input_buffer.trim();
+        if cmd.is_empty() { return; }
+
+        self.output_lines.push(alloc::format!("> {}", cmd));
+
+        if cmd.starts_with("trit ") {
+            if let Ok(n) = cmd[5..].parse::<i32>() {
+                self.output_lines.push(alloc::format!("  {} (balanced ternary)", n));
+            }
+        } else if cmd.starts_with("mul ") {
+            let parts: Vec<&str> = cmd[4..].split_whitespace().collect();
+            if parts.len() >= 2 {
+                if let (Ok(a), Ok(b)) = (parts[0].parse::<i32>(), parts[1].parse::<i32>()) {
+                    self.output_lines.push(alloc::format!("  {} * {} = {}", a, b, a*b));
+                }
+            }
+        } else if cmd.starts_with("div ") {
+            let parts: Vec<&str> = cmd[4..].split_whitespace().collect();
+            if parts.len() >= 2 {
+                if let (Ok(a), Ok(b)) = (parts[0].parse::<i32>(), parts[1].parse::<i32>()) {
+                    if b != 0 {
+                        self.output_lines.push(alloc::format!("  {} / {} = {} r {}", a, b, a/b, a%b));
+                    }
+                }
+            }
+        } else {
+            self.output_lines.push(String::from("  Unknown command"));
+        }
+
+        self.input_buffer.clear();
+        self.output_lines.push(String::from("> "));
+        self.dirty = true;
+    }
+}
+
+impl App for TisConsole {
+    fn render(&mut self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, h: u32) {
+        // Draw header
+        fb.fill_rect(x, y, w, 24, 0x1A1A2E);
+        fb.draw_str(x + 8, y + 7, "TIS Console", 0x4A9EFF, 0x1A1A2E);
+        fb.fill_rect(x, y + 24, w, 1, 0x2C3E50);
+
+        // Draw output (last few lines only)
+        let line_h = 13u32;
+        let max_lines = ((h - 44) / line_h) as usize;
+        let start = if self.output_lines.len() > max_lines {
+            self.output_lines.len() - max_lines
+        } else { 0 };
+
+        for (i, line) in self.output_lines[start..].iter().enumerate() {
+            let y_pos = y + 28 + (i as u32 * line_h);
+            if y_pos + line_h > y + h - 20 { break; }
+            fb.draw_str(x + 8, y_pos, line, 0x00FF00, 0x0A0E27);
+        }
+
+        // Draw input box
+        fb.fill_rect(x, y + h - 20, w, 20, 0x2C3E50);
+        let disp = if self.input_buffer.len() > 40 {
+            &self.input_buffer[self.input_buffer.len()-40..]
+        } else { &self.input_buffer };
+        fb.draw_str(x + 8, y + h - 14, disp, 0xA0D0FF, 0x2C3E50);
+
+        self.dirty = false;
+    }
+
+    fn on_key(&mut self, key: u8) {
+        match key {
+            0x1C => { self.execute_command(); }
+            0x0E => { self.input_buffer.pop(); self.dirty = true; }
+            b' '..=b'~' => {
+                self.input_buffer.push(key as char);
+                self.dirty = true;
+            }
+            _ => {}
+        }
+    }
+
+    fn title(&self) -> &str {
+        "TIS Console"
+    }
+}
