@@ -364,6 +364,14 @@ impl Terminal {
             cwd:         String::from("/"),
             last_exit:   0,
         };
+        // Initialize default environment variables
+        t.set_var("HOME", "/home/ring3");
+        t.set_var("USER", "ring3");
+        t.set_var("SHELL", "/bin/psh");
+        t.set_var("TERM", "xterm-256color");
+        t.set_var("PATH", "/bin:/usr/bin:/usr/local/bin");
+        t.set_var("OS", "RustyPenguin");
+        t.set_var("ARCH", "x86_64");
         t.write_output(b"\x1b[32m  Rusty Penguin\x1b[0m \x1b[90mv1.0.0 \xB7 psh 1.0\x1b[0m\r\n");
         t.write_output(b"\x1b[36m  Binary hardware. Ternary mind.\x1b[0m\r\n");
         t.write_output(b"\x1b[90m  Type 'help' for commands.\x1b[0m\r\n\r\n");
