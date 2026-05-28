@@ -457,6 +457,7 @@ const DESKTOP_ICONS: &[DesktopIcon] = &[
     DesktopIcon { label: "Term",  bitmap: &ICON_TERM,  color: GREEN,    launcher_idx: 0 },
     DesktopIcon { label: "Files", bitmap: &ICON_FILES, color: BLUE,     launcher_idx: 1 },
     DesktopIcon { label: "Edit",  bitmap: &ICON_AI,    color: AMBER,    launcher_idx: 2 },
+    DesktopIcon { label: "Calc",  bitmap: &ICON_PROC,  color: 0xFFD700, launcher_idx: 7 },
     DesktopIcon { label: "Help",  bitmap: &ICON_FILES, color: 0x90EE90, launcher_idx: 9 },
     DesktopIcon { label: "Prefs", bitmap: &ICON_PROC,  color: 0x9CA3AF, launcher_idx: 5 },
     DesktopIcon { label: "TIS",   bitmap: &ICON_TRIT,  color: 0x4A9EFF, launcher_idx: 6 },
@@ -1155,6 +1156,17 @@ pub extern "C" fn _start() -> ! {
                         tw.win.dragging = true;
                         tw.win.drag_ox  = cx - tw.win.x;
                         tw.win.drag_oy  = cy - tw.win.y;
+                    } else if let Some(app) = &mut tw.app {
+                        // Click inside an app's content area — route to the app.
+                        let (ox, oy) = wm::content_origin(&tw.win);
+                        let cw = (tw.win.w - 2).max(0) as u32;
+                        let ch = (tw.win.h - 3 - wm::TITLEBAR_H).max(0) as u32;
+                        let lx = cx - ox;
+                        let ly = cy - oy;
+                        if lx >= 0 && ly >= 0 && (lx as u32) < cw && (ly as u32) < ch {
+                            app.on_mouse(lx, ly, cw, ch, btn);
+                            tw.win_dirty = true;
+                        }
                     }
                 } else {
                     if show_desktop_hit(fb.width, fb.height, cx, cy) {
@@ -1165,14 +1177,15 @@ pub extern "C" fn _start() -> ! {
                         let tw = wins.remove(mi); wins.push(tw);
                         scene_dirty = true;
                     } else if let Some(di) = desktop_icon_hit(cx, cy) {
-                        // Icon order: Term, Files, Edit, Help, Prefs, TIS
+                        // Icon order: Term, Files, Edit, Calc, Help, Prefs, TIS
                         let opened = match di {
                             0 => open_term(w, h, wins.len(), &LAUNCHERS[0]),
                             1 => open_file_manager(w, h, wins.len()),
                             2 => open_editor(w, h, wins.len(), "readme.txt", "Text Editor"),
-                            3 => open_help_browser(w, h, wins.len()),
-                            4 => open_settings(w, h, wins.len()),
-                            5 => open_tis_console(w, h, wins.len()),
+                            3 => open_calculator(w, h, wins.len()),
+                            4 => open_help_browser(w, h, wins.len()),
+                            5 => open_settings(w, h, wins.len()),
+                            6 => open_tis_console(w, h, wins.len()),
                             _ => None,
                         };
                         if let Some(tw) = opened {

@@ -26,8 +26,11 @@ pub trait App {
     /// Handle keyboard input
     fn on_key(&mut self, key: u8);
 
-    /// Handle mouse input (x, y relative to window)
-    fn on_mouse(&mut self, x: i32, y: i32, buttons: u8) {}
+    /// Handle mouse input. `(x, y)` are content-relative (0,0 = top-left of
+    /// app's drawable area). `(w, h)` are the current content dimensions so
+    /// the app can hit-test against the same coordinates it renders in.
+    /// `buttons` is the raw button mask at the moment of the click event.
+    fn on_mouse(&mut self, _x: i32, _y: i32, _w: u32, _h: u32, _buttons: u8) {}
 
     /// Check if app wants to close
     fn wants_close(&self) -> bool {
@@ -230,6 +233,18 @@ impl App for FileManager {
             0x2E => self.copy_selected(),    // C - copy
             0x20 => self.delete_selected(),  // D - delete
             _ => {}
+        }
+    }
+
+    fn on_mouse(&mut self, _x: i32, y: i32, _w: u32, _h: u32, buttons: u8) {
+        if buttons & 0x01 == 0 { return; }
+        // Rows start at y+42, 18px tall. Mirrors render layout above.
+        let row_y = y - 42;
+        if row_y < 0 { return; }
+        let row = (row_y / 18) as usize;
+        if row < self.entries.len() && row != self.selected {
+            self.selected = row;
+            self.dirty = true;
         }
     }
 
@@ -830,6 +845,31 @@ impl App for Calculator {
             }
             _ => {}
         }
+    }
+
+    fn on_mouse(&mut self, x: i32, y: i32, w: u32, _h: u32, buttons: u8) {
+        // Left button only, on the press edge (caller sends raw mask).
+        if buttons & 0x01 == 0 { return; }
+        // Mirror the render layout exactly: buttons start at y+72, btn_h=24,
+        // btn_w = (w-32)/4, 4-px gaps.
+        let btn_w = ((w as i32) - 32) / 4;
+        let btn_h = 24i32;
+        let local_y = y - 72;
+        let local_x = x - 8;
+        if local_x < 0 || local_y < 0 { return; }
+        let row = local_y / (btn_h + 4);
+        let col = local_x / (btn_w + 4);
+        if row >= 4 || col >= 4 { return; }
+        // Reject clicks in the inter-button gap.
+        if local_y % (btn_h + 4) >= btn_h { return; }
+        if local_x % (btn_w + 4) >= btn_w { return; }
+        let grid: [[u8; 4]; 4] = [
+            [b'7', b'8', b'9', b'/'],
+            [b'4', b'5', b'6', b'*'],
+            [b'1', b'2', b'3', b'-'],
+            [b'0', b'.', b'=', b'+'],
+        ];
+        self.on_key(grid[row as usize][col as usize]);
     }
 
     fn title(&self) -> &str {
