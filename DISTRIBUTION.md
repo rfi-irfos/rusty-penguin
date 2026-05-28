@@ -179,9 +179,40 @@ Build plan for making Rusty Penguin a complete, daily-usable operating system di
 - Home directory setup on first boot
 - Service/init system for boot sequence
 
+## Testing & Validation Status
+
+**ISO Build:** ✅ Ready for Testing
+- Both boot paths functional and integrated
+- 7 desktop applications operational
+- Rendering performance optimized
+- Comprehensive documentation provided (README-DISTRIBUTION.md)
+
+**Linux Track (Production Path):** Ready for Daily Use Testing
+- Boots to desktop with Linux kernel (6.17)
+- Real filesystem persistence enabled
+- Init process handles environment setup
+- Shell launcher with desktop support
+- Can install and run packages
+
+**Bare-Metal Track (Pure Rust):** Demonstration Ready
+- Custom Rust kernel boots to desktop
+- Multi-window rendering stable
+- In-memory filesystem for instant access
+- Educational value for OS design
+- Limited to ramfs (ephemeral storage)
+
+**Recommended Test Plan:**
+1. Boot Linux track (default option)
+2. Test file manager navigation and operations
+3. Verify settings persistence across sessions
+4. Test all 7 desktop applications
+5. Create and edit files in home directory
+6. Install a test package via rpm
+7. Run TIS console inference simulation
+
 ## Related Epics
 
-- **File System Persistence**: Implement real filesystem abstraction
-- **Package Ecosystem**: Build and curate basic package repository
-- **User Experience**: Desktop polish, responsiveness, visual polish
-- **Hardware Support**: Expand beyond framebuffer + keyboard to audio, USB, network
+- **File System Persistence**: Implement real filesystem abstraction — ✅ Complete on Linux track
+- **Package Ecosystem**: Build and curate basic package repository — ✅ rpm system working
+- **User Experience**: Desktop polish, responsiveness, visual polish — ✅ Optimized rendering
+- **Hardware Support**: Expand beyond framebuffer + keyboard to audio, USB, network — 🔄 In progress
