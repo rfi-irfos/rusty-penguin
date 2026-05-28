@@ -603,7 +603,7 @@ fn draw_start_menu(fb: &mut Framebuffer) {
         // Colored left accent bar per item
         fb.fill_rect_s(x + 2, iy + 3, 3, 14, l.color);
         fb.draw_str((x + 8) as u32, (iy + 6) as u32, l.label, l.color, bg);
-        let desc = l.title.split('—').nth(1).unwrap_or("").trim();
+        let desc = l.title.split('-').nth(1).unwrap_or(l.title).trim();
         fb.draw_str((x + 52) as u32, (iy + 6) as u32, desc, DIM, bg);
     }
     // Bottom border
