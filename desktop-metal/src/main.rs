@@ -102,8 +102,8 @@ const BLUE:     u32 = 0x60A5FA;
 const CURSOR:   u32 = 0xF8FAFC;
 const TEAL:     u32 = 0x2DD4BF;
 
-const CURSOR_W: u32 = 10;
-const CURSOR_H: u32 = 16;
+const CURSOR_W: u32 = 14;
+const CURSOR_H: u32 = 22;
 
 // ---- Desktop icon bitmaps ───────────────────────────────────────────────────
 // 8×8 bitmaps for desktop icon graphics
@@ -151,10 +151,10 @@ fn restore_cursor_bg(fb: &mut Framebuffer, x: i32, y: i32, buf: &[u32]) {
 
 fn cursor_mask(col: i32, row: i32) -> bool {
     if row < 0 || col < 0 { return false; }
-    // Arrow head: right triangle expanding 1px/row (0..=6 → 1..7px wide)
-    // Arrow shaft: 2px wide continuing down from left edge
-    if row <= 6 { col <= row }
-    else        { col <= 1 }
+    // Arrow head: right triangle expanding 1px/row over 10 rows → 11px wide at row 10
+    // Arrow shaft: 3px wide from row 11 down
+    if row <= 10 { col <= row }
+    else         { col <= 2 }
 }
 
 fn draw_cursor(fb: &mut Framebuffer, x: i32, y: i32) {
@@ -267,80 +267,64 @@ fn draw_scene_static(fb: &mut Framebuffer) {
     let w = fb.width; let h = fb.height;
     let tb_y = h - 28;
 
-    // Base fill — single dark tone, then subtle gradient bands
-    fb.fill_rect(0, 0, w, h, 0x08131D);
+    // Smooth desktop gradient — deep navy top to slightly lighter at bottom
     let total_rows = tb_y.saturating_sub(TOPBAR_H);
     let mut y = TOPBAR_H;
     while y < tb_y {
-        let frac = (y - TOPBAR_H) as u64 * 8 / total_rows.max(1) as u64; // 0..8
-        let r = (0x0Au64 + frac / 2) as u8;
-        let g = (0x18u64 + frac / 3) as u8;
-        let b = (0x22u64 + frac / 2) as u8;
+        let frac = (y - TOPBAR_H) as u64 * 16 / total_rows.max(1) as u64; // 0..16
+        let r = (0x09u64 + frac / 4) as u8;
+        let g = (0x14u64 + frac / 3) as u8;
+        let b = (0x20u64 + frac / 2) as u8;
         let col = ((r as u32) << 16) | ((g as u32) << 8) | b as u32;
         fb.fill_rect(0, y, w, 1, col);
         y += 1;
     }
 
-    // Subtle dot-grid every 32px — much softer than full grid lines
-    let mut gy = TOPBAR_H + 32;
-    while gy < tb_y {
-        let mut gx = 32u32;
-        while gx < w {
-            fb.fill_rect(gx, gy, 1, 1, 0x132030);
-            gx += 32;
-        }
-        gy += 32;
+    // Centered logo widget — 220×130px with large 2× text
+    const LW: u32 = 220; const LH: u32 = 130;
+    let logo_ix = w.saturating_sub(LW) / 2;
+    let logo_iy = TOPBAR_H + tb_y.saturating_sub(TOPBAR_H).saturating_sub(LH + 28) / 2;
+    let lx = logo_ix as i32; let ly2 = logo_iy as i32;
+    // Outer glow/shadow
+    fb.fill_rect_s(lx + 5, ly2 + 5, LW as i32, LH as i32, 0x030810);
+    // Card background
+    fb.fill_rounded_rect(lx, ly2, LW as i32, LH as i32, 8, 0x0C1E2C);
+    // Green top accent strip
+    fb.fill_rounded_rect(lx, ly2, LW as i32, 4, 2, 0x22C55E);
+    // Border
+    for off in 0..1i32 {
+        fb.fill_rect_s(lx + off, ly2 + off, LW as i32 - off*2, LH as i32 - off*2, 0x1A3040);
+        fb.fill_rounded_rect(lx + off + 1, ly2 + off + 1, LW as i32 - off*2 - 2, LH as i32 - off*2 - 2, 7, 0x0C1E2C);
+        let _ = off;
     }
-
-    // Centered logo widget — 160×80px, prominent
-    const LW: u32 = 160; const LH: u32 = 80;
-    let logo_x = w.saturating_sub(LW) / 2;
-    let logo_y = TOPBAR_H + tb_y.saturating_sub(TOPBAR_H).saturating_sub(LH + 24) / 2;
-    // Outer shadow
-    fb.fill_rect(logo_x + 4, logo_y + 4, LW, LH, 0x040A10);
-    // Background
-    fb.fill_rect(logo_x, logo_y, LW, LH, 0x0C1E2A);
-    // Green top accent bar
-    fb.fill_rect(logo_x, logo_y, LW, 3, 0x22C55E);
-    // Subtle inner gradient fill rows
-    let mut ly = logo_y + 3;
-    while ly < logo_y + LH - 1 {
-        let bright = if ly < logo_y + LH / 2 { 0x0D2030u32 } else { 0x0B1C2Au32 };
-        fb.fill_rect(logo_x + 1, ly, LW - 2, 1, bright);
-        ly += 1;
-    }
-    // Side borders
-    fb.fill_rect(logo_x, logo_y + 3, 1, LH - 4, 0x1A3040);
-    fb.fill_rect(logo_x + LW - 1, logo_y + 3, 1, LH - 4, 0x1A3040);
-    fb.fill_rect(logo_x, logo_y + LH - 1, LW, 1, 0x1A3040);
-    // Dingir icon 2x — centred
-    fb.draw_bitmap_2x(logo_x + (LW - 16) / 2, logo_y + 10, &DINGIR, GREEN, 0x0D2030);
-    // Name text
-    fb.draw_str(logo_x + (LW - 5 * 8) / 2, logo_y + 38, "RUSTY", WHITE, 0x0D2030);
-    fb.draw_str(logo_x + (LW - 7 * 8) / 2, logo_y + 50, "PENGUIN", GREEN, 0x0D2030);
-    // Version
-    fb.draw_str(logo_x + (LW - 9 * 8) / 2, logo_y + 64, "v1.0.0-bm", DIM, 0x0B1C2A);
-
-    // Tagline below logo
+    // Dingir 3× icon (24×24) centred near top
+    fb.draw_bitmap_3x(logo_ix + (LW - 24) / 2, logo_iy + 14, &DINGIR, GREEN, 0x0C1E2C);
+    // "RUSTY" in 2× white (80px wide × 16px tall)
+    fb.draw_str_2x(logo_ix + (LW - 5 * 16) / 2, logo_iy + 46, "RUSTY", WHITE, 0x0C1E2C);
+    // "PENGUIN" in 2× green (112px wide)
+    fb.draw_str_2x(logo_ix + (LW - 7 * 16) / 2, logo_iy + 68, "PENGUIN", GREEN, 0x0C1E2C);
+    // Version + tagline
+    fb.draw_str(logo_ix + (LW - 9 * 8) / 2, logo_iy + 96, "v1.0.0-bm", DIM, 0x0C1E2C);
     let tag = "Binary hardware.  Ternary mind.";
-    let tag_y = logo_y + LH + 12;
-    if tag_y < tb_y.saturating_sub(8) {
-        fb.draw_str(w.saturating_sub(tag.len() as u32 * 8) / 2, tag_y, tag, 0x2DD4BF, 0x08131D);
+    let tag_y = logo_iy + LH + 14;
+    if tag_y + 8 < tb_y {
+        fb.draw_str(w.saturating_sub(tag.len() as u32 * 8) / 2, tag_y, tag, TEAL, 0x0B1728);
     }
 
     // ── Taskbar ──
     fb.fill_rect(0, tb_y, w, 28, TASKBAR);
-    // Top separator with green tint
-    fb.fill_rect(0, tb_y, w, 1, 0x1A3028);
-    // Menu button
-    fb.draw_bitmap_2x(6, tb_y + 6, &DINGIR, GREEN, TASKBAR);
-    fb.draw_str(28, tb_y + 10, "Menu", WHITE, TASKBAR);
-    // Vertical separator after menu
-    fb.fill_rect(70, tb_y + 4, 1, 20, 0x1E3030);
+    fb.fill_rect(0, tb_y, w, 1, 0x1A3028);       // green-tint separator line
+    fb.fill_rect(0, tb_y + 1, w, 1, 0x0D161F);   // shadow line below separator
+    // Menu button — rounded pill style
+    fb.fill_rounded_rect(4, tb_y as i32 + 3, 62, 22, 4, 0x152230);
+    fb.fill_rect(4, tb_y + 3, 62, 1, 0x22C55E);  // green top edge
+    fb.draw_bitmap_2x(8, tb_y + 6, &DINGIR, GREEN, 0x152230);
+    fb.draw_str(30, tb_y + 10, "Menu", WHITE, 0x152230);
+    // Separator
+    fb.fill_rect(70, tb_y + 5, 1, 18, 0x1E3030);
 
     // ── Topbar ──
     fb.fill_rect(0, 0, w, TOPBAR_H, TOPBAR);
-    // Bottom edge of topbar
     fb.fill_rect(0, TOPBAR_H - 1, w, 1, 0x1A2F3A);
     // Small decorative left accent on topbar
     fb.fill_rect(0, 0, 3, TOPBAR_H, 0x22C55E);
@@ -431,21 +415,29 @@ fn dicon_rect(i: usize) -> (u32, u32, u32, u32) {
 fn draw_desktop_icons(fb: &mut Framebuffer) {
     for (i, icon) in DESKTOP_ICONS.iter().enumerate() {
         let (x, y, w, h) = dicon_rect(i);
-        let img_h: u32 = h - 12;  // image area (48px for DICON_H=60: 60-12=48)
-        // Icon image background box
-        fb.fill_rect(x, y, w, img_h, 0x0D1E2C);
-        fb.fill_rect(x, y,         w, 1, icon.color);
-        fb.fill_rect(x, y,         1, img_h, icon.color);
-        fb.fill_rect(x + w - 1, y, 1, img_h, icon.color);
-        fb.fill_rect(x, y + img_h - 1, w, 1, icon.color);
-        // 2x bitmap centered in image area (16px rendered at 2x scale)
+        let img_h: u32 = h - 12;
+        let ix = x as i32; let iy = y as i32;
+        let iw = w as i32; let ih = img_h as i32;
+        // Rounded icon container with drop shadow
+        fb.fill_rounded_rect(ix + 2, iy + 2, iw, ih, 6, 0x040C14); // shadow
+        fb.fill_rounded_rect(ix, iy, iw, ih, 6, 0x0D1E2C);
+        // Colored top accent strip
+        fb.fill_rounded_rect(ix, iy, iw, 4, 3, icon.color);
+        fb.fill_rect_s(ix, iy + 2, iw, 2, icon.color); // square bottom of accent
+        // Inner border ring
+        fb.fill_rounded_rect(ix, iy, iw, ih, 6, icon.color & 0x3FFFFFFF | 0x20000000);
+        fb.fill_rounded_rect(ix + 1, iy + 1, iw - 2, ih - 2, 5, 0x0D1E2C);
+        // 2x bitmap centered
         let bx = x + (w - 16) / 2;
         let by = y + (img_h - 16) / 2;
         fb.draw_bitmap_2x(bx, by, icon.bitmap, icon.color, 0x0D1E2C);
-        // Label centered below image
+        // Label
         let lw = icon.label.len() as u32 * 8;
         let lx = if lw < w { x + (w - lw) / 2 } else { x };
-        fb.draw_str(lx, y + img_h + 4, icon.label, icon.color, BG);
+        // Label bg pill
+        let label_bg = 0x0B1726u32;
+        fb.fill_rect(lx.saturating_sub(2), y + img_h + 2, lw + 4, 11, label_bg);
+        fb.draw_str(lx, y + img_h + 4, icon.label, icon.color, label_bg);
     }
 }
 
@@ -510,20 +502,29 @@ fn start_menu_bounds(fh: u32) -> (i32, i32, i32, i32) {
 
 fn draw_start_menu(fb: &mut Framebuffer) {
     let (x, y, w, h) = start_menu_bounds(fb.height);
-    fb.fill_rect(x as u32, y as u32, w as u32, h as u32, 0x1A2535);
-    fb.fill_rect(x as u32, y as u32, w as u32, 1, 0x475569);
-    fb.fill_rect(x as u32, y as u32, 1, h as u32, 0x475569);
-    fb.fill_rect((x + w - 1) as u32, y as u32, 1, h as u32, 0x475569);
-    fb.draw_bitmap_2x((x + 2) as u32, (y + 2) as u32, &DINGIR, GREEN, 0x1A2535);
-    fb.draw_str((x + 22) as u32, (y + 4) as u32, "RUSTY PENGUIN", GREEN, 0x1A2535);
-    fb.fill_rect(x as u32, (y + 14) as u32, w as u32, 1, 0x334155);
+    // Drop shadow
+    fb.fill_rounded_rect(x + 3, y + 3, w, h, 6, 0x030810);
+    // Panel
+    fb.fill_rounded_rect(x, y, w, h, 6, 0x0F1E2E);
+    // Green accent header bar
+    fb.fill_rounded_rect(x, y, w, 18, 4, 0x152E22);
+    fb.fill_rect_s(x, y + 14, w, 4, 0x152E22); // square bottom of header
+    fb.fill_rect_s(x, y, w, 2, 0x22C55E);       // top green line
+    fb.draw_bitmap_2x((x + 3) as u32, (y + 2) as u32, &DINGIR, GREEN, 0x152E22);
+    fb.draw_str((x + 23) as u32, (y + 5) as u32, "RUSTY PENGUIN", GREEN, 0x152E22);
+    fb.fill_rect_s(x, y + 17, w, 1, 0x253545);  // separator
     for (i, l) in LAUNCHERS.iter().enumerate() {
-        let iy = y + 16 + i as i32 * 20;
-        fb.fill_rect(x as u32, iy as u32, w as u32, 20, 0x1A2535);
-        fb.draw_str((x + 6) as u32, (iy + 6) as u32, l.label, l.color, 0x1A2535);
+        let iy = y + 19 + i as i32 * 20;
+        let bg = if i % 2 == 0 { 0x0F1E2Eu32 } else { 0x111F30u32 };
+        fb.fill_rect_s(x + 1, iy, w - 2, 20, bg);
+        // Colored left accent bar per item
+        fb.fill_rect_s(x + 2, iy + 3, 3, 14, l.color);
+        fb.draw_str((x + 8) as u32, (iy + 6) as u32, l.label, l.color, bg);
         let desc = l.title.split('—').nth(1).unwrap_or("").trim();
-        fb.draw_str((x + 48) as u32, (iy + 6) as u32, desc, 0x64748B, 0x1A2535);
+        fb.draw_str((x + 52) as u32, (iy + 6) as u32, desc, DIM, bg);
     }
+    // Bottom border
+    fb.fill_rect_s(x + 1, y + h - 2, w - 2, 1, 0x253545);
 }
 
 fn start_menu_hit(fh: u32, mx: i32, my: i32) -> Option<usize> {
@@ -554,15 +555,17 @@ fn ctx_menu_bounds(mx: i32, my: i32, fw: u32, fh: u32) -> (i32, i32, i32, i32) {
 
 fn draw_ctx_menu(fb: &mut Framebuffer, mx: i32, my: i32) {
     let (x, y, w, h) = ctx_menu_bounds(mx, my, fb.width, fb.height);
-    fb.fill_rect(x as u32, y as u32, w as u32, h as u32, 0x1A2535);
-    fb.fill_rect(x as u32, y as u32, w as u32, 1, 0x475569);
-    fb.fill_rect(x as u32, (y + h - 1) as u32, w as u32, 1, 0x475569);
-    fb.fill_rect(x as u32, y as u32, 1, h as u32, 0x475569);
-    fb.fill_rect((x + w - 1) as u32, y as u32, 1, h as u32, 0x475569);
+    fb.fill_rounded_rect(x + 3, y + 3, w, h, 5, 0x030810); // shadow
+    fb.fill_rounded_rect(x, y, w, h, 5, 0x0F1E2E);
+    fb.fill_rect_s(x, y, w, 1, 0x334155);  // top border
     for (i, (label, color)) in CTX_ITEMS.iter().enumerate() {
-        let iy = y + 2 + i as i32 * 20;
-        fb.draw_str((x + 8) as u32, (iy + 6) as u32, label, *color, 0x1A2535);
+        let iy = y + 3 + i as i32 * 20;
+        let bg = if i % 2 == 0 { 0x0F1E2Eu32 } else { 0x111F30u32 };
+        fb.fill_rect_s(x + 1, iy, w - 2, 20, bg);
+        fb.fill_rect_s(x + 2, iy + 4, 3, 12, *color); // color accent
+        fb.draw_str((x + 8) as u32, (iy + 6) as u32, label, *color, bg);
     }
+    fb.fill_rect_s(x + 1, y + h - 2, w - 2, 1, 0x253545);
 }
 
 fn ctx_menu_item_hit(mx: i32, my: i32, cmx: i32, cmy: i32, fw: u32, fh: u32) -> Option<usize> {

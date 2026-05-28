@@ -19,10 +19,10 @@ const BTN_CLOSE:   u32 = 0xEF4444;
 const BTN_MIN:     u32 = 0xF59E0B;
 const BTN_MAX:     u32 = 0x22C55E;
 
-// Traffic-light buttons: circles on the LEFT side of the titlebar.
-const BTN_R:    i32 = 5;   // radius in pixels
-const BTN_GAP:  i32 = 14;  // center-to-center spacing
-const BTN_LEFT: i32 = 10;  // x offset of first button center from window left
+// Traffic-light buttons: circles on the RIGHT side of the titlebar (Windows/Mint style).
+const BTN_R:      i32 = 5;   // radius in pixels
+const BTN_GAP:    i32 = 14;  // center-to-center spacing
+const BTN_MARGIN: i32 = 12;  // distance from window right edge to close button center
 
 pub struct Window {
     pub x: i32, pub y: i32,
@@ -64,9 +64,9 @@ impl Window {
 }
 
 fn btn_cy(win: &Window) -> i32   { win.y + TITLEBAR_H / 2 }
-fn close_cx(win: &Window) -> i32 { win.x + BTN_LEFT }
-fn min_cx(win: &Window) -> i32   { win.x + BTN_LEFT + BTN_GAP }
-fn max_cx(win: &Window) -> i32   { win.x + BTN_LEFT + BTN_GAP * 2 }
+fn close_cx(win: &Window) -> i32 { win.x + win.w - BTN_MARGIN }
+fn min_cx  (win: &Window) -> i32 { win.x + win.w - BTN_MARGIN - BTN_GAP }
+fn max_cx  (win: &Window) -> i32 { win.x + win.w - BTN_MARGIN - BTN_GAP * 2 }
 
 fn hit_btn(mx: i32, my: i32, cx: i32, cy: i32) -> bool {
     let dx = mx - cx; let dy = my - cy;
@@ -139,10 +139,10 @@ pub fn draw_window(fb: &mut Framebuffer, win: &Window, focused: bool) {
         fb.fill_rect((x + 1) as u32, cy2 as u32, (w - 2) as u32, ch as u32, CONTENT_BG);
     }
 
-    // Title text — centered in the space to the right of the buttons
-    let left_reserved  = BTN_LEFT + BTN_GAP * 2 + BTN_R + 6; // ~43px
-    let right_reserved = 8;
-    let avail_w = (w - left_reserved - right_reserved).max(0);
+    // Title text — centered in the space left of the buttons
+    let right_reserved = BTN_MARGIN + BTN_GAP * 2 + BTN_R + 6; // ~49px
+    let left_reserved  = 6;
+    let avail_w = (w - right_reserved - left_reserved).max(0);
     let max_chars = (avail_w / 8).max(0) as usize;
     let n_bytes = max_chars.min(win.title.len());
     let title = &win.title[..n_bytes];

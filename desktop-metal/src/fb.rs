@@ -139,6 +139,76 @@ impl Framebuffer {
         }
     }
 
+    // Signed-coordinate fill_rect — clips to framebuffer bounds.
+    pub fn fill_rect_s(&mut self, x: i32, y: i32, w: i32, h: i32, color: u32) {
+        if w <= 0 || h <= 0 { return; }
+        let x0 = x.max(0) as u32;
+        let y0 = y.max(0) as u32;
+        let x1 = (x + w).min(self.width as i32).max(0) as u32;
+        let y1 = (y + h).min(self.height as i32).max(0) as u32;
+        if x1 > x0 && y1 > y0 { self.fill_rect(x0, y0, x1 - x0, y1 - y0, color); }
+    }
+
+    // Rounded rectangle — pixel-exact, no antialiasing.
+    pub fn fill_rounded_rect(&mut self, x: i32, y: i32, w: i32, h: i32, r: i32, color: u32) {
+        if w <= 0 || h <= 0 { return; }
+        let r = r.min(w / 2).min(h / 2).max(0);
+        if r == 0 { self.fill_rect_s(x, y, w, h, color); return; }
+        let r2 = r * r;
+        let cxl = x + r; let cxr = x + w - 1 - r;
+        let cyt = y + r; let cyb = y + h - 1 - r;
+        let xa = x.max(0); let ya = y.max(0);
+        let xb = (x + w).min(self.width as i32);
+        let yb = (y + h).min(self.height as i32);
+        for py in ya..yb {
+            for px in xa..xb {
+                if (px < cxl && py < cyt && { let dx=px-cxl; let dy=py-cyt; dx*dx+dy*dy>r2 })
+                || (px > cxr && py < cyt && { let dx=px-cxr; let dy=py-cyt; dx*dx+dy*dy>r2 })
+                || (px < cxl && py > cyb && { let dx=px-cxl; let dy=py-cyb; dx*dx+dy*dy>r2 })
+                || (px > cxr && py > cyb && { let dx=px-cxr; let dy=py-cyb; dx*dx+dy*dy>r2 })
+                { continue; }
+                self.set_pixel(px as u32, py as u32, color);
+            }
+        }
+    }
+
+    // Draw a single character at 2× scale (16×16 px per glyph).
+    pub fn draw_char_2x(&mut self, x: u32, y: u32, ch: char, fg: u32, bg: u32) {
+        let idx = (ch as u32).wrapping_sub(0x20);
+        if idx >= 95 { return; }
+        let bitmap = &FONT[idx as usize];
+        for row in 0..8u32 {
+            let byte = bitmap[row as usize];
+            for col in 0..8u32 {
+                let c = if (byte >> (7 - col)) & 1 != 0 { fg } else { bg };
+                self.set_pixel(x + col*2,   y + row*2,   c);
+                self.set_pixel(x + col*2+1, y + row*2,   c);
+                self.set_pixel(x + col*2,   y + row*2+1, c);
+                self.set_pixel(x + col*2+1, y + row*2+1, c);
+            }
+        }
+    }
+
+    // Draw a string at 2× scale (each glyph is 16 px wide).
+    pub fn draw_str_2x(&mut self, x: u32, y: u32, s: &str, fg: u32, bg: u32) {
+        for (i, ch) in s.chars().enumerate() {
+            self.draw_char_2x(x + i as u32 * 16, y, ch, fg, bg);
+        }
+    }
+
+    // Draw an 8×8 bitmap at 3× scale (produces a 24×24 px image).
+    pub fn draw_bitmap_3x(&mut self, x: u32, y: u32, bitmap: &[u8; 8], fg: u32, bg: u32) {
+        for row in 0..8u32 {
+            let byte = bitmap[row as usize];
+            for col in 0..8u32 {
+                let c = if (byte >> (7 - col)) & 1 != 0 { fg } else { bg };
+                for dr in 0..3u32 { for dc in 0..3u32 {
+                    self.set_pixel(x + col*3 + dc, y + row*3 + dr, c);
+                }}
+            }
+        }
+    }
+
     pub fn fill_circle(&mut self, cx: i32, cy: i32, r: i32, color: u32) {
         let r2 = r * r;
         for dy in -r..=r {
