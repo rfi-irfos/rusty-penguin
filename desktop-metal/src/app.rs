@@ -480,8 +480,11 @@ impl App for Settings {
 pub struct TisConsole {
     input_buffer: String,
     output_lines: Vec<String>,
+    // Lines scrolled back from the bottom. 0 = pinned to the latest output.
+    scroll_offset: usize,
     pub dirty: bool,
     pub wants_close: bool,
+    ansi: crate::ansi::AnsiParser,
 }
 
 impl TisConsole {
@@ -489,8 +492,10 @@ impl TisConsole {
         let mut console = TisConsole {
             input_buffer: String::new(),
             output_lines: Vec::new(),
+            scroll_offset: 0,
             dirty: true,
             wants_close: false,
+            ansi: crate::ansi::AnsiParser::new(),
         };
         console.output_lines.push(String::from("TIS Console v1.5.0"));
         console.output_lines.push(String::from("Commands: trit, mul, div"));
@@ -571,17 +576,26 @@ impl App for TisConsole {
         fb.draw_str(x + 8, y + 7, "TIS Console", 0x4A9EFF, 0x1A1A2E);
         fb.fill_rect(x, y + 24, w, 1, 0x2C3E50);
 
-        // Draw output (last few lines only)
+        // Draw output. scroll_offset shifts the window of visible lines up
+        // from the latest. Clamp to the buffer size so it can't overscroll.
         let line_h = 13u32;
         let max_lines = ((h - 44) / line_h) as usize;
-        let start = if self.output_lines.len() > max_lines {
-            self.output_lines.len() - max_lines
-        } else { 0 };
+        let total = self.output_lines.len();
+        let max_off = total.saturating_sub(max_lines);
+        if self.scroll_offset > max_off { self.scroll_offset = max_off; }
+        let end = total.saturating_sub(self.scroll_offset);
+        let start = end.saturating_sub(max_lines);
 
-        for (i, line) in self.output_lines[start..].iter().enumerate() {
+        for (i, line) in self.output_lines[start..end].iter().enumerate() {
             let y_pos = y + 28 + (i as u32 * line_h);
             if y_pos + line_h > y + h - 20 { break; }
             fb.draw_str(x + 8, y_pos, line, 0x00FF00, 0x0A0E27);
+        }
+
+        // Scroll indicator on the right edge when not at the bottom.
+        if self.scroll_offset > 0 && w > 12 {
+            let indicator_x = x + w - 8;
+            fb.draw_str(indicator_x, y + 28, "^", 0x6B7280, 0x0A0E27);
         }
 
         // Draw input box
@@ -595,13 +609,28 @@ impl App for TisConsole {
     }
 
     fn on_key(&mut self, key: u8) {
-        // Bytes come from the kernel as ASCII (Enter='\n', Backspace=0x08),
-        // not scancodes — the previous 0x1C/0x0E values never matched.
-        match key {
-            b'\n' | b'\r' => { self.execute_command(); }
-            0x08 | 0x7F  => { self.input_buffer.pop(); self.dirty = true; }
-            b' '..=b'~'  => {
-                self.input_buffer.push(key as char);
+        use crate::ansi::Key as AK;
+        match self.ansi.feed(key) {
+            AK::Char(b'\n') | AK::Char(b'\r') => {
+                self.scroll_offset = 0;  // jump to latest on submit
+                self.execute_command();
+            }
+            AK::Char(0x08) | AK::Char(0x7F) => {
+                self.input_buffer.pop();
+                self.dirty = true;
+            }
+            AK::Up => {
+                self.scroll_offset = self.scroll_offset.saturating_add(1);
+                self.dirty = true;
+            }
+            AK::Down => {
+                if self.scroll_offset > 0 {
+                    self.scroll_offset -= 1;
+                    self.dirty = true;
+                }
+            }
+            AK::Char(c) if (b' '..=b'~').contains(&c) => {
+                self.input_buffer.push(c as char);
                 self.dirty = true;
             }
             _ => {}
