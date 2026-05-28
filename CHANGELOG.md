@@ -12,9 +12,23 @@ All notable changes to this project will be documented here.
   installing — install aborts on mismatch (corruption/tamper detection).
 - Unit-tested against the known `SHA-256("abc")` vector; index parses the digest
   field (9 tests pass).
-- *Honest scope:* this is **integrity** (package matches the published digest),
-  not yet full **authenticity** signing — an ed25519 signature over the index
-  verified against a bundled repo public key is the next step.
+- *Scope:* this is **integrity** (package matches the published digest);
+  **authenticity** signing is below.
+
+### Added — Package authenticity: ed25519-signed repo index (2026-05-28)
+
+- `rpm update` now supports a **signed mode**: if a repo public key is
+  provisioned at `/opt/rusty-penguin/repo.pub` (raw 32-byte ed25519), the index
+  must ship a valid `.sig` (raw 64-byte signature) — verified with
+  `verify_strict` before the index is accepted; update aborts on a bad/missing
+  signature. With no key provisioned it falls back to unsigned with a clear
+  UNVERIFIED warning (apt-style). The private key stays offline with the
+  publisher and never ships in the OS.
+- Together with the SHA-256 per-package digests, this gives end-to-end package
+  trust: signed index → verified digests → verified packages. Closes the
+  "package signing" gap (verification side).
+- Verification unit-tested: valid sig passes; tampered message, wrong key, and
+  malformed inputs all rejected (10 tests pass).
 
 ### Added — Package repository + dependency resolution (2026-05-28)
 

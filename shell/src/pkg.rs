@@ -133,7 +133,25 @@ fn is_installed(name: &str) -> bool {
     false
 }
 
-/// `rpm update <url>` — cache the repo index.
+/// Provisioned repo public key (raw 32-byte ed25519). Present → signed mode:
+/// the index must carry a valid signature. Absent → unsigned (with a warning),
+/// like apt with no keyring. The matching private key is held offline by the
+/// repo publisher and never ships in the OS.
+const REPO_PUBKEY_PATH: &str = "/opt/rusty-penguin/repo.pub";
+
+/// Verify a raw ed25519 signature (`sig`, 64 bytes) of `msg` under `pubkey`
+/// (32 bytes). The trust root for package authenticity.
+fn verify_sig(msg: &[u8], sig: &[u8], pubkey: &[u8]) -> Result<(), String> {
+    use ed25519_dalek::{VerifyingKey, Signature};
+    let pk: [u8; 32] = pubkey.try_into().map_err(|_| "repo key must be 32 bytes".to_string())?;
+    let vk = VerifyingKey::from_bytes(&pk).map_err(|e| format!("bad repo key: {}", e))?;
+    let s: [u8; 64] = sig.try_into().map_err(|_| "signature must be 64 bytes".to_string())?;
+    vk.verify_strict(msg, &Signature::from_bytes(&s))
+        .map_err(|_| "repo signature verification FAILED".to_string())
+}
+
+/// `rpm update <url>` — cache the repo index, verifying its authenticity when a
+/// repo key is provisioned.
 pub fn update_repo(url: &str) -> Result<String, String> {
     fs::create_dir_all(PKG_DIR).map_err(|e| e.to_string())?;
     let status = std::process::Command::new("/bin/busybox")
@@ -143,8 +161,31 @@ pub fn update_repo(url: &str) -> Result<String, String> {
     if !status.success() {
         return Err(format!("repo update failed: {}", url));
     }
-    let text = fs::read_to_string(REPO_CACHE).map_err(|e| e.to_string())?;
-    Ok(format!("repo updated: {} package(s) available", RepoIndex::parse(&text).pkgs.len()))
+    let index_bytes = fs::read(REPO_CACHE).map_err(|e| e.to_string())?;
+
+    // Authenticity: if a repo key is provisioned, require a valid index signature.
+    let note = if Path::new(REPO_PUBKEY_PATH).exists() {
+        let pubkey = fs::read(REPO_PUBKEY_PATH).map_err(|e| e.to_string())?;
+        let sig_tmp = "/tmp/repo.tern.sig";
+        let ok = std::process::Command::new("/bin/busybox")
+            .args(["wget", "-q", "-O", sig_tmp, &format!("{}.sig", url)])
+            .status().map(|s| s.success()).unwrap_or(false);
+        if !ok {
+            let _ = fs::remove_file(REPO_CACHE);
+            return Err("repo is in signed mode but no .sig was available".to_string());
+        }
+        let sig = fs::read(sig_tmp).map_err(|e| e.to_string())?;
+        if let Err(e) = verify_sig(&index_bytes, &sig, &pubkey) {
+            let _ = fs::remove_file(REPO_CACHE);
+            return Err(e);
+        }
+        " (signature verified)"
+    } else {
+        " (UNVERIFIED — provision /opt/rusty-penguin/repo.pub for authenticity)"
+    };
+
+    let n = RepoIndex::parse(&String::from_utf8_lossy(&index_bytes)).pkgs.len();
+    Ok(format!("repo updated: {} package(s){}", n, note))
 }
 
 /// `rpm install <name>` — resolve deps from the cached repo and install all.
@@ -404,6 +445,23 @@ mod tests {
         let x = idx.get("x").unwrap();
         assert_eq!(x.sha256.as_deref(), Some("abc123DEF"));
         assert_eq!(x.deps, vec!["lib".to_string()]);
+    }
+
+    #[test]
+    fn test_verify_sig() {
+        use ed25519_dalek::{Signer, SigningKey};
+        let sk = SigningKey::from_bytes(&[7u8; 32]);   // fixed seed → deterministic
+        let vk = sk.verifying_key();
+        let msg = b"@pkg core 3.0 http://r/core.rpkg -\n";
+        let sig = sk.sign(msg);
+        // Correct signature verifies; tampered message / wrong key fail.
+        assert!(verify_sig(msg, &sig.to_bytes(), vk.as_bytes()).is_ok());
+        assert!(verify_sig(b"tampered", &sig.to_bytes(), vk.as_bytes()).is_err());
+        let other = SigningKey::from_bytes(&[9u8; 32]).verifying_key();
+        assert!(verify_sig(msg, &sig.to_bytes(), other.as_bytes()).is_err());
+        // Malformed inputs are rejected, not panicked.
+        assert!(verify_sig(msg, &[0u8; 10], vk.as_bytes()).is_err());
+        assert!(verify_sig(msg, &sig.to_bytes(), &[0u8; 5]).is_err());
     }
 
     #[test]
