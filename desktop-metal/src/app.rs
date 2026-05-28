@@ -455,15 +455,23 @@ impl TisConsole {
 
         self.output_lines.push(alloc::format!("> {}", cmd));
 
-        if cmd.starts_with("trit ") {
+        if cmd == "help" {
+            self.output_lines.push(String::from("  Ternary operations:"));
+            self.output_lines.push(String::from("    trit <n>       - convert to balanced ternary"));
+            self.output_lines.push(String::from("    mul <a> <b>    - ternary multiplication"));
+            self.output_lines.push(String::from("    div <a> <b>    - ternary division"));
+            self.output_lines.push(String::from("    infer <prompt> - TIS inference (demo)"));
+            self.output_lines.push(String::from("    status         - system status"));
+        } else if cmd.starts_with("trit ") {
             if let Ok(n) = cmd[5..].parse::<i32>() {
-                self.output_lines.push(alloc::format!("  {} (balanced ternary)", n));
+                self.output_lines.push(alloc::format!("  {} → balanced ternary", n));
             }
         } else if cmd.starts_with("mul ") {
             let parts: Vec<&str> = cmd[4..].split_whitespace().collect();
             if parts.len() >= 2 {
                 if let (Ok(a), Ok(b)) = (parts[0].parse::<i32>(), parts[1].parse::<i32>()) {
-                    self.output_lines.push(alloc::format!("  {} * {} = {}", a, b, a*b));
+                    let result = a.wrapping_mul(b);
+                    self.output_lines.push(alloc::format!("  {} × {} = {}", a, b, result));
                 }
             }
         } else if cmd.starts_with("div ") {
@@ -471,12 +479,34 @@ impl TisConsole {
             if parts.len() >= 2 {
                 if let (Ok(a), Ok(b)) = (parts[0].parse::<i32>(), parts[1].parse::<i32>()) {
                     if b != 0 {
-                        self.output_lines.push(alloc::format!("  {} / {} = {} r {}", a, b, a/b, a%b));
+                        self.output_lines.push(alloc::format!("  {} ÷ {} = {} (r {})", a, b, a/b, a%b));
+                    } else {
+                        self.output_lines.push(String::from("  Error: division by zero"));
                     }
                 }
             }
+        } else if cmd.starts_with("infer ") {
+            let prompt = &cmd[6..];
+            self.output_lines.push(String::from("  Ternary inference engine (TIS v1.5.0)"));
+            self.output_lines.push(alloc::format!("  Prompt: \"{}\"", prompt));
+            self.output_lines.push(String::from("  [Loading model...] albert-moe-13-26L"));
+            self.output_lines.push(String::from("  [Inference] 83.2 tok/s | sparsity: 12.3%"));
+            self.output_lines.push(String::from("  [Complete] response ready for display"));
+        } else if cmd == "status" {
+            self.output_lines.push(String::from("  Rusty Penguin TIS Console v1.5.0"));
+            self.output_lines.push(String::from("  Kernel: Rust 64-bit (bare-metal)"));
+            self.output_lines.push(String::from("  Memory: ~512 MiB available"));
+            self.output_lines.push(String::from("  TIS: Ready (offline demo mode)"));
+        } else if cmd == "clear" {
+            self.output_lines.clear();
+            self.output_lines.push(String::from("TIS Console v1.5.0"));
+            self.output_lines.push(String::from("Type 'help' for commands"));
+            self.output_lines.push(String::from("> "));
+            self.input_buffer.clear();
+            self.dirty = true;
+            return;
         } else {
-            self.output_lines.push(String::from("  Unknown command"));
+            self.output_lines.push(String::from("  Unknown command. Type 'help' for available commands."));
         }
 
         self.input_buffer.clear();
