@@ -101,6 +101,20 @@ Core components (run on both bare-metal and Linux kernels):
 | **Package manager (rpm)** | Install/uninstall .rpkg packages | ✅ **Working** |
 | **TIS Console** | Ternary inference UI; real albert. backend pending | 🔄 **UI shipped, backend pending** |
 | **Cross-window clipboard** | Copy from any app, paste into any app/terminal | ✅ **Working** |
+| **Games** | Snake, Minesweeper, and a pure-Rust DOOM raycaster (no_std) | ✅ **Working** |
+| **Ternary CSS engine** | `css.rs`: CSS-subset parser + selectors + Apple-like panels; ternary component states | 🔄 **Building (start menu + card migrated)** |
+| **Sparse rendering** | Dirty-rect present — only the changed band hits VRAM (dormant = skip) | ✅ **Working** |
+
+### Daily-driver capabilities (Linux track)
+| Capability | Description | Status |
+|---|---|---|
+| **Install to disk** | `rp-install /dev/<disk>` — GPT (ESP + RPDATA), standalone GRUB-EFI; boots from disk with **no ISO** | ✅ **Working (UEFI, verified)** |
+| **Persistent storage** | Auto-mounts/provisions a writable disk at `/home`; partition-aware; ternary state + `.tern` boot record | ✅ **Working** |
+| **Networking** | DHCP via busybox `udhcpc` (IP/route/DNS); ternary link state with gateway reachability | ✅ **Working** |
+| **Network packages** | `rpm install <url>` over HTTP; installed packages persist in `/opt` | ✅ **Working** |
+| **Recovery console** | Drops to a shell if the desktop can't start; `rp.console` boot mode | ✅ **Working** |
+| **Real browsers (Firefox/Chrome)** | Needs the Linux X/Mesa stack on the installed root — see `docs/BROWSER_PLAN.md` | ❌ **Planned (multi-session)** |
+| **Audio / multi-user** | ALSA/PipeWire; accounts/login | ❌ **Planned** |
 
 ### Kernels (Swappable)
 | Component | Description | Status |
