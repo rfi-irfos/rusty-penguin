@@ -71,9 +71,11 @@ Core components (run on both bare-metal and Linux kernels):
 - **Rust-only init (PID 1)** with proper signal handling and clean shutdown
 
 **Desktop & UI:**
-- Live stats bar: clock, memory usage, ternary state indicator
-- Anti-flicker rendering with three-tier dirty tracking
-- Responsive window rendering at 25Hz+
+- Live stats bar: clock, MEM%, HEAP% (bump allocator usage), ternary state indicator
+- Double-buffered framebuffer compositor — backbuffer in RAM, single memcpy to /dev/fb0 per frame, no mid-paint tearing
+- Dirty-driven render: scene/window/term dirty flags gate every recomposite
+- Main loop capped to one iteration per PIT tick (~100 Hz) — sparse execution, idle CPU
+- Periodic `[stat] heap=N% wins=N fps=N` line to serial for host-side observability
 - Ubuntu color palette and modern card-based design
 
 **Under the Hood:**
@@ -89,15 +91,16 @@ Core components (run on both bare-metal and Linux kernels):
 ### Distribution Layer (Shared Across All Kernels)
 | Component | Description | Status |
 |---|---|---|
-| **Desktop UI** | Window manager, rendering, taskbar, icons | ✅ **Working** |
-| **psh shell** | 90+ commands, pipes, redirects, loops, variables | ✅ **Working** |
-| **Text editor** | Graphical editor with open/save | ✅ **Working** |
-| **Ternary runtime** | Balanced ternary arithmetic, trit operations | ✅ **Working** |
-| **File manager** | Directory browsing, file operations | 🔄 **In Progress** |
-| **System monitor** | Process viewer, memory stats | 🔄 **In Progress** |
-| **Package manager** | Install/update software | 🔄 **Planned** |
-| **Persistent config** | Settings, preferences, boot options | 🔄 **Planned** |
-| **TIS integration** | AI runtime, sparse inference | 🔄 **Planned** |
+| **Desktop UI** | Window manager, rendering, taskbar, icons, double-buffered compositor | ✅ **Working** |
+| **psh shell** | Builtins for ternary state + arithmetic; spawns external commands | ✅ **Working** |
+| **Text editor** | Graphical editor with arrow-key nav, click-to-position, Ctrl+C/V | ✅ **Working** |
+| **Ternary runtime** | Balanced ternary arithmetic, sparse-skip inference | ✅ **Working** |
+| **File manager** | Directory browsing, copy/delete, click-to-select | ✅ **Working** |
+| **System monitor** | Process viewer, memory stats, HEAP/MEM topbar indicators | ✅ **Working** |
+| **Settings panel** | Theme, window snap, taskbar position; persists to VFS | ✅ **Working** |
+| **Package manager (rpm)** | Install/uninstall .rpkg packages | ✅ **Working** |
+| **TIS Console** | Ternary inference UI; real albert. backend pending | 🔄 **UI shipped, backend pending** |
+| **Cross-window clipboard** | Copy from any app, paste into any app/terminal | ✅ **Working** |
 
 ### Kernels (Swappable)
 | Component | Description | Status |
@@ -142,18 +145,32 @@ VBoxManage startvm "Rusty Penguin"
 cargo run -p shell
 ```
 
-### psh commands
+### psh builtins (Linux track)
+
+Each builtin is backed by a real workspace crate — psh is the user-visible surface for `scheduler/`, `ai-runtime/`, and `mathematics/`:
 
 ```
-psh> trit 42          # balanced ternary representation of 42
-psh> mul 6 7          # ternary multiply (double-width)
-psh> div 17 5         # ternary divide with remainder
-psh> ps               # list processes with ternary state annotations
-psh> activate 1234    # SIGCONT → ACTIVE  (+1)
-psh> dormant  1234    # SIGSTOP → DORMANT  (0)
-psh> suppress 1234    # SIGTERM → SUPPRESSED (-1)
-psh> ai 16            # sparse ternary inference demo
-psh> scale 100 -1     # one-trit transform (negate)
+rp$ ps                  # list processes annotated with ternary state (+1/0/-1)
+rp$ kill 1234 0         # transition pid 1234 to Dormant   (SIGSTOP)
+rp$ kill 1234 +1        # transition pid 1234 to Active    (SIGCONT)
+rp$ kill 1234 -1        # transition pid 1234 to Suppressed (SIGTERM)
+rp$ tis 256             # sparse-skip forward pass on a 256x256 ternary layer;
+                        # reports skipped op count and dormancy %
+rp$ tri 6 * 7           # balanced-ternary arithmetic; prints both decimal
+                        # result and Tryte +/0/- representation
+rp$ tri 17 / 5          # division with remainder
+rp$ tri 200 * 200       # double-width mul shows low + high tryte
+```
+
+Output examples:
+```
+rp$ tri 6 * 7
+  6 * 7 = 42
+  ternary: 000000+-0 * 000000+-+ = 0000+---0
+
+rp$ tis 256
+tis: 256x256 layer, 65536 ops, 35375 skipped (53% dormancy)
+     output trits: +129  0:12  -115
 ```
 
 ---
@@ -188,9 +205,9 @@ Select "Rusty Penguin (bare metal)" at GRUB menu. No Linux kernel. No libc. Pure
 - Memory management and Multiboot2 parsing
 - PS/2 keyboard and framebuffer rendering
 - VGA/VESA graphics output
-- Custom syscall ABI (14 syscalls)
-- In-memory filesystem
-- Complete shell and graphical desktop
+- Custom syscall ABI (~19 syscalls incl. fb_query, input_poll/wait, rtc, listdir, delete, ps)
+- In-memory filesystem (ramfs with bitmap-tracked deletion)
+- Complete shell and graphical desktop (clipboard, ANSI escape parser, app trait)
 
 **Next phases:**
 - Phase 2: Persistent storage (block I/O, real filesystems)
