@@ -124,6 +124,10 @@ const ICON_TRIT: [u8; 8] = [0x08, 0x1C, 0x36, 0x63, 0x63, 0x36, 0x1C, 0x08];  //
 #[rustfmt::skip]
 const ICON_KM: [u8; 8] = [0x18, 0x7E, 0x3C, 0xFF, 0xFF, 0x3C, 0x7E, 0x18];
 
+// File manager icon: folder shape
+#[rustfmt::skip]
+const ICON_FILES: [u8; 8] = [0x3E, 0x22, 0xE2, 0xA2, 0xA2, 0xA2, 0xA2, 0xFE];
+
 // Dingir — cuneiform divine determinative (8-pointed star with wedges)
 #[rustfmt::skip]
 const DINGIR: [u8; 8] = [
@@ -430,10 +434,10 @@ fn draw_topbar(fb: &mut Framebuffer, time: &str, s: &SysStats, ticks: u64) {
 struct Launcher { label: &'static str, cmd: Option<&'static str>, title: &'static str, color: u32 }
 const LAUNCHERS: &[Launcher] = &[
     Launcher { label: " psh ", cmd: None,               title: "psh - Terminal",   color: GREEN },
-    Launcher { label: " ps  ", cmd: Some("ps\n"),       title: "ps - Processes",   color: BLUE  },
-    Launcher { label: " ai  ", cmd: Some("ai 32\n"),    title: "ai - Inference",   color: AMBER },
-    Launcher { label: " trit", cmd: Some("trit 42\n"),  title: "trit - Ternary",   color: 0xC084FC },
-    Launcher { label: " km  ", cmd: Some("kmanager\n"), title: "Kernel Manager",   color: TEAL    },
+    Launcher { label: "files", cmd: Some("ls -la\n"),   title: "Files",            color: BLUE  },
+    Launcher { label: "nano ", cmd: Some("nano\n"),     title: "Text Editor",      color: AMBER },
+    Launcher { label: " ps  ", cmd: Some("ps\n"),       title: "ps - Processes",   color: 0xA0D0FF },
+    Launcher { label: " ai  ", cmd: Some("ai 32\n"),    title: "ai - Inference",   color: 0xFFD700 },
 ];
 
 
@@ -448,11 +452,10 @@ struct DesktopIcon {
 }
 
 const DESKTOP_ICONS: &[DesktopIcon] = &[
-    DesktopIcon { label: "Term",  bitmap: &ICON_TERM, color: GREEN,    launcher_idx: 0 },
-    DesktopIcon { label: "Procs", bitmap: &ICON_PROC, color: BLUE,     launcher_idx: 1 },
-    DesktopIcon { label: "AI",    bitmap: &ICON_AI,   color: AMBER,    launcher_idx: 2 },
-    DesktopIcon { label: "Trit",  bitmap: &ICON_TRIT, color: 0xC084FC, launcher_idx: 3 },
-    DesktopIcon { label: "KMgr",  bitmap: &ICON_KM,   color: TEAL,     launcher_idx: 4 },
+    DesktopIcon { label: "Term",  bitmap: &ICON_TERM,  color: GREEN,   launcher_idx: 0 },
+    DesktopIcon { label: "Files", bitmap: &ICON_FILES, color: BLUE,    launcher_idx: 1 },
+    DesktopIcon { label: "Edit",  bitmap: &ICON_AI,    color: AMBER,   launcher_idx: 2 },
+    DesktopIcon { label: "Procs", bitmap: &ICON_PROC,  color: 0xA0D0FF, launcher_idx: 3 },
 ];
 
 // 56px wide keeps icons safely left of the default window start (x=79)
@@ -684,7 +687,11 @@ fn open_term(w: i32, h: i32, n: usize, l: &Launcher) -> Option<TermWin> {
     match term::Terminal::spawn() {
         Ok(t) => {
             let off = n as i32 * 20;
-            let wx = ((w - wm::WINDOW_W) / 2 + off).max(0).min(w - wm::WINDOW_W);
+            // Ensure windows respect the sidebar area (x=4..66) and don't clip
+            let left_margin = 75;
+            let wx = ((w - left_margin - wm::WINDOW_W) / 2 + left_margin + off)
+                .max(left_margin)
+                .min(w - wm::WINDOW_W);
             let wy = ((h - wm::WINDOW_H - 28) / 2 + off).max(TOPBAR_H as i32).min(h - wm::WINDOW_H - 28);
             Some(TermWin {
                 win: wm::Window::new(wx, wy, l.title),
@@ -928,14 +935,14 @@ pub extern "C" fn _start() -> ! {
         if left_down {
             if let Some(tw) = wins.last_mut() {
                 if tw.win.dragging {
-                    let nx2 = (cx - tw.win.drag_ox).max(0).min(w - tw.win.w);
+                    let nx2 = (cx - tw.win.drag_ox).max(75).min(w - tw.win.w);
                     let ny2 = (cy - tw.win.drag_oy).max(TOPBAR_H as i32).min(h - tw.win.h - 28);
                     if nx2 != tw.win.x || ny2 != tw.win.y {
                         tw.win.x = nx2; tw.win.y = ny2;
-                        // Rate-limit drag recomposites to ~12Hz (8 ticks @ 100Hz).
+                        // Rate-limit drag recomposites to ~25Hz (4 ticks @ 100Hz) for smooth motion.
                         // Cursor still updates every frame; only the window position
                         // repaints are throttled to cut framebuffer write pressure.
-                        if now_ticks.wrapping_sub(drag_tick) >= 8 {
+                        if now_ticks.wrapping_sub(drag_tick) >= 4 {
                             drag_tick = now_ticks;
                             scene_dirty = true;
                         }
@@ -947,7 +954,7 @@ pub extern "C" fn _start() -> ! {
                     let nh = nh.min(h - tw.win.y - 28);
                     if nw != tw.win.w || nh != tw.win.h {
                         tw.win.w = nw; tw.win.h = nh;
-                        if now_ticks.wrapping_sub(drag_tick) >= 8 {
+                        if now_ticks.wrapping_sub(drag_tick) >= 4 {
                             drag_tick = now_ticks;
                             scene_dirty = true;
                         }
