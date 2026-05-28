@@ -827,6 +827,29 @@ fn open_tis_console(w: i32, h: i32, n: usize) -> Option<TermWin> {
     }
 }
 
+fn open_process_monitor(w: i32, h: i32, n: usize) -> Option<TermWin> {
+    match term::Terminal::spawn() {
+        Ok(t) => {
+            let proc_mon = alloc::boxed::Box::new(app::ProcessMonitor::new());
+            let off = n as i32 * 20;
+            let left_margin = 75;
+            let wx = ((w - left_margin - wm::WINDOW_W) / 2 + left_margin + off)
+                .max(left_margin)
+                .min(w - wm::WINDOW_W);
+            let wy = ((h - wm::WINDOW_H - 28) / 2 + off).max(TOPBAR_H as i32).min(h - wm::WINDOW_H - 28);
+            Some(TermWin {
+                win: wm::Window::new(wx, wy, "Process Monitor"),
+                term: t,
+                editor: None,
+                app: Some(proc_mon),
+                win_dirty: true,
+                initial_cmd: None,
+            })
+        }
+        Err(_) => None,
+    }
+}
+
 // ---- Full scene recomposite ─────────────────────────────────────────────────
 
 fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, ctx_menu: Option<(i32,i32)>, stats: &SysStats, blink_on: bool, hover_icon: Option<usize>) {
@@ -1076,6 +1099,12 @@ pub extern "C" fn _start() -> ! {
                             }
                             2 => { // Edit icon → graphical text editor
                                 if let Some(tw) = open_editor(w, h, wins.len(), "readme.txt", "Text Editor") {
+                                    wins.push(tw);
+                                    scene_dirty = true;
+                                }
+                            }
+                            3 => { // Procs icon → Process Monitor
+                                if let Some(tw) = open_process_monitor(w, h, wins.len()) {
                                     wins.push(tw);
                                     scene_dirty = true;
                                 }

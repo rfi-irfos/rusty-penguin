@@ -420,3 +420,62 @@ impl App for TisConsole {
         "TIS Console"
     }
 }
+
+/// Process Monitor application
+pub struct ProcessMonitor {
+    pub dirty: bool,
+    pub wants_close: bool,
+}
+
+impl ProcessMonitor {
+    pub fn new() -> Self {
+        ProcessMonitor {
+            dirty: true,
+            wants_close: false,
+        }
+    }
+}
+
+impl App for ProcessMonitor {
+    fn render(&mut self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, h: u32) {
+        // Draw header
+        fb.fill_rect(x, y, w, 24, 0x2C2C38);
+        fb.draw_str(x + 8, y + 7, "Process Monitor", 0xF5F5F7, 0x2C2C38);
+        fb.fill_rect(x, y + 24, w, 1, 0x3C3C48);
+
+        // Column headers
+        fb.fill_rect(x, y + 24, w, 18, 0x3C3C48);
+        fb.draw_str(x + 8, y + 29, "PID", 0xB8B8B8, 0x3C3C48);
+        fb.draw_str(x + 80, y + 29, "NAME", 0xB8B8B8, 0x3C3C48);
+        fb.draw_str(x + 250, y + 29, "STATE", 0xB8B8B8, 0x3C3C48);
+
+        // Sample process data
+        let processes = [
+            ("1", "psh", "Active"),
+            ("2", "desktop", "Active"),
+            ("3", "init", "Active"),
+        ];
+
+        for (i, (pid, name, state)) in processes.iter().enumerate() {
+            let y_pos = y + 42 + (i as u32 * 18);
+            if y_pos + 18 > y + h { break; }
+
+            let bg_color = if i % 2 == 0 { 0x1A1A24 } else { 0x232333 };
+            fb.fill_rect(x, y_pos, w, 18, bg_color);
+
+            fb.draw_str(x + 8, y_pos + 4, pid, 0xB8B8B8, bg_color);
+            fb.draw_str(x + 80, y_pos + 4, name, 0xB8B8B8, bg_color);
+            fb.draw_str(x + 250, y_pos + 4, state, 0x4AFF4A, bg_color);
+        }
+
+        self.dirty = false;
+    }
+
+    fn on_key(&mut self, _key: u8) {
+        // Process monitor - read-only for now
+    }
+
+    fn title(&self) -> &str {
+        "Process Monitor"
+    }
+}
