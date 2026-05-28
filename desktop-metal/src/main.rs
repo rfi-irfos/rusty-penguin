@@ -454,23 +454,19 @@ struct DesktopIcon {
 }
 
 const DESKTOP_ICONS: &[DesktopIcon] = &[
-    DesktopIcon { label: "Term",  bitmap: &ICON_TERM,  color: GREEN,   launcher_idx: 0 },
-    DesktopIcon { label: "Files", bitmap: &ICON_FILES, color: BLUE,    launcher_idx: 1 },
-    DesktopIcon { label: "Edit",  bitmap: &ICON_AI,    color: AMBER,   launcher_idx: 2 },
-    DesktopIcon { label: "Procs", bitmap: &ICON_PROC,  color: 0xA0D0FF, launcher_idx: 3 },
-    DesktopIcon { label: "Cal",   bitmap: &ICON_TRIT,  color: 0xC4B5FD,  launcher_idx: 4 },
-    DesktopIcon { label: "Calc",  bitmap: &ICON_PROC,  color: 0xFFD700,  launcher_idx: 7 },
-    DesktopIcon { label: "Clock", bitmap: &ICON_TERM,  color: 0x87CEEB,  launcher_idx: 8 },
-    DesktopIcon { label: "Help",  bitmap: &ICON_FILES, color: 0x90EE90,  launcher_idx: 9 },
-    DesktopIcon { label: "Prefs", bitmap: &ICON_PROC,  color: 0x9CA3AF,  launcher_idx: 5 },
-    DesktopIcon { label: "TIS",   bitmap: &ICON_TRIT,  color: 0x4A9EFF,  launcher_idx: 6 },
+    DesktopIcon { label: "Term",  bitmap: &ICON_TERM,  color: GREEN,    launcher_idx: 0 },
+    DesktopIcon { label: "Files", bitmap: &ICON_FILES, color: BLUE,     launcher_idx: 1 },
+    DesktopIcon { label: "Edit",  bitmap: &ICON_AI,    color: AMBER,    launcher_idx: 2 },
+    DesktopIcon { label: "Help",  bitmap: &ICON_FILES, color: 0x90EE90, launcher_idx: 9 },
+    DesktopIcon { label: "Prefs", bitmap: &ICON_PROC,  color: 0x9CA3AF, launcher_idx: 5 },
+    DesktopIcon { label: "TIS",   bitmap: &ICON_TRIT,  color: 0x4A9EFF, launcher_idx: 6 },
 ];
 
 // 56px wide keeps icons safely left of the default window start (x=79)
 const DICON_W: u32 = 56;
-const DICON_H: u32 = 60;   // 48px image area + 8px label + 4px gap below label
+const DICON_H: u32 = 52;   // 40px image area + 8px label + 4px gap below label
 const DICON_X: u32 = 10;   // left margin → right edge at 66px
-const DICON_GAP: u32 = 8;  // vertical gap between icons
+const DICON_GAP: u32 = 6;  // vertical gap between icons
 
 fn dicon_rect(i: usize) -> (u32, u32, u32, u32) {
     let y = TOPBAR_H + 16 + i as u32 * (DICON_H + DICON_GAP);
@@ -480,19 +476,15 @@ fn dicon_rect(i: usize) -> (u32, u32, u32, u32) {
 fn draw_desktop_icons(fb: &mut Framebuffer, hover_icon: Option<usize>) {
     for (i, icon) in DESKTOP_ICONS.iter().enumerate() {
         let (x, y, w, h) = dicon_rect(i);
-        let img_h: u32 = h - 12;
+        let img_h: u32 = h - 12;  // reserve 12px at bottom for label
         let ix = x as i32; let iy = y as i32;
         let iw = w as i32; let ih = img_h as i32;
         let hovered = hover_icon == Some(i);
-        // Modern shadow effect (multi-layer for depth)
-        let sd = if hovered { 3 } else { 2 };
-        fb.fill_rounded_rect(ix + sd, iy + sd, iw, ih, 8, 0x00000040.min(0x0A0A14));
-        // Icon background with hover effect
+        // Icon card background
         let inner_bg = if hovered { 0x2C2C38u32 } else { 0x1A1A24u32 };
         let border_col = if hovered { icon.color } else { 0x3C3C48u32 };
-        // Rounded card design
-        fb.fill_rounded_rect(ix,     iy,     iw,     ih,     8, border_col);
-        fb.fill_rounded_rect(ix + 1, iy + 1, iw - 2, ih - 2, 7, inner_bg);
+        fb.fill_rounded_rect(ix,     iy,     iw,     ih,     6, border_col);
+        fb.fill_rounded_rect(ix + 1, iy + 1, iw - 2, ih - 2, 5, inner_bg);
         // Accent top bar
         fb.fill_rect_s(ix + 1, iy + 1, iw - 2, 2, icon.color);
         // 2x bitmap centered
@@ -500,13 +492,12 @@ fn draw_desktop_icons(fb: &mut Framebuffer, hover_icon: Option<usize>) {
         let by = y + (img_h - 16) / 2;
         let icon_color = if hovered { icon.color } else { 0x6B7280u32 };
         fb.draw_bitmap_2x(bx, by, icon.bitmap, icon_color, inner_bg);
-        // Label with refined styling
+        // Label below icon
         let lw = icon.label.len() as u32 * 8;
         let lx = if lw < w { x + (w - lw) / 2 } else { x };
-        let label_bg = if hovered { 0x2C2C38u32 } else { 0x1A1A24u32 };
         let label_color = if hovered { icon.color } else { DIM };
-        fb.fill_rect(lx.saturating_sub(2), y + img_h + 2, lw + 4, 11, label_bg);
-        fb.draw_str(lx, y + img_h + 4, icon.label, label_color, label_bg);
+        fb.fill_rect(x, y + img_h, w, 12, BG);
+        fb.draw_str(lx, y + img_h + 2, icon.label, label_color, BG);
     }
 }
 
@@ -1026,7 +1017,10 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
             } else if let Some(tw) = wins.last_mut() {
-                if let Some(ed) = &mut tw.editor {
+                if let Some(app) = &mut tw.app {
+                    app.on_key(k);
+                    tw.win_dirty = true;
+                } else if let Some(ed) = &mut tw.editor {
                     ed.send_key(k);
                     tw.win_dirty = true;
                 } else {
@@ -1044,9 +1038,18 @@ pub extern "C" fn _start() -> ! {
             }
         }
 
-        // Close windows that typed `exit`
-        if wins.iter().any(|tw| tw.editor.is_some() || tw.term.wants_close) {
-            wins.retain(|tw| !(tw.editor.as_ref().map(|ed| ed.wants_close).unwrap_or(false) || tw.term.wants_close));
+        // Close windows that requested close
+        let needs_retain = wins.iter().any(|tw| {
+            tw.term.wants_close
+                || tw.editor.as_ref().map(|e| e.wants_close).unwrap_or(false)
+                || tw.app.as_ref().map(|a| a.wants_close()).unwrap_or(false)
+        });
+        if needs_retain {
+            wins.retain(|tw| {
+                !(tw.term.wants_close
+                    || tw.editor.as_ref().map(|e| e.wants_close).unwrap_or(false)
+                    || tw.app.as_ref().map(|a| a.wants_close()).unwrap_or(false))
+            });
             scene_dirty = true;
         }
 
@@ -1162,68 +1165,19 @@ pub extern "C" fn _start() -> ! {
                         let tw = wins.remove(mi); wins.push(tw);
                         scene_dirty = true;
                     } else if let Some(di) = desktop_icon_hit(cx, cy) {
-                        match di {
-                            1 => { // Files icon → FileManager app
-                                if let Some(tw) = open_file_manager(w, h, wins.len()) {
-                                    wins.push(tw);
-                                    scene_dirty = true;
-                                }
-                            }
-                            2 => { // Edit icon → graphical text editor
-                                if let Some(tw) = open_editor(w, h, wins.len(), "readme.txt", "Text Editor") {
-                                    wins.push(tw);
-                                    scene_dirty = true;
-                                }
-                            }
-                            3 => { // Procs icon → Process Monitor
-                                if let Some(tw) = open_process_monitor(w, h, wins.len()) {
-                                    wins.push(tw);
-                                    scene_dirty = true;
-                                }
-                            }
-                            4 => { // Cal icon → Calendar app
-                                if let Some(tw) = open_calendar(w, h, wins.len()) {
-                                    wins.push(tw);
-                                    scene_dirty = true;
-                                }
-                            }
-                            5 => { // Calc icon → Calculator app
-                                if let Some(tw) = open_calculator(w, h, wins.len()) {
-                                    wins.push(tw);
-                                    scene_dirty = true;
-                                }
-                            }
-                            6 => { // Clock icon → System Clock app
-                                if let Some(tw) = open_system_clock(w, h, wins.len()) {
-                                    wins.push(tw);
-                                    scene_dirty = true;
-                                }
-                            }
-                            7 => { // Help icon → Help Browser
-                                if let Some(tw) = open_help_browser(w, h, wins.len()) {
-                                    wins.push(tw);
-                                    scene_dirty = true;
-                                }
-                            }
-                            8 => { // Prefs icon → Settings app
-                                if let Some(tw) = open_settings(w, h, wins.len()) {
-                                    wins.push(tw);
-                                    scene_dirty = true;
-                                }
-                            }
-                            9 => { // TIS icon → TIS Console
-                                if let Some(tw) = open_tis_console(w, h, wins.len()) {
-                                    wins.push(tw);
-                                    scene_dirty = true;
-                                }
-                            }
-                            _ => { // Other icons → terminal with launcher command
-                                let li = DESKTOP_ICONS[di].launcher_idx;
-                                if let Some(tw) = open_term(w, h, wins.len(), &LAUNCHERS[li]) {
-                                    wins.push(tw);
-                                    scene_dirty = true;
-                                }
-                            }
+                        // Icon order: Term, Files, Edit, Help, Prefs, TIS
+                        let opened = match di {
+                            0 => open_term(w, h, wins.len(), &LAUNCHERS[0]),
+                            1 => open_file_manager(w, h, wins.len()),
+                            2 => open_editor(w, h, wins.len(), "readme.txt", "Text Editor"),
+                            3 => open_help_browser(w, h, wins.len()),
+                            4 => open_settings(w, h, wins.len()),
+                            5 => open_tis_console(w, h, wins.len()),
+                            _ => None,
+                        };
+                        if let Some(tw) = opened {
+                            wins.push(tw);
+                            scene_dirty = true;
                         }
                     }
                 }
@@ -1271,35 +1225,32 @@ pub extern "C" fn _start() -> ! {
         }
 
         // ── Single unified render pass per frame ──────────────────────────────
-        // With multiple windows, always do full recomposite to avoid flickering.
-        // Single window can use partial rendering for efficiency.
+        // Render only when something visible actually changed. With multiple
+        // windows we still only recompose on real state change — not every frame —
+        // so the screen stops flickering.
         let cursor_moved = prev_cx != cx || prev_cy != cy;
         let any_chrome   = scene_dirty || wins.iter().any(|tw| tw.win_dirty);
-        let any_content  = wins.iter().any(|tw| (tw.term.dirty || tw.editor.is_some()) && !tw.win.minimized);
-        let multi_window = wins.len() > 1;
-        let force_full_composite = any_chrome || multi_window;
+        let any_term     = wins.iter().any(|tw| tw.term.dirty && !tw.win.minimized);
 
-        if any_chrome || any_content || cursor_moved || topbar_due {
+        if any_chrome || any_term || cursor_moved || topbar_due {
             restore_cursor_bg(&mut fb, prev_cx, prev_cy, &cbuf);
 
-            if force_full_composite {
+            if any_chrome {
                 recomposite(&mut fb, &mut wins, start_menu_open, ctx_menu, &stats, blink_on, hover_icon);
                 scene_dirty = false;
-            } else if any_content {
+            } else if any_term {
+                // Partial: re-render only the focused terminal content. App and editor
+                // windows mark themselves dirty via win_dirty and go through the full
+                // recomposite path above instead.
                 let n = wins.len();
                 for (i, tw) in wins.iter_mut().enumerate() {
-                    if tw.win.minimized { continue; }
-                    let is_dirty = tw.term.dirty || tw.editor.is_some();
-                    if !is_dirty { continue; }
+                    if tw.win.minimized || !tw.term.dirty { continue; }
+                    if tw.app.is_some() || tw.editor.is_some() { continue; }
                     let focused = i == n - 1;
                     let (ox, oy) = wm::content_origin(&tw.win);
                     let cw = (tw.win.w - 2).max(0) as u32;
                     let ch = (tw.win.h - 3 - wm::TITLEBAR_H).max(0) as u32;
-                    if let Some(ed) = &mut tw.editor {
-                        ed.render(&mut fb, ox as u32, oy as u32, cw, ch);
-                    } else {
-                        tw.term.render(&mut fb, ox as u32, oy as u32, cw, ch, focused && blink_on);
-                    }
+                    tw.term.render(&mut fb, ox as u32, oy as u32, cw, ch, focused && blink_on);
                     tw.term.dirty = false;
                 }
                 if start_menu_open { draw_start_menu(&mut fb); }
@@ -1311,10 +1262,13 @@ pub extern "C" fn _start() -> ! {
                 draw_topbar(&mut fb, up.as_str(), &stats, now_ticks);
             }
 
-            // Re-stamp the focused terminal cursor (editors include cursor in render).
+            // Re-stamp the focused terminal cursor — only for pure terminal windows.
+            // Apps and editors paint their own cursors as part of their render.
             {
                 let n = wins.len();
-                if let Some((fi, tw)) = wins.iter_mut().enumerate().rev().find(|(_, tw)| !tw.win.minimized && tw.editor.is_none()) {
+                if let Some((fi, tw)) = wins.iter_mut().enumerate().rev().find(|(_, tw)| {
+                    !tw.win.minimized && tw.editor.is_none() && tw.app.is_none()
+                }) {
                     let focused = fi == n - 1;
                     let (ox, oy) = wm::content_origin(&tw.win);
                     let cw = (tw.win.w - 2).max(0) as u32;
@@ -1326,9 +1280,6 @@ pub extern "C" fn _start() -> ! {
             save_cursor_bg(&fb, cx, cy, &mut cbuf);
             draw_cursor(&mut fb, cx, cy);
         }
-
-        // Save button state for next frame's edge detection
-        mouse.btn_pressed = btn;
     }
 }
 
