@@ -681,3 +681,137 @@ impl App for SystemInfo {
         "System Info"
     }
 }
+
+/// Simple Calculator application
+pub struct Calculator {
+    display: String,
+    accumulator: i64,
+    current_op: Option<char>,
+    new_number: bool,
+    pub dirty: bool,
+    pub wants_close: bool,
+}
+
+impl Calculator {
+    pub fn new() -> Self {
+        Calculator {
+            display: String::from("0"),
+            accumulator: 0,
+            current_op: None,
+            new_number: true,
+            dirty: true,
+            wants_close: false,
+        }
+    }
+
+    fn handle_digit(&mut self, digit: char) {
+        if self.new_number {
+            self.display.clear();
+            self.new_number = false;
+        }
+        if self.display.len() < 16 {
+            self.display.push(digit);
+        }
+        self.dirty = true;
+    }
+
+    fn execute_operation(&mut self) {
+        if let Ok(num) = self.display.parse::<i64>() {
+            if let Some(op) = self.current_op {
+                let result = match op {
+                    '+' => self.accumulator + num,
+                    '-' => self.accumulator - num,
+                    '*' => self.accumulator * num,
+                    '/' => if num != 0 { self.accumulator / num } else { 0 },
+                    _ => num,
+                };
+                self.display = alloc::format!("{}", result);
+                self.accumulator = result;
+            } else {
+                self.accumulator = num;
+            }
+            self.new_number = true;
+        }
+    }
+}
+
+impl App for Calculator {
+    fn render(&mut self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, h: u32) {
+        // Header
+        fb.fill_rect(x, y, w, 24, 0x2C2C38);
+        fb.draw_str(x + 8, y + 7, "Calculator", 0xF5F5F7, 0x2C2C38);
+        fb.fill_rect(x, y + 24, w, 1, 0x3C3C48);
+
+        // Display
+        fb.fill_rect(x + 8, y + 32, w - 16, 32, 0x1A1A24);
+        fb.draw_str(x + 12, y + 42, &self.display, 0x4ADE80, 0x1A1A24);
+
+        // Buttons grid (4x4)
+        let buttons = [
+            ["7", "8", "9", "/"],
+            ["4", "5", "6", "*"],
+            ["1", "2", "3", "-"],
+            ["0", ".", "=", "+"],
+        ];
+
+        let btn_w = (w - 32) / 4;
+        let btn_h = 24u32;
+        let start_y = y + 72;
+
+        for (row, buttons_row) in buttons.iter().enumerate() {
+            for (col, label) in buttons_row.iter().enumerate() {
+                let bx = x + 8 + (col as u32 * (btn_w + 4));
+                let by = start_y + (row as u32 * (btn_h + 4));
+
+                let bg = if *label == "=" { 0x4ADE80 } else { 0x3C3C48 };
+                fb.fill_rect(bx, by, btn_w, btn_h, bg);
+
+                let text_color = if *label == "=" { 0x0F172A } else { 0xF5F5F7 };
+                fb.draw_str(bx + (btn_w / 2) - 3, by + 8, label, text_color, bg);
+            }
+        }
+
+        self.dirty = false;
+    }
+
+    fn on_key(&mut self, key: u8) {
+        match key {
+            b'0'..=b'9' => self.handle_digit(key as char),
+            b'+' | b'-' | b'*' | b'/' => {
+                self.execute_operation();
+                if let Ok(num) = self.display.parse::<i64>() {
+                    self.accumulator = num;
+                }
+                self.current_op = Some(key as char);
+                self.new_number = true;
+                self.dirty = true;
+            }
+            b'=' | b'\r' => {
+                self.execute_operation();
+                self.current_op = None;
+                self.dirty = true;
+            }
+            8 => { // Backspace
+                if !self.display.is_empty() && !self.new_number {
+                    self.display.pop();
+                    if self.display.is_empty() {
+                        self.display.push('0');
+                    }
+                    self.dirty = true;
+                }
+            }
+            b'c' | b'C' => { // Clear
+                self.display = String::from("0");
+                self.accumulator = 0;
+                self.current_op = None;
+                self.new_number = true;
+                self.dirty = true;
+            }
+            _ => {}
+        }
+    }
+
+    fn title(&self) -> &str {
+        "Calculator"
+    }
+}
