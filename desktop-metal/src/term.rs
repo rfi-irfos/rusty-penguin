@@ -2264,7 +2264,7 @@ impl Terminal {
                 "uname","whoami","uptime","date","trit","ai","stat","file","hostname","hostid","id",
                 "echo","clear","pwd","cd","exit","kver","kinstall","kmanager",
                 "psh","seq","bc","calc","rev","alias","printf","unalias",
-                "true","false","sleep",
+                "true","false","sleep","test","[",
             ];
             if BUILTINS.iter().any(|&b| b == cmd_name) {
                 let s = format!("psh builtin: {}\r\n", cmd_name);
@@ -2324,6 +2324,47 @@ impl Terminal {
                 self.write_output(b"sleep: invalid argument\r\n");
                 self.last_exit = 1;
             }
+
+        } else if line == b"test" || line.starts_with(b"test ") || line == b"[" || line.starts_with(b"[ ") {
+            let test_arg = if line == b"test" || line == b"[" {
+                ""
+            } else if line.starts_with(b"test ") {
+                arg(5)
+            } else {
+                arg(2)
+            };
+            let mut result = true;
+            let parts: Vec<&str> = test_arg.split_whitespace().collect();
+            if parts.is_empty() {
+                result = false;
+            } else if parts.len() == 1 {
+                if parts[0] == "-z" { result = true; }
+                else if parts[0] == "-n" { result = true; }
+                else { result = !parts[0].is_empty(); }
+            } else if parts.len() == 2 {
+                let flag = parts[0];
+                let arg_val = parts[1];
+                if flag == "-z" { result = arg_val.is_empty(); }
+                else if flag == "-n" { result = !arg_val.is_empty(); }
+                else if flag == "-f" { result = vfs::vfs().exists(arg_val); }
+                else if flag == "-d" { result = vfs::vfs().exists(arg_val); }
+                else if flag == "-e" { result = vfs::vfs().exists(arg_val); }
+                else { result = false; }
+            } else if parts.len() == 3 {
+                let left = parts[0]; let op = parts[1]; let right = parts[2];
+                result = match op {
+                    "=" | "==" => left == right,
+                    "!=" => left != right,
+                    "-eq" => left.parse::<i64>().ok().zip(right.parse::<i64>().ok()).map(|(a,b)| a == b).unwrap_or(false),
+                    "-ne" => left.parse::<i64>().ok().zip(right.parse::<i64>().ok()).map(|(a,b)| a != b).unwrap_or(false),
+                    "-lt" => left.parse::<i64>().ok().zip(right.parse::<i64>().ok()).map(|(a,b)| a < b).unwrap_or(false),
+                    "-le" => left.parse::<i64>().ok().zip(right.parse::<i64>().ok()).map(|(a,b)| a <= b).unwrap_or(false),
+                    "-gt" => left.parse::<i64>().ok().zip(right.parse::<i64>().ok()).map(|(a,b)| a > b).unwrap_or(false),
+                    "-ge" => left.parse::<i64>().ok().zip(right.parse::<i64>().ok()).map(|(a,b)| a >= b).unwrap_or(false),
+                    _ => false,
+                };
+            }
+            self.last_exit = if result { 0 } else { 1 };
 
         } else if line == b"exit" {
             self.write_output(b"bye\r\n");
