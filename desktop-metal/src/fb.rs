@@ -18,6 +18,12 @@ pub struct Framebuffer {
     // fill flashing through before content fills in).
     real: *mut u8,
     back: alloc::boxed::Box<[u8]>,
+    // Cached static background (desktop gradient + logo + icon dock). Recomposite
+    // blits this instead of recomputing the gradient row-by-row every frame —
+    // the expensive part of dragging a window at 1080p. Invalidated when the
+    // static scene changes (icon hover).
+    bg_cache: alloc::boxed::Box<[u8]>,
+    bg_cached: bool,
 }
 
 unsafe impl Send for Framebuffer {}
@@ -58,12 +64,60 @@ impl Framebuffer {
         let size = (pitch * height) as usize;
         let mut back: alloc::boxed::Box<[u8]> = alloc::vec![0u8; size].into_boxed_slice();
         let data_ptr = back.as_mut_ptr();
+        let bg_cache: alloc::boxed::Box<[u8]> = alloc::vec![0u8; size].into_boxed_slice();
         Ok(Framebuffer {
             data:   data_ptr,
             width, height, bpp, stride: pitch,
             real:   base as *mut u8,
             back,
+            bg_cache,
+            bg_cached: false,
         })
+    }
+
+    /// Save the current backbuffer as the static-background cache.
+    pub fn snapshot_bg(&mut self) {
+        self.bg_cache.copy_from_slice(&self.back);
+        self.bg_cached = true;
+    }
+
+    /// Restore the cached static background into the backbuffer (a fast RAM copy
+    /// in place of recomputing the gradient + redrawing the icon dock).
+    pub fn restore_bg(&mut self) {
+        self.back.copy_from_slice(&self.bg_cache);
+    }
+
+    pub fn bg_cached(&self) -> bool { self.bg_cached }
+    pub fn invalidate_bg(&mut self) { self.bg_cached = false; }
+
+    /// Erase a rectangle back to the cached static background (dirty-rect
+    /// compositing primitive: cheaply clear where a window used to be).
+    #[allow(dead_code)]
+    pub fn restore_bg_rect(&mut self, x: u32, y: u32, w: u32, h: u32) {
+        let stride = self.stride as usize;
+        let bpp = (self.bpp / 8) as usize;
+        let x0 = (x as usize) * bpp;
+        let row_len = ((w as usize) * bpp).min(stride.saturating_sub(x0));
+        let y1 = (y + h).min(self.height);
+        for row in y..y1 {
+            let off = row as usize * stride + x0;
+            self.back[off..off + row_len].copy_from_slice(&self.bg_cache[off..off + row_len]);
+        }
+    }
+
+    /// Present only rows [y0, y1) to the real framebuffer (dirty-rect present:
+    /// avoid the full-screen MMIO copy when only a band changed).
+    #[allow(dead_code)]
+    pub fn present_rows(&mut self, y0: u32, y1: u32) {
+        let stride = self.stride as usize;
+        let y0 = y0 as usize;
+        let y1 = (y1 as usize).min(self.height as usize);
+        if y1 <= y0 { return; }
+        let off = y0 * stride;
+        let len = (y1 - y0) * stride;
+        unsafe {
+            core::ptr::copy_nonoverlapping(self.back.as_ptr().add(off), self.real.add(off), len);
+        }
     }
 
     /// Copy the backbuffer to the real framebuffer in one block. Call this

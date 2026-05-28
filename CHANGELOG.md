@@ -4,6 +4,20 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+### Changed — Cache the static desktop background (drag perf groundwork, 2026-05-28)
+
+- The bare-metal compositor cached the static scene (gradient + logo + icon
+  dock): `recomposite` now blits the cache instead of recomputing the
+  1080-row gradient and redrawing the dock every frame. Invalidated only on
+  icon hover. Heap raised 24→32 MiB to hold the extra full-screen cache buffer
+  (BSS still ends ~36 MiB, below the 40 MiB initrd and 63 MiB stack).
+- **Honest scope:** this cuts per-frame *compute*, but the dominant cost of
+  dragging a window at 1080p is the full-screen `present()` copy to VRAM (MMIO).
+  Fully smooth dragging needs **dirty-rectangle present** (push only changed
+  rows) — a compositor change queued for review, with this cache as its
+  groundwork (`restore_bg`/`restore_bg_rect` can cheaply erase to background).
+- Verified: desktop still renders correctly at 1920×1080 with the cache.
+
 ### Added — Install to disk: boot standalone, no ISO (2026-05-28)
 
 - **`rp-install /dev/<disk>`** installs Rusty Penguin to a disk so it boots on

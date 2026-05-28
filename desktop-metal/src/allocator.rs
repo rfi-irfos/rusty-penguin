@@ -10,7 +10,11 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 //      this heap's .bss region;
 //   2. the kernel relocates GRUB's initrd module to a high address before
 //      loading this ELF, so the in-place .bss zero-fill can't clobber it.
-const HEAP_BYTES: usize = 24 * 1024 * 1024;
+// 32 MiB. Holds the 1080p backbuffer (~8.3 MiB) + the static-background cache
+// (another ~8.3 MiB, for smooth window dragging) + the apps/terminals working
+// set. BSS then ends ~36 MiB, still below the relocated initrd at 40 MiB and
+// the ring-3 stack at ~63 MiB (see kernel vmm::USER_STACK_TOP).
+const HEAP_BYTES: usize = 32 * 1024 * 1024;
 
 pub struct BumpAllocator {
     next: AtomicUsize,

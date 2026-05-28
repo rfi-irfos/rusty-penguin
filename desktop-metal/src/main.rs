@@ -1063,8 +1063,17 @@ fn open_minesweeper(w: i32, h: i32, n: usize) -> Option<TermWin> {
 // ---- Full scene recomposite ─────────────────────────────────────────────────
 
 fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, ctx_menu: Option<(i32,i32)>, stats: &SysStats, blink_on: bool, hover_icon: Option<usize>) {
-    draw_scene_static(fb);
-    draw_desktop_icons(fb, hover_icon);
+    // Static background (gradient + logo + icon dock) is cached: blitting it is
+    // far cheaper than recomputing the 1080-row gradient every frame, which is
+    // what made dragging a window at 1080p janky. The cache is rebuilt only
+    // when the static scene changes (icon hover) — see invalidate_bg callers.
+    if fb.bg_cached() {
+        fb.restore_bg();
+    } else {
+        draw_scene_static(fb);
+        draw_desktop_icons(fb, hover_icon);
+        fb.snapshot_bg();
+    }
     draw_taskbar_win_btns(fb, wins);
     let up = rtc_str();
     let n = wins.len();
@@ -1261,6 +1270,7 @@ pub extern "C" fn _start() -> ! {
         let new_hover = desktop_icon_hit(cx, cy);
         if new_hover != hover_icon {
             hover_icon = new_hover;
+            fb.invalidate_bg();   // icon dock changes → rebuild the cached background
             scene_dirty = true;
         }
 
