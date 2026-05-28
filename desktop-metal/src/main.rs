@@ -88,20 +88,20 @@ fn sys_serial_debug(b: u8) {
 }
 
 // ---- Palette ────────────────────────────────────────────────────────────────
-
-const BG:       u32 = 0x0B1220;
-const TOPBAR:   u32 = 0x080F1C;
-const TASKBAR:  u32 = 0x0B141A;
-const TOPBAR_H: u32 = 28;
-const BORDER:   u32 = 0x1E293B;
-const GREEN:    u32 = 0x4ADE80;
-const DIM:      u32 = 0x334155;
-const DIMMER:   u32 = 0x1E293B;
-const WHITE:    u32 = 0xF8FAFC;
-const AMBER:    u32 = 0xFBBF24;
-const BLUE:     u32 = 0x60A5FA;
-const CURSOR:   u32 = 0xF8FAFC;
-const TEAL:     u32 = 0x2DD4BF;
+// Ubuntu-inspired color scheme: clean, modern, accessible
+const BG:       u32 = 0x13131B;  // Deep charcoal (polished dark)
+const TOPBAR:   u32 = 0x1A1A24;  // Slightly lighter charcoal topbar
+const TASKBAR:  u32 = 0x0F0F17;  // Deep taskbar with subtle depth
+const TOPBAR_H: u32 = 32;        // Slightly taller topbar for better proportions
+const BORDER:   u32 = 0x2C2C38;  // Ubuntu-like medium contrast
+const GREEN:    u32 = 0x5FDD8F;  // Warmer Ubuntu green
+const DIM:      u32 = 0x6B7280;  // Better readable dim text
+const DIMMER:   u32 = 0x2C2C38;  // Match border for consistency
+const WHITE:    u32 = 0xF5F5F7;  // Warmer white (not pure white)
+const AMBER:    u32 = 0xFFA500;  // Ubuntu-like warm accent
+const BLUE:     u32 = 0x4A9EFF;  // Brighter, more vibrant blue
+const CURSOR:   u32 = 0xF5F5F7;  // Match white
+const TEAL:     u32 = 0x00D4AA;  // More vibrant teal
 
 // Fill area (hot-spot at (0,0)).  Save/restore adds 1px border on all four sides.
 const CURSOR_W:  u32 = 13;
@@ -272,55 +272,57 @@ fn draw_scene_static(fb: &mut Framebuffer) {
     let w = fb.width; let h = fb.height;
     let tb_y = h - 28;
 
-    // Desktop gradient — three-stop: dark blue-green top → deep navy mid → dark teal bottom.
-    // Gives the subtle "lit panel" depth that Ubuntu/Mint wallpapers have.
+    // Desktop gradient — smooth, refined Ubuntu-style background.
+    // Subtle shift from charcoal to deep blue, giving depth without distraction.
     let total_rows = tb_y.saturating_sub(TOPBAR_H);
     let mut y = TOPBAR_H;
     while y < tb_y {
         let t = (y - TOPBAR_H) as u64 * 256 / total_rows.max(1) as u64; // 0..255
-        let (r, g, b) = if t < 128 {
-            // top half: dark blue-green → deep navy
-            let s = t;
-            (0x0Au64 + s / 32, 0x16u64 + s / 20, 0x22u64 + s / 10)
+        // Smooth four-step gradient: charcoal → slate → midnight → deep charcoal
+        let (r, g, b) = if t < 85 {
+            // top: charcoal → slate
+            let s = t * 3 / 85;
+            (0x13u64 + s / 4, 0x13u64 + s / 3, 0x1Bu64 + s / 2)
+        } else if t < 170 {
+            // middle-top: slate → midnight blue
+            let s = (t - 85) * 3 / 85;
+            (0x16u64 - s / 8, 0x18u64 + s / 8, 0x26u64 + s / 3)
         } else {
-            // bottom half: deep navy → slightly teal
-            let s = t - 128;
-            (0x0Eu64 - s / 64, 0x1Du64 - s / 32, 0x34u64 - s / 16)
+            // bottom: midnight → deep charcoal
+            let s = (t - 170) * 3 / 85;
+            (0x14u64 - s / 16, 0x16u64 - s / 32, 0x24u64 - s / 16)
         };
         let col = ((r as u32) << 16) | ((g as u32) << 8) | b as u32;
         fb.fill_rect(0, y, w, 1, col);
         y += 1;
     }
 
-    // Centered logo widget — 220×130px with large 2× text
-    const LW: u32 = 220; const LH: u32 = 130;
+    // Centered logo widget — 240×140px with modern styling
+    const LW: u32 = 240; const LH: u32 = 140;
     let logo_ix = w.saturating_sub(LW) / 2;
     let logo_iy = TOPBAR_H + tb_y.saturating_sub(TOPBAR_H).saturating_sub(LH + 28) / 2;
     let lx = logo_ix as i32; let ly2 = logo_iy as i32;
-    // Outer glow/shadow
-    fb.fill_rect_s(lx + 5, ly2 + 5, LW as i32, LH as i32, 0x030810);
-    // Card background
-    fb.fill_rounded_rect(lx, ly2, LW as i32, LH as i32, 8, 0x0C1E2C);
-    // Green top accent strip
-    fb.fill_rounded_rect(lx, ly2, LW as i32, 4, 2, 0x22C55E);
-    // Border
-    for off in 0..1i32 {
-        fb.fill_rect_s(lx + off, ly2 + off, LW as i32 - off*2, LH as i32 - off*2, 0x1A3040);
-        fb.fill_rounded_rect(lx + off + 1, ly2 + off + 1, LW as i32 - off*2 - 2, LH as i32 - off*2 - 2, 7, 0x0C1E2C);
-        let _ = off;
-    }
-    // Dingir 3× icon (24×24) centred near top
-    fb.draw_bitmap_3x(logo_ix + (LW - 24) / 2, logo_iy + 14, &DINGIR, GREEN, 0x0C1E2C);
-    // "RUSTY" in 2× white (80px wide × 16px tall)
-    fb.draw_str_2x(logo_ix + (LW - 5 * 16) / 2, logo_iy + 46, "RUSTY", WHITE, 0x0C1E2C);
-    // "PENGUIN" in 2× green (112px wide)
-    fb.draw_str_2x(logo_ix + (LW - 7 * 16) / 2, logo_iy + 68, "PENGUIN", GREEN, 0x0C1E2C);
-    // Version + tagline
-    fb.draw_str(logo_ix + (LW - 9 * 8) / 2, logo_iy + 96, "v1.0.0-bm", DIM, 0x0C1E2C);
-    let tag = "Binary hardware.  Ternary mind.";
-    let tag_y = logo_iy + LH + 14;
+    // Soft shadow for depth (Ubuntu-style)
+    fb.fill_rect_s(lx + 3, ly2 + 3, LW as i32, LH as i32, 0x0A0A10);
+    // Card background — refined modern look
+    fb.fill_rounded_rect(lx, ly2, LW as i32, LH as i32, 10, 0x1A1A24);
+    // Accent bar at top (warm gradient-like effect with green)
+    fb.fill_rounded_rect(lx, ly2, LW as i32, 5, 3, GREEN);
+    // Subtle border for definition
+    fb.fill_rect_s(lx, ly2, LW as i32, 1, 0x3C3C48);
+    // Dingir 3× icon (24×24) centered near top
+    fb.draw_bitmap_3x(logo_ix + (LW - 24) / 2, logo_iy + 16, &DINGIR, GREEN, 0x1A1A24);
+    // "RUSTY" in 2× white with better spacing
+    fb.draw_str_2x(logo_ix + (LW - 5 * 16) / 2, logo_iy + 48, "RUSTY", WHITE, 0x1A1A24);
+    // "PENGUIN" in 2× green
+    fb.draw_str_2x(logo_ix + (LW - 7 * 16) / 2, logo_iy + 70, "PENGUIN", GREEN, 0x1A1A24);
+    // Version — subtle
+    fb.draw_str(logo_ix + (LW - 10 * 8) / 2, logo_iy + 100, "v1.0.0-bm", DIM, 0x1A1A24);
+    // Tagline
+    let tag = "Bare-metal Rust OS · Sparse ternary inference";
+    let tag_y = logo_iy + LH + 16;
     if tag_y + 8 < tb_y {
-        fb.draw_str(w.saturating_sub(tag.len() as u32 * 8) / 2, tag_y, tag, TEAL, 0x0B1728);
+        fb.draw_str(w.saturating_sub(tag.len() as u32 * 8) / 2, tag_y, tag, DIM, BG);
     }
 
     // ── Taskbar — gradient lighter at top, darker at bottom ──
@@ -365,20 +367,23 @@ fn trit_indicator(ticks: u64) -> [u8; 7] {
 
 fn draw_topbar(fb: &mut Framebuffer, time: &str, s: &SysStats, ticks: u64) {
     let fw = fb.width;
+    // Solid topbar with subtle gradient for depth (Ubuntu-like)
     for dy in 0..TOPBAR_H {
-        let blend = (dy * 10 / TOPBAR_H) as u8;
-        let col = (0x06u8.saturating_add(blend) as u32) << 16
-                | (0x0Cu8.saturating_add(blend) as u32) << 8
-                |  0x18u8.saturating_add(blend) as u32;
+        let blend = (dy * 6 / TOPBAR_H) as u8;
+        let col = (0x1Au8.saturating_add(blend) as u32) << 16
+                | (0x1Au8.saturating_add(blend) as u32) << 8
+                |  0x24u8.saturating_add(blend) as u32;
         fb.fill_rect(0, dy, fw, 1, col);
     }
-    fb.fill_rect(0, TOPBAR_H - 1, fw, 1, 0x1E293B);
-    fb.fill_rect(0, 0, 3, TOPBAR_H, 0x22C55E);  // green left accent
+    // Bottom border for definition
+    fb.fill_rect(0, TOPBAR_H - 1, fw, 1, 0x3C3C48);
+    // Left accent bar (smaller, more refined)
+    fb.fill_rect(0, 0, 2, TOPBAR_H, GREEN);
     let ty = (TOPBAR_H / 2).saturating_sub(4);
 
-    // LEFT: brand mark
-    fb.draw_bitmap_2x(6, ty.saturating_sub(4), &DINGIR, GREEN, TOPBAR);
-    fb.draw_str(24, ty, "Rusty Penguin", GREEN, TOPBAR);
+    // LEFT: brand mark with better spacing
+    fb.draw_bitmap_2x(8, ty.saturating_sub(3), &DINGIR, GREEN, TOPBAR);
+    fb.draw_str(28, ty, "Rusty Penguin", WHITE, TOPBAR);
 
     // CENTER: uptime clock
     let cx = (fw - time.len() as u32 * 8) / 2;
