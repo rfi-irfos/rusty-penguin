@@ -418,23 +418,24 @@ fn draw_desktop_icons(fb: &mut Framebuffer) {
         let img_h: u32 = h - 12;
         let ix = x as i32; let iy = y as i32;
         let iw = w as i32; let ih = img_h as i32;
-        // Rounded icon container with drop shadow
-        fb.fill_rounded_rect(ix + 2, iy + 2, iw, ih, 6, 0x040C14); // shadow
-        fb.fill_rounded_rect(ix, iy, iw, ih, 6, 0x0D1E2C);
-        // Colored top accent strip
-        fb.fill_rounded_rect(ix, iy, iw, 4, 3, icon.color);
-        fb.fill_rect_s(ix, iy + 2, iw, 2, icon.color); // square bottom of accent
-        // Inner border ring
-        fb.fill_rounded_rect(ix, iy, iw, ih, 6, icon.color & 0x3FFFFFFF | 0x20000000);
+        // Half-brightness border color (correct bit math, no alpha tricks)
+        let border_col = ((icon.color >> 16 & 0xFF) / 2) << 16
+                       | ((icon.color >>  8 & 0xFF) / 2) << 8
+                       |  ((icon.color      & 0xFF) / 2);
+        // Drop shadow
+        fb.fill_rounded_rect(ix + 2, iy + 2, iw, ih, 6, 0x040C14);
+        // Colored 1px border ring, then inner fill
+        fb.fill_rounded_rect(ix,     iy,     iw,     ih,     6, border_col);
         fb.fill_rounded_rect(ix + 1, iy + 1, iw - 2, ih - 2, 5, 0x0D1E2C);
+        // Colored top accent strip (inside the border)
+        fb.fill_rect_s(ix + 1, iy + 1, iw - 2, 4, icon.color);
         // 2x bitmap centered
         let bx = x + (w - 16) / 2;
         let by = y + (img_h - 16) / 2;
         fb.draw_bitmap_2x(bx, by, icon.bitmap, icon.color, 0x0D1E2C);
-        // Label
+        // Label with background pill
         let lw = icon.label.len() as u32 * 8;
         let lx = if lw < w { x + (w - lw) / 2 } else { x };
-        // Label bg pill
         let label_bg = 0x0B1726u32;
         fb.fill_rect(lx.saturating_sub(2), y + img_h + 2, lw + 4, 11, label_bg);
         fb.draw_str(lx, y + img_h + 4, icon.label, icon.color, label_bg);
@@ -468,15 +469,35 @@ fn draw_taskbar_win_btns(fb: &mut Framebuffer, term_wins: &[TermWin]) {
         if x + w >= fw as i32 { break; }
         let is_focused   = slot == n - 1;
         let is_minimized = tw.win.minimized;
-        let bg  = if is_minimized { 0x111827u32 } else { 0x1E293Bu32 };
+        let bg  = if is_minimized { 0x0D1520u32 } else { 0x152230u32 };
         let txt = if is_minimized { DIM } else { WHITE };
-        let top = if is_focused   { BLUE } else { BORDER };
-        fb.fill_rect(x as u32, y as u32, w as u32, h as u32, bg);
-        fb.fill_rect(x as u32, y as u32, w as u32, 1, top);
-        let n = ((w - 4) / 8) as usize;
-        let lbl = &tw.win.title[..n.min(tw.win.title.len())];
-        fb.draw_str((x + 2) as u32, (y + 5) as u32, lbl, txt, bg);
+        let accent = if is_focused { BLUE } else { BORDER };
+        // Rounded pill
+        fb.fill_rounded_rect(x, y, w, h, 4, bg);
+        // Top accent strip (focused = blue, unfocused = dim)
+        fb.fill_rect_s(x + 4, y, w - 8, 2, accent);
+        // App icon dot (small filled circle in accent color)
+        fb.fill_circle(x + 6, y + h / 2, 2, accent);
+        let max_chars = ((w - 18) / 8).max(0) as usize;
+        let lbl = &tw.win.title[..max_chars.min(tw.win.title.len())];
+        fb.draw_str((x + 14) as u32, (y + 5) as u32, lbl, txt, bg);
     }
+}
+
+fn draw_taskbar_clock(fb: &mut Framebuffer, time_str: &str) {
+    let fw = fb.width; let tb_y = fb.height - 28;
+    // Extract HH:MM from time_str (find first ':' then take 5 chars back 2)
+    let hhmm = if let Some(pos) = time_str.find(':') {
+        let start = pos.saturating_sub(2);
+        let end = (start + 5).min(time_str.len());
+        &time_str[start..end]
+    } else { "" };
+    if hhmm.is_empty() { return; }
+    let tw = hhmm.len() as u32 * 8;
+    let x = fw - tw - 10;
+    // Clear the clock area and redraw
+    fb.fill_rect(x - 3, tb_y + 5, tw + 6, 18, TASKBAR);
+    fb.draw_str(x, tb_y + 10, hhmm, WHITE, TASKBAR);
 }
 
 fn tbwin_hit(fw: u32, fh: u32, wins: &[TermWin], mx: i32, my: i32) -> Option<usize> {
@@ -642,6 +663,7 @@ pub extern "C" fn _start() -> ! {
     draw_desktop_icons(&mut fb);
     let up0 = rtc_str();
     draw_topbar(&mut fb, up0.as_str(), &stats, sys_ticks());
+    draw_taskbar_clock(&mut fb, up0.as_str());
 
     let cbl = (CURSOR_W * CURSOR_H) as usize;
     let mut cbuf = vec![BG; cbl];
@@ -746,6 +768,7 @@ pub extern "C" fn _start() -> ! {
             let up = rtc_str();
             restore_cursor_bg(&mut fb, cx, cy, &cbuf);
             draw_topbar(&mut fb, up.as_str(), &stats, now_ticks);
+            draw_taskbar_clock(&mut fb, up.as_str());
             save_cursor_bg(&fb, cx, cy, &mut cbuf);
             draw_cursor(&mut fb, cx, cy);
         }
