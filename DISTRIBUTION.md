@@ -2,7 +2,7 @@
 
 Build plan for making Rusty Penguin a complete, daily-usable operating system distribution.
 
-## Current State (2026-05-28 Latest Session)
+## Current State (2026-05-28 Session 2)
 
 **What Works:**
 - ✅ Linux kernel boot (6.17) + Rust init (PID 1)
@@ -132,6 +132,34 @@ Build plan for making Rusty Penguin a complete, daily-usable operating system di
 - [ ] Can run TIS inference from desktop
 - [ ] Keyboard + mouse input feel responsive
 - [ ] No crashes on normal workflows
+
+## Session 2 Progress (2026-05-28)
+
+### Completed
+- Enhanced Settings app with live state tracking (theme, window snap, taskbar, auto-save)
+- Settings now toggle dynamically with ENTER key (was hardcoded before)
+- Added sys_delete syscall (15) for file operations in kernel
+- FileManager D key now calls actual sys_delete (was placeholder)
+- Created persistence framework for settings (load_from_disk/save_to_disk)
+- Settings format designed: theme=dark, window_snap=true, etc (key=value)
+
+### Architecture Ready
+- Settings persistence framework shows expected config file structure
+- On Linux track: will save to ~/.config/rusty-penguin/settings.ini (real filesystem)
+- On bare-metal: ephemeral in ramfs (can extend with persistent storage)
+- File operation syscalls: delete ready, copy/rename framework for future
+
+### Test Results
+- 7 applications stable on desktop (Term, Files, Edit, Procs, Cal, Prefs, TIS)
+- Multi-window rendering stable (no flickering observed)
+- File navigation with syscall 14 (sys_listdir) working correctly
+- Settings UI shows current values dynamically
+
+### Next Priority
+- Implement full file I/O syscalls (open with flags, write to disk)
+- Real TIS inference integration with albert. binary
+- Home directory setup on first boot
+- Service/init system for boot sequence
 
 ## Related Epics
 
