@@ -711,21 +711,22 @@ impl Terminal {
         self.write_output(format!("{}  ({})\r\n", r, Self::to_tern(r)).as_bytes());
     }
 
-    pub fn render(&self, fb: &mut Framebuffer, x: u32, y: u32) {
+    pub fn render(&self, fb: &mut Framebuffer, x: u32, y: u32, show_cursor: bool) {
         for row in 0..ROWS {
             for col in 0..COLS {
                 let cell = &self.cells[row * COLS + col];
                 fb.draw_char(x + col as u32 * 8, y + row as u32 * 8, cell.ch as char, cell.fg, cell.bg);
             }
         }
-        // Block cursor
-        let cx = x + self.cur_col as u32 * 8;
-        let cy = y + self.cur_row as u32 * 8;
-        if cx + 8 <= fb.width && cy + 8 <= fb.height {
-            fb.fill_rect(cx, cy, 8, 8, DEFAULT_FG);
-            let cell = &self.cells[self.cur_row * COLS + self.cur_col];
-            if cell.ch > b' ' {
-                fb.draw_char(cx, cy, cell.ch as char, DEFAULT_BG, DEFAULT_FG);
+        if show_cursor {
+            let cx = x + self.cur_col as u32 * 8;
+            let cy = y + self.cur_row as u32 * 8;
+            if cx + 8 <= fb.width && cy + 8 <= fb.height {
+                fb.fill_rect(cx, cy, 8, 8, DEFAULT_FG);
+                let cell = &self.cells[self.cur_row * COLS + self.cur_col];
+                if cell.ch > b' ' {
+                    fb.draw_char(cx, cy, cell.ch as char, DEFAULT_BG, DEFAULT_FG);
+                }
             }
         }
     }

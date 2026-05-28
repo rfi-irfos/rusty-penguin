@@ -668,7 +668,7 @@ fn open_term(w: i32, h: i32, n: usize, l: &Launcher) -> Option<TermWin> {
 
 // ---- Full scene recomposite ─────────────────────────────────────────────────
 
-fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, ctx_menu: Option<(i32,i32)>, stats: &SysStats) {
+fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, ctx_menu: Option<(i32,i32)>, stats: &SysStats, blink_on: bool) {
     draw_scene_static(fb);
     draw_desktop_icons(fb);
     draw_taskbar_win_btns(fb, wins);
@@ -679,7 +679,7 @@ fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, 
         let focused = i == n - 1;
         wm::draw_window(fb, &tw.win, focused);
         let (ox, oy) = wm::content_origin(&tw.win);
-        tw.term.render(fb, ox as u32, oy as u32);
+        tw.term.render(fb, ox as u32, oy as u32, focused && blink_on);
         wm::draw_resize_grip(fb, &tw.win, focused);
         tw.term.dirty = false;
         tw.win_dirty  = false;
@@ -714,6 +714,8 @@ pub extern "C" fn _start() -> ! {
     draw_cursor(&mut fb, cx, cy);
 
     let mut last_topbar_tick: u64 = 0;
+    let mut last_blink_tick: u64 = 0;
+    let mut blink_on: bool = true;
     let mut drag_tick: u64 = 0;
     let mut wins: Vec<TermWin> = Vec::new();
     let mut scene_dirty = false;
@@ -772,6 +774,17 @@ pub extern "C" fn _start() -> ! {
         if topbar_due {
             last_topbar_tick = now_ticks;
             stats = sample_stats();
+        }
+
+        // Text cursor blink: toggle every 50 ticks (~500ms @ 100Hz).
+        // Only the focused (topmost) terminal shows a cursor at all.
+        if now_ticks.wrapping_sub(last_blink_tick) >= 50 {
+            last_blink_tick = now_ticks;
+            blink_on = !blink_on;
+            // Mark focused terminal dirty so the blink triggers a re-render.
+            if let Some(tw) = wins.iter_mut().rev().find(|tw| !tw.win.minimized) {
+                tw.term.dirty = true;
+            }
         }
 
         // Update cursor to new position so click/drag handlers see current coords.
@@ -922,16 +935,16 @@ pub extern "C" fn _start() -> ! {
             restore_cursor_bg(&mut fb, prev_cx, prev_cy, &cbuf);
 
             if any_chrome {
-                recomposite(&mut fb, &mut wins, start_menu_open, ctx_menu, &stats);
+                recomposite(&mut fb, &mut wins, start_menu_open, ctx_menu, &stats, blink_on);
                 scene_dirty = false;
             } else if any_content {
                 let n = wins.len();
                 for (i, tw) in wins.iter_mut().enumerate() {
                     if !tw.term.dirty || tw.win.minimized { continue; }
+                    let focused = i == n - 1;
                     let (ox, oy) = wm::content_origin(&tw.win);
-                    tw.term.render(&mut fb, ox as u32, oy as u32);
+                    tw.term.render(&mut fb, ox as u32, oy as u32, focused && blink_on);
                     tw.term.dirty = false;
-                    let _ = i; let _ = n;
                 }
                 if start_menu_open { draw_start_menu(&mut fb); }
                 if let Some((cmx, cmy)) = ctx_menu { draw_ctx_menu(&mut fb, cmx, cmy); }
