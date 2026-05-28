@@ -459,8 +459,10 @@ fn open_term(w: i32, h: i32, n: usize, l: &Launcher) -> Option<TermWin> {
 
 fn exec_psh() -> ! {
     use std::os::unix::process::CommandExt;
-    let _ = std::process::Command::new("/bin/psh").exec();
-    let _ = std::process::Command::new("/usr/local/bin/psh").exec();
+    // RP_RECOVERY tells the shell NOT to bounce back into the desktop — without
+    // it, desktop→psh→desktop loops forever when there is no /dev/fb0.
+    let _ = std::process::Command::new("/bin/psh").env("RP_RECOVERY", "1").exec();
+    let _ = std::process::Command::new("/usr/local/bin/psh").env("RP_RECOVERY", "1").exec();
     loop { thread::sleep(Duration::from_secs(60)); }
 }
 

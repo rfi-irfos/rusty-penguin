@@ -48,7 +48,7 @@ fn main() {
 
 fn setup_environment() {
     // Set basic environment variables
-    std::env::set_var("PATH", "/bin:/usr/local/bin:/usr/bin");
+    std::env::set_var("PATH", "/opt/rusty-penguin/bin:/bin:/usr/local/bin:/usr/bin");
     std::env::set_var("HOME", "/home/rusty-penguin");
     std::env::set_var("SHELL", "/bin/psh");
     std::env::set_var("TERM", "xterm");
@@ -150,11 +150,19 @@ fn setup_persistence() -> Trit {
     }
 }
 
-/// Bind the persistent home over /home so user data lands on the disk.
+/// Bind persistent dirs over the live root so user data and installed packages
+/// land on the disk: /home (files + config) and /opt (rpm packages).
 fn finish_persist_setup() {
     let _ = fs::create_dir_all(PERSIST_HOME);
     let _ = fs::create_dir_all("/home/rusty-penguin");
     bind_mount("/persist/home", "/home");
+
+    // Installed packages (rpm → /opt/rusty-penguin) should survive reboots too.
+    let _ = fs::create_dir_all("/persist/opt");
+    let _ = fs::create_dir_all("/opt");
+    if bind_mount("/persist/opt", "/opt") {
+        eprintln!("[init] /opt is persistent (installed packages survive reboot)");
+    }
 }
 
 // ─── Networking: another ternary subsystem ───────────────────────────────────
@@ -350,9 +358,18 @@ fn launch_session() -> Result<(), Box<dyn std::error::Error>> {
         if Path::new(path).exists() {
             println!("[init] Found desktop: {} — launching...", path);
             match Command::new(path).status() {
-                Ok(status) => {
-                    println!("[init] Desktop exited with status: {:?}", status.code());
+                Ok(status) if status.success() => {
+                    // Clean exit (e.g. user logged out) — stop here.
+                    println!("[init] Desktop exited cleanly.");
                     return Ok(());
+                }
+                Ok(status) => {
+                    // Desktop crashed or couldn't start (no /dev/fb0, etc).
+                    // Drop to a recovery console instead of leaving the user
+                    // staring at a frozen system.
+                    eprintln!("[init] Desktop exited with status {:?} — dropping to shell.",
+                        status.code());
+                    break;
                 }
                 Err(e) => {
                     eprintln!("[init] Desktop failed to spawn ({}). Falling back to shell.", e);

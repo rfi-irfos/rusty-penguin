@@ -9,10 +9,44 @@ use std::os::unix::fs as unix_fs;
 const PKG_DIR: &str = "/opt/rusty-penguin/packages";
 const BIN_DIR: &str = "/opt/rusty-penguin/bin";
 
+/// A package source is one of: a local `.rpkg` path, or an `http(s)` URL.
+pub fn is_url(s: &str) -> bool {
+    s.starts_with("http://") || s.starts_with("https://")
+}
+
+/// Fetch a remote `.rpkg` to /tmp using the bundled static busybox wget, so the
+/// rest of install() works on a local file. Networking is brought up by init.
+fn fetch_remote(url: &str) -> Result<String, String> {
+    let name = url.rsplit('/').next().filter(|s| !s.is_empty())
+        .ok_or("Could not derive filename from URL")?;
+    if !name.ends_with(".rpkg") {
+        return Err("URL must point to a .rpkg file".to_string());
+    }
+    let dest = format!("/tmp/{}", name);
+    let status = std::process::Command::new("/bin/busybox")
+        .args(["wget", "-q", "-O", &dest, url])
+        .status()
+        .map_err(|e| format!("could not run wget: {}", e))?;
+    if !status.success() {
+        let _ = fs::remove_file(&dest);
+        return Err(format!("download failed: {}", url));
+    }
+    Ok(dest)
+}
+
 pub struct PackageManager;
 
 impl PackageManager {
     pub fn install(pkg_path: &str) -> Result<String, String> {
+        // Remote source? Fetch it first, then install from the local copy.
+        let local;
+        let pkg_path: &str = if is_url(pkg_path) {
+            local = fetch_remote(pkg_path)?;
+            &local
+        } else {
+            pkg_path
+        };
+
         // Check if file exists
         if !Path::new(pkg_path).exists() {
             return Err(format!("Package file not found: {}", pkg_path));
@@ -145,7 +179,8 @@ impl PackageManager {
 pub fn cmd_rpm(args: &[&str]) -> Result<String, String> {
     match args.get(0).map(|s| *s) {
         Some("install") => {
-            let pkg_path = args.get(1).ok_or("Usage: rpm install <package.rpkg>")?;
+            let pkg_path = args.get(1)
+                .ok_or("Usage: rpm install <package.rpkg | http(s)://…/package.rpkg>")?;
             PackageManager::install(pkg_path)
         }
         Some("list") => PackageManager::list(),
@@ -162,7 +197,8 @@ pub fn cmd_rpm(args: &[&str]) -> Result<String, String> {
             PackageManager::search(query)
         }
         _ => {
-            Err("Usage: rpm [install|list|info|remove|search] [args...]".to_string())
+            Err("Usage: rpm [install|list|info|remove|search] [args...]\n\
+                 install accepts a local .rpkg or an http(s) URL".to_string())
         }
     }
 }
@@ -176,5 +212,14 @@ mod tests {
         let result = cmd_rpm(&[]);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Usage"));
+    }
+
+    #[test]
+    fn test_is_url() {
+        assert!(is_url("http://repo.rusty/foo.rpkg"));
+        assert!(is_url("https://repo.rusty/foo.rpkg"));
+        assert!(!is_url("/tmp/foo.rpkg"));
+        assert!(!is_url("foo.rpkg"));
+        assert!(!is_url("ftp://x/foo.rpkg"));
     }
 }

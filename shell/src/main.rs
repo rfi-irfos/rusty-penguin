@@ -1,10 +1,18 @@
 use std::process::Command;
 use std::io::{self, Write};
 
+mod pkg;
+
 fn main() {
-    // Try to launch desktop first
-    if try_launch_desktop().is_ok() {
-        return;
+    // In recovery mode (the desktop bounced us here because there's no display)
+    // do NOT try to relaunch the desktop — that would loop forever. Go straight
+    // to the console REPL.
+    if std::env::var_os("RP_RECOVERY").is_none() {
+        if try_launch_desktop().is_ok() {
+            return;
+        }
+    } else {
+        println!("Rusty Penguin recovery console (no display available)");
     }
 
     // Fall back to simple shell
@@ -54,10 +62,13 @@ fn run_shell() {
             "help" => println!(
                 "Commands:\n  ps [filter] [--all] list processes with ternary state;\n  \
                                      optional substring filter on name\n  \
-                 kill <pid> <st>     transition pid to +1 (resume), 0 (stop), -1 (terminate)\n  \
+                 kill <pid|name> <st> transition by PID or name; +1 (resume),\n  \
+                                     0 (stop), -1 (terminate); name match must be unambiguous\n  \
                  tis [dim] [layers]  multi-layer sparse-skip inference; reports per-layer dormancy\n  \
                                      (alias: `ai`, matches bare-metal psh)\n  \
                  tri <a> <op> <b>    balanced-ternary arithmetic (+, -, *, /, %)\n  \
+                 rpm install <pkg|url>  install a .rpkg (local path or http(s) URL)\n  \
+                 rpm list/info/remove   manage installed packages (persist in /opt)\n  \
                  desktop             launch graphical session\n  \
                  ls / pwd / cd / exit  standard"
             ),
@@ -68,6 +79,10 @@ fn run_shell() {
             "kill" => kill_transition(&parts[1..]),
             "tis" | "ai" => tis_demo(&parts[1..]),  // `ai` is the bare-metal alias
             "tri" => tri_calc(&parts[1..]),
+            "rpm" => match pkg::cmd_rpm(&parts[1..]) {
+                Ok(out)  => println!("{}", out),
+                Err(err) => println!("rpm: {}", err),
+            },
             _ => {
                 if !parts.is_empty() {
                     let _ = Command::new(parts[0])
@@ -240,29 +255,56 @@ fn tis_demo(args: &[&str]) {
     println!("ACTIVE -- Binary hardware. Ternary mind.");
 }
 
-/// `kill <pid> <state>` — drive scheduler::ProcessController::transition()
+/// `kill <pid-or-name> <state>` — drive scheduler::ProcessController::transition()
 /// which maps each ternary state to a real Linux signal:
 ///     +1 → SIGCONT  (resume / activate)
 ///      0 → SIGSTOP  (dormant)
 ///     -1 → SIGTERM  (terminate / suppress)
+///
+/// If the first arg parses as an integer, treat it as a PID. Otherwise,
+/// case-insensitive substring match against process names; transition only
+/// if the match is unambiguous (zero matches → error, multiple → list PIDs
+/// and bail so the user picks one explicitly).
 fn kill_transition(args: &[&str]) {
     use scheduler::{ProcessController, TernaryState};
     if args.len() != 2 {
-        println!("usage: kill <pid> <+1|0|-1>");
+        println!("usage: kill <pid-or-name> <+1|0|-1>");
         return;
     }
-    let pid: i32 = match args[0].parse() {
-        Ok(n) => n,
-        Err(_) => { println!("kill: bad pid '{}'", args[0]); return; }
-    };
     let state = match args[1] {
         "+1" | "1"  | "active"     => TernaryState::Active,
         "0"  | "dormant"           => TernaryState::Dormant,
         "-1" | "suppress" | "kill" => TernaryState::Suppressed,
         other => { println!("kill: bad state '{}' (want +1, 0, -1)", other); return; }
     };
-    match ProcessController::transition(pid, state) {
-        Ok(()) => println!("pid {} → {} ({})", pid, state.symbol(), state.label()),
+
+    // Resolve target: integer → PID; otherwise substring match against names.
+    let target_pid: i32 = match args[0].parse::<i32>() {
+        Ok(n) => n,
+        Err(_) => {
+            let needle = args[0].to_lowercase();
+            let mut matches: Vec<_> = ProcessController::list_processes()
+                .into_iter()
+                .filter(|p| p.name.to_lowercase().contains(&needle))
+                .collect();
+            matches.sort_by_key(|p| (-(p.vmrss_kb as i64), p.pid));
+            match matches.len() {
+                0 => { println!("kill: no process matching '{}'", args[0]); return; }
+                1 => matches[0].pid,
+                n => {
+                    println!("kill: '{}' is ambiguous, {} matches — specify PID:", args[0], n);
+                    for p in matches.iter().take(20) {
+                        println!("  {:>5}  {}  {}", p.pid, p.state.symbol(), p.name);
+                    }
+                    if n > 20 { println!("  ({} more)", n - 20); }
+                    return;
+                }
+            }
+        }
+    };
+
+    match ProcessController::transition(target_pid, state) {
+        Ok(()) => println!("pid {} → {} ({})", target_pid, state.symbol(), state.label()),
         Err(e) => println!("kill: {}", e),
     }
 }

@@ -14,3 +14,4 @@ scheduler = { path = "../scheduler" }
 ai-runtime = { path = "../ai-runtime" }
 ternary-core = { path = "../ternary-core" }
 mathematics = { path = "../mathematics" }
+tar = "0.4"

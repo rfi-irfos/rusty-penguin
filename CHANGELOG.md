@@ -4,6 +4,24 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+### Added — Network package install + persistent packages + recovery console (2026-05-28)
+
+- **`rpm install <url>`** — the package manager now installs over the network,
+  not just from local files: an `http(s)` argument is fetched with the bundled
+  static busybox `wget` to /tmp, then installed. (The package manager was also
+  previously an orphan module on the Linux track — now wired into the psh
+  command dispatch with `mod pkg` + an `rpm` builtin; unit tests added.)
+- **Installed packages persist**: init bind-mounts `/persist/opt` → `/opt`, and
+  `/opt/rusty-penguin/bin` is on PATH, so `rpm`-installed software survives
+  reboots. Verified `/opt` lands on the persistent disk in QEMU.
+- **Recovery console**: if the desktop can't start (e.g. no `/dev/fb0`) init now
+  drops to a shell instead of freezing. Fixed an infinite desktop↔psh relaunch
+  loop (desktop's fallback now sets `RP_RECOVERY=1` so the shell doesn't bounce
+  back into the desktop). The Linux track is no longer a dead end without a
+  display.
+- Network fetch path verified end-to-end in QEMU: busybox wget connects to the
+  host over the DHCP'd link and completes the HTTP round-trip.
+
 ### Added — Networking userland, the ternary way (daily-driver gap, 2026-05-28)
 
 - `init` now brings up the network: first non-loopback interface up + a DHCP
