@@ -286,6 +286,7 @@ pub struct Terminal {
     capture:         Option<Vec<u8>>,   // when Some, write_output feeds this instead of cells
     stdin_data:      Vec<u8>,           // pipe input for the current command
     vars:            Vec<(String, String)>, // shell variables
+    aliases:         Vec<(String, String)>, // command aliases (alias_name, expanded_cmd)
     last_exit:       u8,               // exit code of last command
 }
 
@@ -358,6 +359,7 @@ impl Terminal {
             capture:     None,
             stdin_data:  Vec::new(),
             vars:        Vec::new(),
+            aliases:     Vec::new(),
             last_exit:   0,
         };
         t.write_output(b"\x1b[32m  Rusty Penguin\x1b[0m \x1b[90mv1.0.0 \xB7 psh 1.0\x1b[0m\r\n");
@@ -1098,11 +1100,11 @@ impl Terminal {
 
         let matches: Vec<String> = if is_cmd {
             const CMDS: &[&str] = &[
-                "ai","bc","calc","cat","clear","cp","date","df","echo","env","exit",
+                "ai","alias","bc","calc","cat","clear","cp","date","df","echo","env","exit",
                 "find","free","grep","head","help","hexdump","history","kinstall","kmanager","kver",
-                "ls","lscpu","mem","mkdir","mv","nano","neofetch","printenv","ps","psh",
+                "ls","lscpu","mem","mkdir","mv","nano","neofetch","printf","printenv","ps","psh",
                 "pwd","rev","rm","seq","sort","sysinfo","tail","touch","trit","uname",
-                "uniq","uptime","vi","wc","which","whoami","xxd",
+                "unalias","uniq","uptime","vi","wc","which","whoami","xxd",
             ];
             CMDS.iter().filter(|&&c| c.starts_with(prefix)).map(|&c| String::from(c)).collect()
         } else {
@@ -1398,7 +1400,9 @@ impl Terminal {
             self.write_output(b"  ps  mem  free  df  lscpu  sysinfo\r\n");
             self.write_output(b"  uname  whoami  uptime  date\r\n");
             self.write_output(b"  env  history  which <cmd>\r\n");
-            self.write_output(b"  trit <n|op a b>    balanced ternary\r\n");
+            self.write_output(b"  alias [name[=val]]   list or set command aliases\r\n");
+            self.write_output(b"  printf fmt [args]    formatted output\r\n");
+            self.write_output(b"  trit <n|op a b>      balanced ternary\r\n");
             self.write_output(b"  ai [n]             sparse ternary inference\r\n");
             self.write_output(b"  echo  clear  pwd  exit\r\n");
             self.write_output(b"\x1b[36mKernel:\x1b[0m\r\n");
@@ -1409,18 +1413,38 @@ impl Terminal {
             self.write_output(b"\x1b[90m  Ctrl+T new term  Ctrl+W close  Ctrl+L clear\x1b[0m\r\n");
 
         } else if line == b"ls" || line.starts_with(b"ls ") {
+            let args = if line == b"ls" { b"" } else { &line[3..] };
+            let long_fmt = args.contains(&b'l');
+            let show_hidden = args.contains(&b'a');
             let entries = vfs::vfs().list();
             if entries.is_empty() {
                 self.write_output(b"\x1b[90m(empty)\x1b[0m\r\n");
             } else {
+                let mut count = 0;
+                let mut total_size = 0u64;
                 for e in entries {
-                    if e.is_dir {
-                        let s = format!("\x1b[34m{}/\x1b[0m\r\n", e.name);
+                    if !show_hidden && e.name.starts_with('.') { continue; }
+                    if long_fmt {
+                        let perms = if e.is_dir { "drwxr-xr-x" } else { "-rw-r--r--" };
+                        let size = e.data.len();
+                        total_size += size as u64;
+                        let s = format!("{} 1 root root {:6} May 28 10:22 {}{}\r\n",
+                            perms, size, e.name, if e.is_dir { "/" } else { "" });
                         self.write_output(s.as_bytes());
                     } else {
-                        let s = format!("{}\x1b[90m  {} B\x1b[0m\r\n", e.name, e.data.len());
-                        self.write_output(s.as_bytes());
+                        if e.is_dir {
+                            let s = format!("\x1b[34m{}/\x1b[0m\r\n", e.name);
+                            self.write_output(s.as_bytes());
+                        } else {
+                            let s = format!("{}\x1b[90m  {} B\x1b[0m\r\n", e.name, e.data.len());
+                            self.write_output(s.as_bytes());
+                        }
                     }
+                    count += 1;
+                }
+                if long_fmt && count > 0 {
+                    let s = format!("total {}\r\n", total_size);
+                    self.write_output(s.as_bytes());
                 }
             }
 
@@ -1610,6 +1634,51 @@ impl Terminal {
         } else if line.starts_with(b"echo ") {
             self.write_output(&line[5..]);
             self.write_output(b"\r\n");
+
+        } else if line == b"printf" {
+            self.write_output(b"");
+        } else if line.starts_with(b"printf ") {
+            let rest = &line[7..];
+            if let Some(first_space) = rest.iter().position(|&b| b == b' ') {
+                let fmt = &rest[..first_space];
+                let args_part = &rest[first_space + 1..];
+                let mut i = 0;
+                let mut arg_idx = 0;
+                let mut args = Vec::new();
+                for chunk in args_part.split(|&b| b == b' ') {
+                    if !chunk.is_empty() { args.push(chunk); }
+                }
+                while i < fmt.len() {
+                    if fmt[i] == b'%' && i + 1 < fmt.len() {
+                        match fmt[i + 1] {
+                            b's' | b'd' if arg_idx < args.len() => {
+                                self.write_output(args[arg_idx]);
+                                arg_idx += 1;
+                                i += 2;
+                            }
+                            b'%' => {
+                                self.write_output(b"%");
+                                i += 2;
+                            }
+                            _ => {
+                                self.write_output(&fmt[i..i + 1]);
+                                i += 1;
+                            }
+                        }
+                    } else if fmt[i] == b'\\' && i + 1 < fmt.len() {
+                        match fmt[i + 1] {
+                            b'n' => { self.write_output(b"\n"); i += 2; }
+                            b't' => { self.write_output(b"\t"); i += 2; }
+                            b'\\' => { self.write_output(b"\\"); i += 2; }
+                            _ => { self.write_output(&fmt[i..i + 1]); i += 1; }
+                        }
+                    } else {
+                        self.write_output(&fmt[i..i + 1]);
+                        i += 1;
+                    }
+                }
+            }
+
         } else if line == b"ai" || line.starts_with(b"ai ") {
             let a = if line.starts_with(b"ai ") { &line[3..] } else { b"32" as &[u8] };
             let n: usize = { let mut v = 0usize; for &b in a { if b >= b'0' && b <= b'9' { v = v.wrapping_mul(10).wrapping_add((b - b'0') as usize); } } v.max(1).min(256) };
@@ -2026,7 +2095,7 @@ impl Terminal {
                 "ps","mem","free","df","lscpu","sysinfo","neofetch",
                 "uname","whoami","uptime","date","trit","ai",
                 "echo","clear","pwd","exit","kver","kinstall","kmanager",
-                "psh","seq","bc","calc","rev",
+                "psh","seq","bc","calc","rev","alias","printf","unalias",
             ];
             if BUILTINS.iter().any(|&b| b == cmd_name) {
                 let s = format!("psh builtin: {}\r\n", cmd_name);
@@ -2039,6 +2108,37 @@ impl Terminal {
         } else if line == b"kmanager" {
             self.km = Some(KmState::new());
             self.render_km();
+
+        } else if line == b"alias" {
+            let aliases = self.aliases.clone();
+            for (name, val) in &aliases {
+                let s = format!("{}='{}'\r\n", name, val);
+                self.write_output(s.as_bytes());
+            }
+
+        } else if line.starts_with(b"alias ") {
+            let rest = &line[6..];
+            if let Some(eq) = rest.iter().position(|&b| b == b'=') {
+                let name = core::str::from_utf8(&rest[..eq]).unwrap_or("");
+                let val = core::str::from_utf8(&rest[eq + 1..]).unwrap_or("");
+                if !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                    if let Some(pos) = self.aliases.iter().position(|(n, _)| n == name) {
+                        self.aliases[pos].1 = String::from(val);
+                    } else {
+                        self.aliases.push((String::from(name), String::from(val)));
+                    }
+                }
+            } else {
+                let name = core::str::from_utf8(rest).unwrap_or("");
+                if let Some((_, val)) = self.aliases.iter().find(|(n, _)| n == name) {
+                    let s = format!("{}='{}'\r\n", name, val);
+                    self.write_output(s.as_bytes());
+                }
+            }
+
+        } else if line.starts_with(b"unalias ") {
+            let name = core::str::from_utf8(&line[8..]).unwrap_or("");
+            self.aliases.retain(|(n, _)| n != name);
 
         } else if line == b"exit" {
             self.write_output(b"bye\r\n");
