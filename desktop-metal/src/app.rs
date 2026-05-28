@@ -6,6 +6,19 @@ use crate::vfs;
 use alloc::string::String;
 use alloc::vec::Vec;
 
+/// Format a u64 into a stack buffer and return the &str slice that points into
+/// it. Avoids the heap allocation that `format!("{}", n)` would do — the bump
+/// allocator never frees, so every render-path format! was leaking.
+fn u64_into<'a>(buf: &'a mut [u8; 24], n: u64) -> &'a str {
+    if n == 0 { buf[0] = b'0'; return core::str::from_utf8(&buf[..1]).unwrap_or(""); }
+    let mut tmp = [0u8; 24];
+    let mut i = 0;
+    let mut n = n;
+    while n > 0 && i < 24 { tmp[i] = b'0' + (n % 10) as u8; n /= 10; i += 1; }
+    for j in 0..i { buf[j] = tmp[i - 1 - j]; }
+    core::str::from_utf8(&buf[..i]).unwrap_or("")
+}
+
 pub trait App {
     /// Render the app's content into the given framebuffer region
     fn render(&mut self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, h: u32);
@@ -159,10 +172,9 @@ impl FileManager {
 
 impl App for FileManager {
     fn render(&mut self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, h: u32) {
-        // Draw header with current directory
+        // Draw header with current directory — draw directly, no format!()
         fb.fill_rect(x, y, w, 24, 0x2C2C38);
-        let title = alloc::format!("  {}", self.cwd);
-        fb.draw_str(x + 8, y + 7, &title, 0xF5F5F7, 0x2C2C38);
+        fb.draw_str(x + 24, y + 7, &self.cwd, 0xF5F5F7, 0x2C2C38);
 
         // Draw column headers
         fb.fill_rect(x, y + 24, w, 18, 0x3C3C48);
@@ -170,6 +182,7 @@ impl App for FileManager {
         fb.draw_str(x + 300, y + 29, "Size", 0xB8B8B8, 0x3C3C48);
 
         // Draw file entries
+        let mut sbuf = [0u8; 24];
         for (i, entry) in self.entries.iter().enumerate() {
             let file_y = y + 42 + (i as u32 * 18);
             if file_y + 18 > y + h { break; }
@@ -181,8 +194,8 @@ impl App for FileManager {
             let text_color = if i == self.selected { 0xF5F5F7 } else { 0xB8B8B8 };
             fb.draw_str(x + 8, file_y + 4, &entry.name, text_color, bg_color);
 
-            let size_str = alloc::format!("{}", entry.size);
-            fb.draw_str(x + 300, file_y + 4, &size_str, text_color, bg_color);
+            let size_str = u64_into(&mut sbuf, entry.size);
+            fb.draw_str(x + 300, file_y + 4, size_str, text_color, bg_color);
         }
 
         self.dirty = false;
@@ -255,7 +268,8 @@ impl App for Calendar {
         }
 
         // Draw calendar grid (simplified - just draw a 7x5 grid)
-        let mut day = 1;
+        let mut day: u32 = 1;
+        let mut sbuf = [0u8; 24];
         for week in 0..5 {
             for dow in 0..7 {
                 if day > 31 { break; }
@@ -264,8 +278,8 @@ impl App for Calendar {
                 if day == 28 { // Today
                     fb.fill_rect(cx - 2, cy - 2, 16, 14, 0x4A9EFF);
                 }
-                let day_str = alloc::format!("{}", day);
-                fb.draw_str(cx, cy, &day_str, if day == 28 { 0xF5F5F7 } else { 0xB8B8B8 }, 0x1A1A24);
+                let day_str = u64_into(&mut sbuf, day as u64);
+                fb.draw_str(cx, cy, day_str, if day == 28 { 0xF5F5F7 } else { 0xB8B8B8 }, 0x1A1A24);
                 day += 1;
             }
         }
@@ -382,32 +396,39 @@ impl App for Settings {
         fb.draw_str(x + 8, y + 7, "System Settings", 0xF5F5F7, 0x2C2C38);
         fb.fill_rect(x, y + 24, w, 1, 0x3C3C48);
 
-        // Settings options with dynamic values
-        let theme_str = if self.theme { "Dark" } else { "Light" };
-        let snap_str = if self.window_snap { "On" } else { "Off" };
-        let taskbar_str = if self.taskbar_bottom { "Bottom" } else { "Top" };
-        let autosave_str = if self.auto_save_enabled {
-            alloc::format!("{}s", self.auto_save_interval)
-        } else {
-            String::from("Off")
-        };
+        // Settings rows — labels + values drawn separately to avoid format!()
+        let labels = ["Theme:", "Window Snap:", "Taskbar:", "Auto-Save:"];
+        let theme_v   = if self.theme { "Dark" } else { "Light" };
+        let snap_v    = if self.window_snap { "On" } else { "Off" };
+        let taskbar_v = if self.taskbar_bottom { "Bottom" } else { "Top" };
 
-        let settings = [
-            alloc::format!("Theme: {}", theme_str),
-            alloc::format!("Window Snap: {}", snap_str),
-            alloc::format!("Taskbar: {}", taskbar_str),
-            alloc::format!("Auto-Save: {}", &autosave_str),
-        ];
+        let mut sbuf = [0u8; 24];
+        let interval_str = u64_into(&mut sbuf, self.auto_save_interval as u64);
 
-        for (i, setting) in settings.iter().enumerate() {
+        for i in 0..4 {
             let y_pos = y + 32 + (i as u32 * 20);
             if y_pos + 20 > y + h { break; }
 
             let bg_color = if i == self.selected { 0x4A5568 } else if i % 2 == 0 { 0x1A1A24 } else { 0x232333 };
             fb.fill_rect(x, y_pos, w, 20, bg_color);
-
             let text_color = if i == self.selected { 0xF5F5F7 } else { 0xB8B8B8 };
-            fb.draw_str(x + 12, y_pos + 5, setting.as_str(), text_color, bg_color);
+
+            // Label
+            fb.draw_str(x + 12, y_pos + 5, labels[i], text_color, bg_color);
+            // Value (offset 140px right of label)
+            let vx = x + 140;
+            match i {
+                0 => fb.draw_str(vx, y_pos + 5, theme_v, text_color, bg_color),
+                1 => fb.draw_str(vx, y_pos + 5, snap_v, text_color, bg_color),
+                2 => fb.draw_str(vx, y_pos + 5, taskbar_v, text_color, bg_color),
+                3 => if self.auto_save_enabled {
+                    fb.draw_str(vx, y_pos + 5, interval_str, text_color, bg_color);
+                    fb.draw_str(vx + (interval_str.len() as u32 * 8), y_pos + 5, "s", text_color, bg_color);
+                } else {
+                    fb.draw_str(vx, y_pos + 5, "Off", text_color, bg_color);
+                },
+                _ => {}
+            }
         }
 
         // Draw hint at bottom
