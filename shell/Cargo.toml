@@ -13,3 +13,4 @@ path = "src/main.rs"
 scheduler = { path = "../scheduler" }
 ai-runtime = { path = "../ai-runtime" }
 ternary-core = { path = "../ternary-core" }
+mathematics = { path = "../mathematics" }

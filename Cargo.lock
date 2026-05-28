@@ -110,6 +110,7 @@ name = "shell"
 version = "0.1.0"
 dependencies = [
  "ai-runtime",
+ "mathematics",
  "scheduler",
  "ternary-core",
 ]

@@ -55,6 +55,7 @@ fn run_shell() {
                 "Commands:\n  ps             list processes with ternary state\n  \
                  kill <pid> <st>   transition pid to +1 (resume), 0 (stop), -1 (terminate)\n  \
                  tis [dim]      sparse-skip forward pass; reports dormancy %\n  \
+                 tri <a> <op> <b>  balanced-ternary arithmetic (+, -, *, /, %)\n  \
                  desktop        launch graphical session\n  \
                  ls / pwd / cd / exit  standard"
             ),
@@ -64,6 +65,7 @@ fn run_shell() {
             "ps" => print_ternary_ps(),
             "kill" => kill_transition(&parts[1..]),
             "tis" => tis_demo(&parts[1..]),
+            "tri" => tri_calc(&parts[1..]),
             _ => {
                 if !parts.is_empty() {
                     let _ = Command::new(parts[0])
@@ -72,6 +74,82 @@ fn run_shell() {
                 }
             }
         }
+    }
+}
+
+/// Render a Tryte as a +/0/- string, MSB first (so reading order matches
+/// the decimal representation: leading sign on the left).
+fn tryte_str(t: ternary_core::Tryte) -> String {
+    use ternary_core::Trit;
+    let trits = t.trits();
+    let mut s = String::with_capacity(9);
+    for &tr in trits.iter().rev() {
+        s.push(match tr { Trit::Pos => '+', Trit::Zero => '0', Trit::Neg => '-' });
+    }
+    s
+}
+
+/// `tri <a> <op> <b>` — balanced-ternary arithmetic via the mathematics
+/// crate. Each operand goes through Tryte::from_i32 (9-trit range
+/// -9841..+9841), so out-of-range inputs are clamped by truncation
+/// through the conversion. Multiplication's result is double-width;
+/// we report both low and high tryte if the high part is non-zero.
+fn tri_calc(args: &[&str]) {
+    use mathematics::{mul_tryte, div_tryte, mod_tryte};
+    use ternary_core::Tryte;
+
+    if args.len() != 3 {
+        println!("usage: tri <a> <op> <b>   op is + - * / %");
+        return;
+    }
+    let a: i32 = match args[0].parse() {
+        Ok(n) => n,
+        Err(_) => { println!("tri: bad operand '{}'", args[0]); return; }
+    };
+    let b: i32 = match args[2].parse() {
+        Ok(n) => n,
+        Err(_) => { println!("tri: bad operand '{}'", args[2]); return; }
+    };
+    let ta = Tryte::from_i32(a);
+    let tb = Tryte::from_i32(b);
+
+    match args[1] {
+        "+" => {
+            let r = ta + tb;
+            println!("  {} + {} = {}", a, b, r.to_i32());
+            println!("  ternary: {} + {} = {}", tryte_str(ta), tryte_str(tb), tryte_str(r));
+        }
+        "-" => {
+            let r = ta + (-tb);
+            println!("  {} - {} = {}", a, b, r.to_i32());
+            println!("  ternary: {} - {} = {}", tryte_str(ta), tryte_str(tb), tryte_str(r));
+        }
+        "*" => {
+            let (lo, hi) = mul_tryte(ta, tb);
+            let combined = (hi.to_i32() as i64) * 19683 + (lo.to_i32() as i64);
+            if hi.to_i32() == 0 {
+                println!("  {} * {} = {}", a, b, combined);
+                println!("  ternary: {} * {} = {}", tryte_str(ta), tryte_str(tb), tryte_str(lo));
+            } else {
+                println!("  {} * {} = {}  (lo={}, hi={})", a, b, combined, lo.to_i32(), hi.to_i32());
+                println!("  ternary: {} * {} = hi:{} lo:{}", tryte_str(ta), tryte_str(tb), tryte_str(hi), tryte_str(lo));
+            }
+        }
+        "/" => {
+            let (q, r) = div_tryte(ta, tb);
+            if b == 0 {
+                println!("  {} / 0 = undefined (div_tryte returns 0, dividend as remainder)", a);
+            } else {
+                println!("  {} / {} = {}  (remainder {})", a, b, q.to_i32(), r.to_i32());
+                println!("  ternary: {} / {} = {}", tryte_str(ta), tryte_str(tb), tryte_str(q));
+            }
+        }
+        "%" => {
+            let r = mod_tryte(ta, tb);
+            println!("  {} % {} = {}", a, b, r.to_i32());
+            println!("  ternary: {} % {} = {}", tryte_str(ta), tryte_str(tb), tryte_str(r));
+        }
+        other => println!("tri: unknown op '{}' (want + - * / %)", other),
     }
 }
 
