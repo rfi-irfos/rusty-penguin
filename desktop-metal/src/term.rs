@@ -2418,9 +2418,9 @@ impl Terminal {
 
     // ── Render ───────────────────────────────────────────────────────────────
 
-    pub fn render(&self, fb: &mut Framebuffer, x: u32, y: u32, show_cursor: bool) {
-        let max_col = ((fb.width.saturating_sub(x)) / 8).min(COLS as u32) as usize;
-        let max_row = ((fb.height.saturating_sub(y)) / 8).min(ROWS as u32) as usize;
+    pub fn render(&self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, h: u32, show_cursor: bool) {
+        let max_col = (w / 8).min(COLS as u32) as usize;
+        let max_row = (h / 8).min(ROWS as u32) as usize;
         for row in 0..max_row {
             for col in 0..max_col {
                 let px = x + col as u32 * 8;
@@ -2430,13 +2430,14 @@ impl Terminal {
                 fb.draw_char(px, py, cell.ch as char, cell.fg, cell.bg);
             }
         }
-        self.paint_cursor(fb, x, y, show_cursor);
+        self.paint_cursor(fb, x, y, w, h, show_cursor);
     }
 
-    pub fn paint_cursor(&self, fb: &mut Framebuffer, x: u32, y: u32, show: bool) {
+    pub fn paint_cursor(&self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, h: u32, show: bool) {
         let cx = x + self.cur_col as u32 * 8;
         let cy = y + self.cur_row as u32 * 8;
         if cx + 8 > fb.width || cy + 8 > fb.height { return; }
+        if cx >= x + w || cy >= y + h { return; }
         let cell = &self.cells[self.cur_row * COLS + self.cur_col];
         if show {
             fb.fill_rect(cx, cy, 8, 8, DEFAULT_FG);

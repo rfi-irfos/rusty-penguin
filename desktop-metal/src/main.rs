@@ -700,7 +700,9 @@ fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, 
         let focused = i == n - 1;
         wm::draw_window(fb, &tw.win, focused);
         let (ox, oy) = wm::content_origin(&tw.win);
-        tw.term.render(fb, ox as u32, oy as u32, focused && blink_on);
+        let cw = (tw.win.w - 2).max(0) as u32;
+        let ch = (tw.win.h - 3 - wm::TITLEBAR_H).max(0) as u32;
+        tw.term.render(fb, ox as u32, oy as u32, cw, ch, focused && blink_on);
         wm::draw_resize_grip(fb, &tw.win, focused);
         tw.term.dirty = false;
         tw.win_dirty  = false;
@@ -972,7 +974,9 @@ pub extern "C" fn _start() -> ! {
                     if !tw.term.dirty || tw.win.minimized { continue; }
                     let focused = i == n - 1;
                     let (ox, oy) = wm::content_origin(&tw.win);
-                    tw.term.render(&mut fb, ox as u32, oy as u32, focused && blink_on);
+                    let cw = (tw.win.w - 2).max(0) as u32;
+                    let ch = (tw.win.h - 3 - wm::TITLEBAR_H).max(0) as u32;
+                    tw.term.render(&mut fb, ox as u32, oy as u32, cw, ch, focused && blink_on);
                     tw.term.dirty = false;
                 }
                 if start_menu_open { draw_start_menu(&mut fb); }
@@ -992,7 +996,9 @@ pub extern "C" fn _start() -> ! {
                 if let Some((fi, tw)) = wins.iter_mut().enumerate().rev().find(|(_, tw)| !tw.win.minimized) {
                     let focused = fi == n - 1;
                     let (ox, oy) = wm::content_origin(&tw.win);
-                    tw.term.paint_cursor(&mut fb, ox as u32, oy as u32, focused && blink_on);
+                    let cw = (tw.win.w - 2).max(0) as u32;
+                    let ch = (tw.win.h - 3 - wm::TITLEBAR_H).max(0) as u32;
+                    tw.term.paint_cursor(&mut fb, ox as u32, oy as u32, cw, ch, focused && blink_on);
                 }
             }
 
