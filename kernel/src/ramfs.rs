@@ -17,6 +17,7 @@ pub struct Inode {
 
 static mut INODES: [Option<Inode>; MAX_INODES] = [None; MAX_INODES];
 static mut INODE_COUNT: usize = 0;
+static mut DELETED_MASK: u64 = 0;  // Bitmap for deleted inodes (supports up to 64)
 
 fn parse_hex8(s: &[u8]) -> u32 {
     let mut v: u32 = 0;
@@ -85,12 +86,30 @@ pub fn init(base: *const u8, total_size: usize) {
 
 pub fn inode_count() -> usize { unsafe { INODE_COUNT } }
 
-pub fn inode(i: usize) -> Option<Inode> { unsafe { INODES.get(i).copied().flatten() } }
+pub fn inode(i: usize) -> Option<Inode> {
+    unsafe {
+        if i >= MAX_INODES { return None; }
+        if (DELETED_MASK & (1u64 << i)) != 0 { return None; }  // Skip deleted
+        INODES.get(i).copied().flatten()
+    }
+}
+
+/// Mark an inode as deleted
+pub fn delete(i: usize) -> bool {
+    unsafe {
+        if i >= MAX_INODES || INODES[i].is_none() { return false; }
+        if (DELETED_MASK & (1u64 << i)) != 0 { return false; }  // Already deleted
+        DELETED_MASK |= 1u64 << i;
+        true
+    }
+}
 
 /// Find a file by path (e.g. b"bin/psh"). Returns a static slice of its data.
+/// Skips deleted inodes.
 pub fn find(path: &[u8]) -> Option<&'static [u8]> {
     unsafe {
         for i in 0..INODE_COUNT {
+            if (DELETED_MASK & (1u64 << i)) != 0 { continue; }  // Skip deleted
             if let Some(ino) = INODES[i] {
                 let name = &ino.name[..ino.name_len];
                 // Strip leading "./" from stored names
