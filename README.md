@@ -154,8 +154,9 @@ rp$ ps                  # list processes annotated with ternary state (+1/0/-1)
 rp$ kill 1234 0         # transition pid 1234 to Dormant   (SIGSTOP)
 rp$ kill 1234 +1        # transition pid 1234 to Active    (SIGCONT)
 rp$ kill 1234 -1        # transition pid 1234 to Suppressed (SIGTERM)
-rp$ tis 256             # sparse-skip forward pass on a 256x256 ternary layer;
-                        # reports skipped op count and dormancy %
+rp$ tis 8 4             # multi-layer sparse-skip inference (dim 8, 4 layers);
+                        # shows per-layer in/out trit trace + dormancy %
+rp$ ai 8 4              # `ai` is a Linux alias matching bare-metal psh
 rp$ tri 6 * 7           # balanced-ternary arithmetic; prints both decimal
                         # result and Tryte +/0/- representation
 rp$ tri 17 / 5          # division with remainder
@@ -168,9 +169,17 @@ rp$ tri 6 * 7
   6 * 7 = 42
   ternary: 000000+-0 * 000000+-+ = 0000+---0
 
-rp$ tis 256
-tis: 256x256 layer, 65536 ops, 35375 skipped (53% dormancy)
-     output trits: +129  0:12  -115
+rp$ tis 8 4
+albert. [Linux track]
+sparse ternary inference -- 4 layers x dim 8
+  input  [00000+-0]
+  L0     [00000+-0] -> [+-++-+++]  dormancy 79%
+  L1     [+-++-+++] -> [+--+++--]  dormancy 26%
+  L2     [+--+++--] -> [+-0++-0+]  dormancy 28%
+  L3     [+-0++-0+] -> [+++--0-+]  dormancy 53%
+
+4 layers  avg dormancy 46%  skipped 120/256 ops
+ACTIVE -- Binary hardware. Ternary mind.
 ```
 
 ---

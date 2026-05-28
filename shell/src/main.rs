@@ -52,11 +52,12 @@ fn run_shell() {
         match parts.first().copied().unwrap_or("") {
             "exit" | "quit" => break,
             "help" => println!(
-                "Commands:\n  ps             list processes with ternary state\n  \
-                 kill <pid> <st>   transition pid to +1 (resume), 0 (stop), -1 (terminate)\n  \
-                 tis [dim]      sparse-skip forward pass; reports dormancy %\n  \
-                 tri <a> <op> <b>  balanced-ternary arithmetic (+, -, *, /, %)\n  \
-                 desktop        launch graphical session\n  \
+                "Commands:\n  ps                  list processes with ternary state\n  \
+                 kill <pid> <st>     transition pid to +1 (resume), 0 (stop), -1 (terminate)\n  \
+                 tis [dim] [layers]  multi-layer sparse-skip inference; reports per-layer dormancy\n  \
+                                     (alias: `ai`, matches bare-metal psh)\n  \
+                 tri <a> <op> <b>    balanced-ternary arithmetic (+, -, *, /, %)\n  \
+                 desktop             launch graphical session\n  \
                  ls / pwd / cd / exit  standard"
             ),
             "desktop" => {
@@ -64,7 +65,7 @@ fn run_shell() {
             }
             "ps" => print_ternary_ps(),
             "kill" => kill_transition(&parts[1..]),
-            "tis" => tis_demo(&parts[1..]),
+            "tis" | "ai" => tis_demo(&parts[1..]),  // `ai` is the bare-metal alias
             "tri" => tri_calc(&parts[1..]),
             _ => {
                 if !parts.is_empty() {
@@ -153,21 +154,29 @@ fn tri_calc(args: &[&str]) {
     }
 }
 
-/// `tis [dim]` — run a sparse-skip forward pass through ai-runtime to
-/// demonstrate the doctrine's "Sparse Execution" + "Ternary" principles.
-/// Generates a deterministic ternary weight matrix and input vector, runs
-/// the dense layer, and reports how many of the multiply-accumulate
-/// operations were skipped because at least one operand was Trit::Zero.
+/// `tis [dim] [layers]` (alias: `ai`) — run a multi-layer sparse-skip
+/// forward pass through ai-runtime to demonstrate the doctrine's "Sparse
+/// Execution" + "Ternary" + "AI-native" principles together.
+///
+/// Mirrors the bare-metal psh `ai` builtin: shows per-layer in/out trit
+/// trace and dormancy, plus aggregate over the whole stack. Generates a
+/// deterministic ternary weight matrix per layer plus a random input
+/// vector; each layer's output feeds the next.
 fn tis_demo(args: &[&str]) {
     use ai_runtime::{TernaryLinear, TernaryTensor};
     use ternary_core::Trit;
 
     let dim: usize = args.first()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(64);
+        .unwrap_or(8);
+    let layers: usize = args.get(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(4);
     if dim == 0 || dim > 4096 {
-        println!("tis: dim must be 1..=4096");
-        return;
+        println!("tis: dim must be 1..=4096"); return;
+    }
+    if layers == 0 || layers > 64 {
+        println!("tis: layers must be 1..=64"); return;
     }
 
     // Deterministic LCG so the demo is reproducible across runs.
@@ -179,24 +188,55 @@ fn tis_demo(args: &[&str]) {
             0 => Trit::Neg, 1 => Trit::Zero, _ => Trit::Pos,
         }
     };
+    let trit_char = |t: Trit| match t { Trit::Pos => '+', Trit::Zero => '0', Trit::Neg => '-' };
 
-    let in_features = dim;
-    let out_features = dim;
-    let mut layer = TernaryLinear::new(in_features, out_features);
-    for w in layer.weights.data.iter_mut() { *w = next_trit(); }
-    let input: Vec<Trit> = (0..in_features).map(|_| next_trit()).collect();
-    let input = TernaryTensor::new(input, vec![in_features]);
+    println!("albert. [Linux track]");
+    println!("sparse ternary inference -- {} layers x dim {}", layers, dim);
 
-    let (output, total_ops, skipped) = layer.forward(&input);
-    let dormancy_pct = if total_ops > 0 { skipped * 100 / total_ops } else { 0 };
+    // Random initial activation vector.
+    let mut act: Vec<Trit> = (0..dim).map(|_| next_trit()).collect();
 
-    let pos = output.data.iter().filter(|&&t| t == Trit::Pos).count();
-    let neg = output.data.iter().filter(|&&t| t == Trit::Neg).count();
-    let zer = output.data.len() - pos - neg;
+    // Show the input trace only when it fits on one line.
+    if dim <= 64 {
+        print!("  input  [");
+        for &t in &act { print!("{}", trit_char(t)); }
+        println!("]");
+    }
 
-    println!("tis: {}x{} layer, {} ops, {} skipped ({}% dormancy)",
-             out_features, in_features, total_ops, skipped, dormancy_pct);
-    println!("     output trits: +{}  0:{}  -{}", pos, zer, neg);
+    let mut total_ops = 0usize;
+    let mut total_skipped = 0usize;
+
+    for l in 0..layers {
+        // Re-seed weights per layer so each layer is structurally distinct
+        // but still deterministic across runs.
+        let mut layer = TernaryLinear::new(dim, dim);
+        for w in layer.weights.data.iter_mut() { *w = next_trit(); }
+
+        let input_tensor = TernaryTensor::new(act.clone(), vec![dim]);
+        let (output_tensor, ops, skipped) = layer.forward(&input_tensor);
+        total_ops += ops;
+        total_skipped += skipped;
+        let layer_dormancy = if ops > 0 { skipped * 100 / ops } else { 0 };
+
+        if dim <= 64 {
+            print!("  L{}     [", l);
+            for &t in &act { print!("{}", trit_char(t)); }
+            print!("] -> [");
+            for &t in &output_tensor.data { print!("{}", trit_char(t)); }
+            println!("]  dormancy {}%", layer_dormancy);
+        } else {
+            // Wide layers: skip the trace, keep per-layer summary.
+            println!("  L{}  {}x{} dormancy {}%", l, dim, dim, layer_dormancy);
+        }
+
+        act = output_tensor.data;
+    }
+
+    let avg_dormancy = if total_ops > 0 { total_skipped * 100 / total_ops } else { 0 };
+    println!();
+    println!("{} layers  avg dormancy {}%  skipped {}/{} ops",
+             layers, avg_dormancy, total_skipped, total_ops);
+    println!("ACTIVE -- Binary hardware. Ternary mind.");
 }
 
 /// `kill <pid> <state>` — drive scheduler::ProcessController::transition()
