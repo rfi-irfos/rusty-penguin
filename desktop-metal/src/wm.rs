@@ -6,15 +6,17 @@ pub const TITLEBAR_H: i32 = 22;
 pub const WINDOW_W:   i32 = term::TERM_PIX_W as i32 + 2;
 pub const WINDOW_H:   i32 = term::TERM_PIX_H as i32 + 2 + TITLEBAR_H;
 
-// Window styling — matches Ubuntu Yaru theme
+// Window styling — Apple graphite palette (was Ubuntu Yaru blue). Active windows
+// get a faint lighter hairline rather than a bright accent border; titlebars are
+// near-black graphite like macOS dark windows.
 const SHADOW:      u32 = 0x05080F;  // Deep shadow
-const BORDER_DIM:  u32 = 0x3C3C48;  // Inactive window border
-const BORDER_ACT:  u32 = 0x4A9EFF;  // Active window border (blue)
-const TITLE_DIM:   u32 = 0x1F1F2B;  // Inactive titlebar
-const TITLE_ACT:   u32 = 0x24242F;  // Active titlebar (slightly lighter)
-const TITLE_LINE:  u32 = 0x3C3C48;  // Separator line
-const CONTENT_BG:  u32 = 0x1A1A24;  // Content background (matches main BG)
-const TXT_DIM:     u32 = 0x6B7280;  // Inactive text
+const BORDER_DIM:  u32 = 0x2A2A2C;  // Inactive window border (hairline)
+const BORDER_ACT:  u32 = 0x545456;  // Active window border (subtle light edge)
+const TITLE_DIM:   u32 = 0x1E1E20;  // Inactive titlebar
+const TITLE_ACT:   u32 = 0x2C2C2E;  // Active titlebar (macOS graphite)
+const TITLE_LINE:  u32 = 0x3A3A3C;  // Separator line (hairline)
+const CONTENT_BG:  u32 = 0x1C1C1E;  // Content background (matches the CSS card)
+const TXT_DIM:     u32 = 0x8E8E93;  // Inactive text (macOS secondary label)
 const TXT_ACT:     u32 = 0xF5F5F7;  // Active text (warm white)
 const BTN_CLOSE:   u32 = 0xFF6B6B;  // Red close button
 const BTN_MIN:     u32 = 0xFFD43B;  // Yellow minimize button
