@@ -4,6 +4,29 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+### Added — Install to disk: boot standalone, no ISO (2026-05-28)
+
+- **`rp-install /dev/<disk>`** installs Rusty Penguin to a disk so it boots on
+  its own — the biggest structural daily-driver gap, now closed. New `installer`
+  workspace crate. Six stages: mount install media (isofs) → GPT partition
+  (sgdisk: ESP + RPDATA) → format (mkfs.fat + busybox mke2fs) → copy bootloader
+  + kernel + initrd to the ESP → sync. Requires an explicit target disk (it
+  repartitions, so never guesses).
+- Disk layout: `p1 RPESP` (FAT32) holds a standalone GRUB-EFI image
+  (`grub-mkstandalone`, bundled) + `vmlinuz` + `initrd.img`; `p2 RPDATA` (ext4)
+  is the persistent root that init mounts at /home.
+- **Console / installer boot mode**: a new GRUB entry
+  `Rusty Penguin -- Console / Install to disk` (kernel arg `rp.console`) boots
+  to a text shell to run the installer; init skips disk auto-provisioning in
+  this mode so it doesn't fight the installer for the target disk.
+- Bundled into the initramfs: static busybox, `sgdisk` (+libs), `mkfs.fat`
+  (+libs), `isofs.ko`, `nls_iso8859-1.ko` (vfat IO charset), and the standalone
+  `BOOTX64.EFI`.
+- **Verified end-to-end in QEMU/UEFI**: installed to a blank disk, then booted
+  that disk with NO CD attached → OVMF → GRUB → kernel → init → desktop renders
+  at 1280×800; RPDATA carries the persistent /home + /opt and a written
+  `boot.tern`. Proof: `docs/installed-disk-standalone-boot.png`.
+
 ### Fixed — Partition-aware persistence (data-loss footgun + installer prereq, 2026-05-28)
 
 - Persistence no longer blindly `mke2fs`-es the first disk it finds — which

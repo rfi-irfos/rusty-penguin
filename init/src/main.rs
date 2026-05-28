@@ -9,11 +9,21 @@ fn main() {
     mount_pseudo_filesystems();
     setup_environment();
 
+    let console = console_mode();
+
     // Storage is a TERNARY subsystem, not a binary present/absent flag:
     //   +1 Active     — disk present & formatted → mounted, persistent
     //    0 Dormant    — disk present but blank   → provisioned, then activated
     //   -1 Suppressed — no disk / mount failed   → ephemeral boot, no persistence
-    let storage = setup_persistence();
+    //
+    // In console/install mode we do NOT auto-provision: the installer owns the
+    // disks, and grabbing/formatting the install target here would fight it.
+    let storage = if console {
+        eprintln!("[init] console mode — skipping disk auto-provision (installer owns disks)");
+        Trit::Zero
+    } else {
+        setup_persistence()
+    };
     log_storage_state(storage);
 
     // Networking is also a ternary subsystem:
@@ -30,20 +40,43 @@ fn main() {
         eprintln!("[init] persistent boot #{} (record: ~/.rusty/boot.tern)", boots);
     }
 
-    // Phase 1 substrate: try to launch the graphical desktop first. If the
-    // desktop binary isn't bundled or fails, fall back to the shell so the
-    // system stays usable instead of looping forever.
-    match launch_session() {
-        Ok(()) => {
-            println!("[init] Session exited cleanly. Halting init loop.");
-        }
-        Err(e) => {
-            eprintln!("[init] Session launch failed: {}", e);
-        }
+    // Console/installer mode: `rp.console` (or `rp.install`) on the kernel
+    // cmdline boots straight to a text shell instead of the desktop — used to
+    // run `rp-install <disk>`, and as a rescue console. RP_RECOVERY stops the
+    // shell from bouncing back into the desktop.
+    let result = if console {
+        eprintln!("[init] console mode (rp.console) — run `rp-install /dev/<disk>` to install");
+        std::env::set_var("RP_RECOVERY", "1");
+        launch_shell()
+    } else {
+        // Phase 1 substrate: try the graphical desktop first; init's
+        // launch_session falls back to a shell if it can't start.
+        launch_session()
+    };
+    match result {
+        Ok(()) => println!("[init] Session exited cleanly. Halting init loop."),
+        Err(e) => eprintln!("[init] Session launch failed: {}", e),
     }
     loop {
         std::thread::sleep(std::time::Duration::from_secs(1));
     }
+}
+
+fn console_mode() -> bool {
+    fs::read_to_string("/proc/cmdline")
+        .map(|c| c.contains("rp.console") || c.contains("rp.install"))
+        .unwrap_or(false)
+}
+
+fn launch_shell() -> Result<(), Box<dyn std::error::Error>> {
+    for path in ["/bin/shell", "/usr/local/bin/shell", "/bin/psh", "/usr/local/bin/psh"] {
+        if Path::new(path).exists() {
+            let status = Command::new(path).status()?;
+            println!("[init] Shell exited with status: {:?}", status.code());
+            return Ok(());
+        }
+    }
+    Err("no shell binary found".into())
 }
 
 fn setup_environment() {

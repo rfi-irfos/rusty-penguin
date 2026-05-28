@@ -1,0 +1,14 @@
+[package]
+name = "installer"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "rp-install"
+path = "src/main.rs"
+
+[dependencies]
+nix = { version = "0.27", features = ["mount", "fs"] }
+ternary-core = { path = "../ternary-core" }

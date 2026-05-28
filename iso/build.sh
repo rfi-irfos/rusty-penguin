@@ -12,8 +12,8 @@ echo "[build] Rusty Penguin ISO builder"
 
 # 1. Compile init and shell binaries
 echo "[build] Compiling init and shell crates..."
-cargo build --release -p init -p shell -p desktop --manifest-path "$REPO_ROOT/Cargo.toml" 2>&1 \
-    || echo "[build] Note: init/shell/desktop step skipped (using cached artifacts)"
+cargo build --release -p init -p shell -p desktop -p installer --manifest-path "$REPO_ROOT/Cargo.toml" 2>&1 \
+    || echo "[build] Note: init/shell/desktop/installer step skipped (using cached artifacts)"
 INIT_BIN="$REPO_ROOT/target/release/init"
 PSH_BIN="$REPO_ROOT/target/release/shell"
 
@@ -92,6 +92,13 @@ if [ -f "$DESKTOP_BIN" ]; then
     chmod +x "$INITRAMFS_DIR/bin/desktop" "$INITRAMFS_DIR/usr/local/bin/desktop"
 fi
 
+# rp-install (install-to-disk)
+RPINSTALL_BIN="$REPO_ROOT/target/release/rp-install"
+if [ -f "$RPINSTALL_BIN" ]; then
+    cp "$RPINSTALL_BIN" "$INITRAMFS_DIR/bin/rp-install"
+    chmod +x "$INITRAMFS_DIR/bin/rp-install"
+fi
+
 # Bundle static busybox — provides mke2fs (format the persistence disk), mount,
 # fdisk, etc. in a single dependency-free binary. init shells out to it to
 # provision a blank disk for persistent /home.
@@ -110,6 +117,61 @@ if [ -f "$ISO_DIR/assets/udhcpc.script" ]; then
     cp "$ISO_DIR/assets/udhcpc.script" "$INITRAMFS_DIR/etc/udhcpc.script"
     chmod +x "$INITRAMFS_DIR/etc/udhcpc.script"
     echo "[build] bundled udhcpc lease script"
+fi
+
+# ── Installer tooling (rp-install: partition + format + bootloader to disk) ────
+# Helper: copy a dynamic binary plus every shared lib ldd reports.
+bundle_with_libs() {
+    local bin="$1" name="${2:-$(basename "$1")}"
+    [ -x "$bin" ] || { echo "[build] WARNING: $bin missing — skipping $name"; return 1; }
+    cp "$bin" "$INITRAMFS_DIR/bin/$name"; chmod +x "$INITRAMFS_DIR/bin/$name"
+    ldd "$bin" 2>/dev/null | awk '/=>/{print $3} /ld-linux/{print $1}' | while read -r lib; do
+        [ -f "$lib" ] || continue
+        case "$lib" in
+            */ld-linux*) cp "$lib" "$INITRAMFS_DIR/lib64/$(basename "$lib")" ;;
+            *)           cp "$lib" "$INITRAMFS_DIR/lib/x86_64-linux-gnu/$(basename "$lib")" ;;
+        esac
+    done
+    echo "[build] bundled $name (+libs)"
+}
+# sgdisk (GPT partitioning), mkfs.fat (ESP). mke2fs comes from busybox.
+bundle_with_libs "$(command -v sgdisk || echo /usr/sbin/sgdisk)" sgdisk
+bundle_with_libs "$(command -v mkfs.fat || echo /usr/sbin/mkfs.fat)" mkfs.fat
+
+# Kernel modules the installer loads (busybox insmod): isofs (read kernel/initrd
+# off the CD) and nls_iso8859-1 (vfat's default IO charset, needed to mount the
+# FAT ESP). Both decompressed from .zst to raw ELF.
+mkdir -p "$INITRAMFS_DIR/lib/modules"
+for modname in isofs nls_iso8859-1; do
+    MODSRC=$(find /lib/modules/$KVER_HOST -name "$modname.ko*" 2>/dev/null | head -1)
+    [ -z "$MODSRC" ] && { echo "[build] WARNING: $modname.ko not found"; continue; }
+    if [[ "$MODSRC" == *.zst ]]; then
+        zstd -d "$MODSRC" -o "$INITRAMFS_DIR/lib/modules/$modname.ko" --force >/dev/null 2>&1
+    else
+        cp "$MODSRC" "$INITRAMFS_DIR/lib/modules/$modname.ko"
+    fi
+    echo "[build] bundled $modname.ko"
+done
+
+# Standalone GRUB EFI image for installed disks. Embeds a grub.cfg that finds
+# the ESP (the partition holding this very EFI) and boots the kernel from it.
+if command -v grub-mkstandalone >/dev/null; then
+    GRUBCFG_TMP="$(mktemp)"
+    cat > "$GRUBCFG_TMP" <<'GRUBCFG'
+insmod part_gpt
+insmod fat
+insmod ext2
+search --no-floppy --file --set=root /EFI/BOOT/BOOTX64.EFI
+linux ($root)/vmlinuz quiet loglevel=0 console=tty0 init=/init rw
+initrd ($root)/initrd.img
+boot
+GRUBCFG
+    mkdir -p "$INITRAMFS_DIR/usr/lib/rp"
+    grub-mkstandalone -O x86_64-efi \
+        -o "$INITRAMFS_DIR/usr/lib/rp/BOOTX64.EFI" \
+        "boot/grub/grub.cfg=$GRUBCFG_TMP" 2>/dev/null \
+        && echo "[build] bundled standalone BOOTX64.EFI ($(du -h "$INITRAMFS_DIR/usr/lib/rp/BOOTX64.EFI" | cut -f1))"
+    rm -f "$GRUBCFG_TMP"
 fi
 
 # Bundle shared libraries required by the dynamically-linked init binary
