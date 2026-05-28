@@ -479,3 +479,58 @@ impl App for ProcessMonitor {
         "Process Monitor"
     }
 }
+
+/// System Information display
+pub struct SystemInfo {
+    pub dirty: bool,
+    pub wants_close: bool,
+}
+
+impl SystemInfo {
+    pub fn new() -> Self {
+        SystemInfo {
+            dirty: true,
+            wants_close: false,
+        }
+    }
+}
+
+impl App for SystemInfo {
+    fn render(&mut self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, h: u32) {
+        // Draw header
+        fb.fill_rect(x, y, w, 24, 0x2C2C38);
+        fb.draw_str(x + 8, y + 7, "System Information", 0xF5F5F7, 0x2C2C38);
+        fb.fill_rect(x, y + 24, w, 1, 0x3C3C48);
+
+        // System info items
+        let items = [
+            "OS: Rusty Penguin v1.0.0",
+            "Kernel: Bare-Metal (Pure Rust)",
+            "Arch: x86_64",
+            "Memory: 512 MB available",
+            "Boot Time: ~2 seconds",
+            "Uptime: Active",
+            "Desktop: Modern window manager",
+            "Shell: psh (penguin shell)",
+        ];
+
+        for (i, item) in items.iter().enumerate() {
+            let y_pos = y + 32 + (i as u32 * 16);
+            if y_pos + 16 > y + h { break; }
+
+            let bg_color = if i % 2 == 0 { 0x1A1A24 } else { 0x232333 };
+            fb.fill_rect(x, y_pos, w, 16, bg_color);
+            fb.draw_str(x + 8, y_pos + 3, item, 0xB8B8B8, bg_color);
+        }
+
+        self.dirty = false;
+    }
+
+    fn on_key(&mut self, _key: u8) {
+        // Info display - read-only
+    }
+
+    fn title(&self) -> &str {
+        "System Info"
+    }
+}
