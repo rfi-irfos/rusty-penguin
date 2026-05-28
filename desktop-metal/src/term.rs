@@ -337,6 +337,18 @@ fn sys_ps_raw(buf: *mut u8, max: usize) -> usize {
     n as usize
 }
 
+fn sys_yield() {
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            in("rax") 24u64,
+            in("rdi") 0u64,
+            out("rcx") _, out("r11") _,
+            options(nostack),
+        );
+    }
+}
+
 // ── Terminal impl ─────────────────────────────────────────────────────────────
 
 impl Terminal {
@@ -2252,6 +2264,7 @@ impl Terminal {
                 "uname","whoami","uptime","date","trit","ai","stat","file","hostname","hostid","id",
                 "echo","clear","pwd","cd","exit","kver","kinstall","kmanager",
                 "psh","seq","bc","calc","rev","alias","printf","unalias",
+                "true","false","sleep",
             ];
             if BUILTINS.iter().any(|&b| b == cmd_name) {
                 let s = format!("psh builtin: {}\r\n", cmd_name);
@@ -2295,6 +2308,22 @@ impl Terminal {
         } else if line.starts_with(b"unalias ") {
             let name = core::str::from_utf8(&line[8..]).unwrap_or("");
             self.aliases.retain(|(n, _)| n != name);
+
+        } else if line == b"true" {
+            self.last_exit = 0;
+
+        } else if line == b"false" {
+            self.last_exit = 1;
+
+        } else if line.starts_with(b"sleep ") {
+            let secs_str = arg(6);
+            if let Ok(n) = secs_str.parse::<u64>() {
+                let target_ticks = sys_ticks() + n * 100;
+                while sys_ticks() < target_ticks { sys_yield(); }
+            } else {
+                self.write_output(b"sleep: invalid argument\r\n");
+                self.last_exit = 1;
+            }
 
         } else if line == b"exit" {
             self.write_output(b"bye\r\n");
