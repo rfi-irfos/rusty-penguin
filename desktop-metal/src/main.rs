@@ -473,31 +473,29 @@ fn draw_desktop_icons(fb: &mut Framebuffer, hover_icon: Option<usize>) {
         let ix = x as i32; let iy = y as i32;
         let iw = w as i32; let ih = img_h as i32;
         let hovered = hover_icon == Some(i);
-        // Border color: full brightness on hover, half-brightness normally
-        let border_col = if hovered { icon.color } else {
-            ((icon.color >> 16 & 0xFF) / 2) << 16
-          | ((icon.color >>  8 & 0xFF) / 2) << 8
-          |  ((icon.color      & 0xFF) / 2)
-        };
-        let inner_bg = if hovered { 0x132435u32 } else { 0x0D1E2Cu32 };
-        // Drop shadow (slightly larger on hover for lift effect)
+        // Modern shadow effect (multi-layer for depth)
         let sd = if hovered { 3 } else { 2 };
-        fb.fill_rounded_rect(ix + sd, iy + sd, iw, ih, 6, 0x040C14);
-        // Colored border ring, then inner fill
-        fb.fill_rounded_rect(ix,     iy,     iw,     ih,     6, border_col);
-        fb.fill_rounded_rect(ix + 1, iy + 1, iw - 2, ih - 2, 5, inner_bg);
-        // Colored top accent strip
-        fb.fill_rect_s(ix + 1, iy + 1, iw - 2, 4, icon.color);
+        fb.fill_rounded_rect(ix + sd, iy + sd, iw, ih, 8, 0x00000040.min(0x0A0A14));
+        // Icon background with hover effect
+        let inner_bg = if hovered { 0x2C2C38u32 } else { 0x1A1A24u32 };
+        let border_col = if hovered { icon.color } else { 0x3C3C48u32 };
+        // Rounded card design
+        fb.fill_rounded_rect(ix,     iy,     iw,     ih,     8, border_col);
+        fb.fill_rounded_rect(ix + 1, iy + 1, iw - 2, ih - 2, 7, inner_bg);
+        // Accent top bar
+        fb.fill_rect_s(ix + 1, iy + 1, iw - 2, 2, icon.color);
         // 2x bitmap centered
         let bx = x + (w - 16) / 2;
         let by = y + (img_h - 16) / 2;
-        fb.draw_bitmap_2x(bx, by, icon.bitmap, icon.color, inner_bg);
-        // Label
+        let icon_color = if hovered { icon.color } else { 0x6B7280u32 };
+        fb.draw_bitmap_2x(bx, by, icon.bitmap, icon_color, inner_bg);
+        // Label with refined styling
         let lw = icon.label.len() as u32 * 8;
         let lx = if lw < w { x + (w - lw) / 2 } else { x };
-        let label_bg = if hovered { 0x0F2030u32 } else { 0x0B1726u32 };
+        let label_bg = if hovered { 0x2C2C38u32 } else { 0x1A1A24u32 };
+        let label_color = if hovered { icon.color } else { DIM };
         fb.fill_rect(lx.saturating_sub(2), y + img_h + 2, lw + 4, 11, label_bg);
-        fb.draw_str(lx, y + img_h + 4, icon.label, icon.color, label_bg);
+        fb.draw_str(lx, y + img_h + 4, icon.label, label_color, label_bg);
     }
 }
 
