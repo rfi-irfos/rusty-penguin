@@ -3,6 +3,8 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use tar::Archive;
+use std::os::unix::fs as unix_fs;
 
 const PKG_DIR: &str = "/opt/rusty-penguin/packages";
 const BIN_DIR: &str = "/opt/rusty-penguin/bin";
@@ -31,16 +33,40 @@ impl PackageManager {
 
         // Create package directory
         let pkg_install_dir = PathBuf::from(PKG_DIR).join(pkg_name);
+        if pkg_install_dir.exists() {
+            return Err(format!("Package already installed: {}", pkg_name));
+        }
         fs::create_dir_all(&pkg_install_dir).map_err(|e| e.to_string())?;
 
-        // Copy the .rpkg file to packages directory
-        let dest = pkg_install_dir.join("archive.rpkg");
-        fs::copy(pkg_path, &dest).map_err(|e| e.to_string())?;
+        // Extract tar archive
+        let file = fs::File::open(pkg_path).map_err(|e| e.to_string())?;
+        let mut archive = Archive::new(file);
 
-        // For now, just copy the file. Later: extract tar, symlink binaries
-        // TODO: Extract tar contents, parse manifest.toml, create symlinks in BIN_DIR
+        archive
+            .unpack(&pkg_install_dir)
+            .map_err(|e| format!("Failed to extract package: {}", e))?;
 
-        Ok(format!("Installed package: {}", pkg_name))
+        // Create symlinks for binaries (if manifest exists)
+        fs::create_dir_all(BIN_DIR).map_err(|e| e.to_string())?;
+        let bin_src_dir = pkg_install_dir.join("bin");
+        if bin_src_dir.exists() {
+            if let Ok(entries) = fs::read_dir(&bin_src_dir) {
+                for entry in entries.filter_map(|e| e.ok()) {
+                    let path = entry.path();
+                    if path.is_file() {
+                        if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
+                            let link_path = PathBuf::from(BIN_DIR).join(filename);
+                            // Remove old symlink if it exists
+                            let _ = fs::remove_file(&link_path);
+                            // Create symlink
+                            let _ = unix_fs::symlink(&path, &link_path);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(format!("Installed package: {} (extracted and linked)", pkg_name))
     }
 
     pub fn list() -> Result<String, String> {
