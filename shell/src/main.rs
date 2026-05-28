@@ -4,6 +4,8 @@ use scheduler::{ProcessController, TernaryState};
 use ai_runtime::{TernaryLinear, TernaryTensor};
 use mathematics::{mul_tryte, div_tryte, scale};
 
+mod pkg;
+
 fn to_tern(mut n: i64) -> String {
     if n == 0 { return "0".to_string(); }
     let flip = n < 0;
@@ -121,6 +123,7 @@ fn main() {
                 println!("  dormant  <pid>     SIGSTOP → DORMANT  (0)");
                 println!("  suppress <pid>     SIGTERM → SUPPRESSED (-1)");
                 println!("  ai [n]             Sparse ternary inference (n tokens, default 32)");
+                println!("  rpm <cmd>          Package manager (install|list|info|remove|search)");
                 println!("  exit | quit        Exit psh");
             }
 
@@ -214,6 +217,14 @@ fn main() {
                 let n_tokens = parts.get(1).and_then(|s| s.parse::<usize>().ok())
                     .unwrap_or(32).max(1).min(256);
                 run_ai_inference(n_tokens);
+            }
+
+            "rpm" => {
+                let args: Vec<&str> = parts.iter().skip(1).copied().collect();
+                match pkg::cmd_rpm(&args) {
+                    Ok(output) => println!("{}", output),
+                    Err(err) => println!("rpm error: {}", err),
+                }
             }
 
             "exit" | "quit" => {
