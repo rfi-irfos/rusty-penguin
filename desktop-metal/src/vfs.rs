@@ -56,37 +56,52 @@ impl Vfs {
               - cat QUICKSTART.txt\n");
         v.write("demo.psh",
             b"#!/bin/psh\n\
-              # RustyPenguin full-feature demo\n\
-              echo \"=== RustyPenguin OS v1.0.0 ===\"\n\
+              # RustyPenguin OS v1.0.0 - Full feature demonstration\n\
+              echo \"\x1b[1;32m=== RustyPenguin v1.0.0 - Bare Metal Rust OS ===\"\x1b[0m\n\
+              echo \"Kernel: $(uname) | CPU: x86_64 | Binary: bare-metal\"\n\
               sysinfo\n\
               echo \"\"\n\
-              echo \"-- Arithmetic --\"\n\
+              echo \"\x1b[1;36m-- Conditional Logic --\"\x1b[0m\n\
+              if test -f readme.txt\n\
+              then\n\
+                echo \"  readme.txt exists - file I/O working\"\n\
+              fi\n\
+              echo \"\"\n\
+              echo \"\x1b[1;36m-- Arithmetic --\"\x1b[0m\n\
+              echo -n \"  (2 + 3) * 7 = \"\n\
               calc (2 + 3) * 7\n\
+              echo -n \"  1024 / 32 = \"\n\
               calc 1024 / 32\n\
               echo \"\"\n\
-              echo \"-- Sequences and loops --\"\n\
-              for i in $(seq 1 4)\n\
+              echo \"\x1b[1;36m-- Sequences and Loops --\"\x1b[0m\n\
+              echo \"  Counting 1 to 5:\"\n\
+              for i in $(seq 1 5)\n\
               do\n\
-                echo \"  step $i\"\n\
+                echo -n \"  $i\"\n\
               done\n\
               echo \"\"\n\
-              echo \"-- Files and pipes --\"\n\
-              echo \"Rust\" > lang.txt\n\
-              echo \"Python\" >> lang.txt\n\
-              echo \"C\" >> lang.txt\n\
-              echo \"Go\" >> lang.txt\n\
-              echo \"Sorted:\"\n\
-              cat lang.txt | sort\n\
-              echo \"Lines with R:\"\n\
-              cat lang.txt | grep R\n\
               echo \"\"\n\
-              echo \"-- Variables --\"\n\
-              AUTHOR=Linus\n\
-              echo \"Built for $AUTHOR.\"\n\
+              echo \"\x1b[1;36m-- Files and Pipes --\"\x1b[0m\n\
+              echo \"  Creating languages.txt...\"\n\
+              echo \"Rust\" > languages.txt\n\
+              echo \"Python\" >> languages.txt\n\
+              echo \"Lisp\" >> languages.txt\n\
+              echo \"Go\" >> languages.txt\n\
+              echo \"  Sorted output:\"\n\
+              cat languages.txt | sort\n\
               echo \"\"\n\
-              echo \"-- Kernel ABI --\"\n\
-              kver\n\
-              echo \"Demo complete.\"\n");
+              echo \"\x1b[1;36m-- Text Processing --\"\x1b[0m\n\
+              echo \"  Languages with 'u': $(cat languages.txt | grep u | wc -l) found\"\n\
+              echo \"\"\n\
+              echo \"\x1b[1;36m-- System Introspection --\"\x1b[0m\n\
+              echo \"  Hostname: $(hostname)\"\n\
+              echo \"  User ID: $(id)\"\n\
+              lsb_release\n\
+              echo \"\"\n\
+              echo \"\x1b[1;36m-- Sparse Ternary Inference --\"\x1b[0m\n\
+              ai 8\n\
+              echo \"\"\n\
+              echo \"\x1b[1;32m=== Demo Complete ===\"\x1b[0m\n");
         v
     }
 
