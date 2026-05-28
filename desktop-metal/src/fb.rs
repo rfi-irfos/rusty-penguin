@@ -2,14 +2,22 @@
 // Kernel fills a 24-byte struct: [u64 base][u32 width][u32 height][u32 pitch][u32 bpp]
 // Framebuffer is identity-mapped so the returned pointer is usable directly.
 
+extern crate alloc;
+
 use crate::font::FONT;
 
 pub struct Framebuffer {
-    pub data:   *mut u8,
+    pub data:   *mut u8,           // points at the backbuffer when double-buffered
     pub width:  u32,
     pub height: u32,
     pub bpp:    u32,
     pub stride: u32,
+    // Double-buffer support. While `back` is Some, all draw ops write to the
+    // backbuffer; present() copies it to `real` in one block. This prevents
+    // the user from seeing intermediate paint states (e.g. the BLUE border
+    // fill flashing through before content fills in).
+    real: *mut u8,
+    back: alloc::boxed::Box<[u8]>,
 }
 
 unsafe impl Send for Framebuffer {}
@@ -42,7 +50,30 @@ impl Framebuffer {
         if base == 0 || width == 0 || height == 0 {
             return Err("framebuffer not available");
         }
-        Ok(Framebuffer { data: base as *mut u8, width, height, bpp, stride: pitch })
+        // Allocate a backbuffer the same size as the real framebuffer (pitch
+        // is bytes-per-row, so pitch * height covers it exactly). All draw
+        // ops will target this; present() flushes to the real FB.
+        // Box<[u8]> doesn't reallocate, so the data pointer stays valid for
+        // the lifetime of the Framebuffer.
+        let size = (pitch * height) as usize;
+        let mut back: alloc::boxed::Box<[u8]> = alloc::vec![0u8; size].into_boxed_slice();
+        let data_ptr = back.as_mut_ptr();
+        Ok(Framebuffer {
+            data:   data_ptr,
+            width, height, bpp, stride: pitch,
+            real:   base as *mut u8,
+            back,
+        })
+    }
+
+    /// Copy the backbuffer to the real framebuffer in one block. Call this
+    /// exactly once per frame after all draw ops complete; intermediate
+    /// paint states never become visible.
+    pub fn present(&mut self) {
+        let n = self.back.len();
+        unsafe {
+            core::ptr::copy_nonoverlapping(self.back.as_ptr(), self.real, n);
+        }
     }
 
     #[inline]

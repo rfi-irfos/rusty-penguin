@@ -1015,6 +1015,7 @@ pub extern "C" fn _start() -> ! {
     let mut cx = mouse.x; let mut cy = mouse.y;
     save_cursor_bg(&fb, cx, cy, &mut cbuf);
     draw_cursor(&mut fb, cx, cy);
+    fb.present();  // flush initial paint to screen
 
     let mut last_topbar_tick: u64 = 0;
     let mut last_blink_tick: u64 = 0;
@@ -1335,23 +1336,29 @@ pub extern "C" fn _start() -> ! {
                 draw_topbar(&mut fb, up.as_str(), &stats, now_ticks);
             }
 
-            // Re-stamp the focused terminal cursor — only for pure terminal windows.
-            // Apps and editors paint their own cursors as part of their render.
-            {
-                let n = wins.len();
-                if let Some((fi, tw)) = wins.iter_mut().enumerate().rev().find(|(_, tw)| {
-                    !tw.win.minimized && tw.editor.is_none() && tw.app.is_none()
-                }) {
-                    let focused = fi == n - 1;
+            // Re-stamp the cursor on the topmost window only — and only if
+            // it's a plain terminal. Previously we walked the stack looking
+            // for the first non-app/non-editor window, which would paint a
+            // terminal cursor block onto a window UNDERNEATH an app/editor.
+            // That pixel was then visible (bled through) when the topmost
+            // window didn't repaint over it.
+            if let Some(tw) = wins.last_mut() {
+                if !tw.win.minimized && tw.editor.is_none() && tw.app.is_none() {
                     let (ox, oy) = wm::content_origin(&tw.win);
                     let cw = (tw.win.w - 2).max(0) as u32;
                     let ch = (tw.win.h - 3 - wm::TITLEBAR_H).max(0) as u32;
-                    tw.term.paint_cursor(&mut fb, ox as u32, oy as u32, cw, ch, focused && blink_on);
+                    tw.term.paint_cursor(&mut fb, ox as u32, oy as u32, cw, ch, blink_on);
                 }
             }
 
             save_cursor_bg(&fb, cx, cy, &mut cbuf);
             draw_cursor(&mut fb, cx, cy);
+
+            // Flush the backbuffer to the real framebuffer in one block.
+            // Up to this point the user has seen the previous frame; the
+            // intermediate paint states (border fills, partial composites)
+            // were all confined to RAM.
+            fb.present();
         }
     }
 }
