@@ -1,0 +1,21 @@
+#!/bin/busybox sh
+# udhcpc lease handler for Rusty Penguin (busybox). Applies the DHCP lease to
+# the interface and writes DNS to /etc/resolv.conf. Invoked by busybox udhcpc
+# with the action as $1 and lease params in the environment.
+BB=/bin/busybox
+case "$1" in
+    deconfig)
+        $BB ifconfig "$interface" 0.0.0.0
+        ;;
+    bound|renew)
+        $BB ifconfig "$interface" "$ip" netmask "${subnet:-255.255.255.0}"
+        if [ -n "$router" ]; then
+            $BB route add default gw "$router" dev "$interface" 2>/dev/null
+        fi
+        : > /etc/resolv.conf
+        for d in $dns; do
+            echo "nameserver $d" >> /etc/resolv.conf
+        done
+        ;;
+esac
+exit 0

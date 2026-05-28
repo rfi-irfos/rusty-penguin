@@ -99,9 +99,17 @@ BUSYBOX_SRC=$(command -v busybox || echo /usr/bin/busybox)
 if [ -x "$BUSYBOX_SRC" ] && file "$BUSYBOX_SRC" | grep -q "statically linked"; then
     cp "$BUSYBOX_SRC" "$INITRAMFS_DIR/bin/busybox"
     chmod +x "$INITRAMFS_DIR/bin/busybox"
-    echo "[build] bundled static busybox (mke2fs/mount/fdisk)"
+    echo "[build] bundled static busybox (mke2fs/mount/fdisk/udhcpc)"
 else
     echo "[build] WARNING: static busybox not found — disk auto-provisioning disabled"
+fi
+
+# udhcpc lease handler (busybox DHCP client calls this to apply the lease).
+mkdir -p "$INITRAMFS_DIR/etc"
+if [ -f "$ISO_DIR/assets/udhcpc.script" ]; then
+    cp "$ISO_DIR/assets/udhcpc.script" "$INITRAMFS_DIR/etc/udhcpc.script"
+    chmod +x "$INITRAMFS_DIR/etc/udhcpc.script"
+    echo "[build] bundled udhcpc lease script"
 fi
 
 # Bundle shared libraries required by the dynamically-linked init binary

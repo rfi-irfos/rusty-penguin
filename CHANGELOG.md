@@ -4,6 +4,22 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+### Added — Networking userland, the ternary way (daily-driver gap, 2026-05-28)
+
+- `init` now brings up the network: first non-loopback interface up + a DHCP
+  lease via the bundled static busybox `udhcpc` (IP, netmask, default route,
+  DNS → /etc/resolv.conf). virtio_net is built into the kernel, so no module
+  bundling needed.
+- Link state is a **ternary `Trit`** with reachability semantics:
+  - `+1` Active — lease acquired **and** default gateway pings back
+  - ` 0` Dormant — link up but no lease, or lease without reachable gateway
+  - `-1` Suppressed — no network device
+- A gateway reachability probe (busybox `ping`) means `+1` is "the network path
+  actually works", not merely "got an IP".
+- Network state is recorded in the `.tern` boot record (`@network +`).
+- Verified in QEMU (virtio-net, user-mode): `eth0 → 10.0.2.15/24`, lease from
+  10.0.2.2, gateway reachable.
+
 ### Added — Persistent storage, the ternary way (daily-driver gap #1, 2026-05-28)
 
 - The Linux track is no longer ephemeral: `init` brings up a **persistent

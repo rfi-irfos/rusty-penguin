@@ -16,10 +16,17 @@ fn main() {
     let storage = setup_persistence();
     log_storage_state(storage);
 
+    // Networking is also a ternary subsystem:
+    //   +1 Active     — link up and a DHCP lease was obtained
+    //    0 Dormant    — interface present and up, but no lease yet
+    //   -1 Suppressed — no network device
+    let net = bring_up_network();
+    log_net_state(net);
+
     setup_home_directory();
 
     if storage == Trit::Pos {
-        let boots = update_boot_record(storage);
+        let boots = update_boot_record(storage, net);
         eprintln!("[init] persistent boot #{} (record: ~/.rusty/boot.tern)", boots);
     }
 
@@ -150,6 +157,88 @@ fn finish_persist_setup() {
     bind_mount("/persist/home", "/home");
 }
 
+// ─── Networking: another ternary subsystem ───────────────────────────────────
+
+fn find_netif() -> Option<String> {
+    for e in fs::read_dir("/sys/class/net").ok()?.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if name != "lo" { return Some(name); }
+    }
+    None
+}
+
+/// Bring the first non-loopback interface up and acquire a DHCP lease via the
+/// bundled static busybox udhcpc. Returns link state as a Trit.
+fn bring_up_network() -> Trit {
+    let iface = match find_netif() {
+        Some(i) => i,
+        None => return Trit::Neg, // suppressed — no NIC
+    };
+    let _ = Command::new("/bin/busybox").args(["ip", "link", "set", &iface, "up"]).status();
+
+    // One-shot DHCP: -q quit after lease, -n exit if none, -t/-T retry tuning.
+    let leased = Command::new("/bin/busybox")
+        .args(["udhcpc", "-i", &iface, "-s", "/etc/udhcpc.script", "-q", "-n", "-t", "5", "-T", "2"])
+        .status().map(|s| s.success()).unwrap_or(false);
+
+    if !leased {
+        return Trit::Zero; // link up, no lease (dormant)
+    }
+    if let Some(ip) = iface_ipv4(&iface) {
+        eprintln!("[init] net iface {} → {}", iface, ip);
+    }
+    // Reachability probe: a lease alone doesn't mean the path works. Ping the
+    // default gateway once so +1 means "network actually reachable".
+    match default_gateway() {
+        Some(gw) => {
+            let reachable = Command::new("/bin/busybox")
+                .args(["ping", "-c", "1", "-W", "2", &gw])
+                .status().map(|s| s.success()).unwrap_or(false);
+            if reachable {
+                eprintln!("[init] gateway {} reachable", gw);
+                Trit::Pos
+            } else {
+                eprintln!("[init] gateway {} unreachable (lease ok)", gw);
+                Trit::Zero
+            }
+        }
+        None => Trit::Pos, // leased but no default route info; treat as up
+    }
+}
+
+/// Parse the default-route gateway from `busybox ip route`.
+fn default_gateway() -> Option<String> {
+    let out = Command::new("/bin/busybox").args(["ip", "route", "show", "default"]).output().ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut it = text.split_whitespace();
+    while let Some(tok) = it.next() {
+        if tok == "via" { return it.next().map(|s| s.to_string()); }
+    }
+    None
+}
+
+/// Read the interface's IPv4 from `busybox ip -4 addr`.
+fn iface_ipv4(iface: &str) -> Option<String> {
+    let out = Command::new("/bin/busybox").args(["ip", "-4", "addr", "show", iface]).output().ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    for line in text.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("inet ") {
+            return Some(rest.split_whitespace().next()?.to_string());
+        }
+    }
+    None
+}
+
+fn log_net_state(t: Trit) {
+    let (sym, label) = match t {
+        Trit::Pos  => ("+1", "ACTIVE — DHCP lease acquired"),
+        Trit::Zero => ("0",  "DORMANT — link up, no lease"),
+        Trit::Neg  => ("-1", "SUPPRESSED — no network device"),
+    };
+    eprintln!("[init] network {} : {}", sym, label);
+}
+
 fn log_storage_state(t: Trit) {
     let (sym, label) = match t {
         Trit::Pos  => ("+1", "ACTIVE — persistent disk mounted at /home"),
@@ -162,7 +251,7 @@ fn log_storage_state(t: Trit) {
 /// Read, increment, and persist the boot counter in a `.tern` file. Returns the
 /// new count. The file is balanced-ternary aware: the count is also stored as a
 /// 9-trit Tryte (the OS's native numeric form), making `.tern` first-class.
-fn update_boot_record(storage: Trit) -> i32 {
+fn update_boot_record(storage: Trit, net: Trit) -> i32 {
     let dir = format!("{}/.rusty", PERSIST_HOME);
     let _ = fs::create_dir_all(&dir);
     let path = format!("{}/boot.tern", dir);
@@ -172,7 +261,7 @@ fn update_boot_record(storage: Trit) -> i32 {
         .unwrap_or(0);
     let n = prev + 1;
 
-    let _ = fs::write(&path, render_boot_tern(storage, n));
+    let _ = fs::write(&path, render_boot_tern(storage, net, n));
     // Flush to the block device. Without this the write lives only in the page
     // cache and is lost on power-off (no clean unmount yet) — the counter would
     // never advance. sync(2) pushes all dirty buffers to disk.
@@ -183,15 +272,17 @@ fn update_boot_record(storage: Trit) -> i32 {
 /// Render a `.tern` document. Format (one record per line):
 ///   `@key  <trit|int>  [tryte]`
 /// where a trit is `+`/`0`/`-` and a tryte is 9 balanced-ternary digits.
-fn render_boot_tern(storage: Trit, boots: i32) -> String {
+fn render_boot_tern(storage: Trit, net: Trit, boots: i32) -> String {
     let tryte = Tryte::from_i32(boots);
     format!(
         "# boot.tern — Rusty Penguin boot record (balanced ternary)\n\
          # @key   value   [tryte: 9 trits, high→low, +/0/-]\n\
          @storage {}\n\
+         @network {}\n\
          @boots   {}   {}\n\
          @native  ternary\n",
         trit_char(storage),
+        trit_char(net),
         boots,
         tryte_str(&tryte),
     )
