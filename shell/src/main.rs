@@ -48,15 +48,21 @@ fn run_shell() {
             continue;
         }
 
-        match cmd {
+        let parts: Vec<&str> = cmd.split_whitespace().collect();
+        match parts.first().copied().unwrap_or("") {
             "exit" | "quit" => break,
-            "help" => println!("Commands: desktop, ps, ls, pwd, cd, exit"),
+            "help" => println!(
+                "Commands:\n  ps             list processes with ternary state\n  \
+                 kill <pid> <st>   transition pid to +1 (resume), 0 (stop), -1 (terminate)\n  \
+                 desktop        launch graphical session\n  \
+                 ls / pwd / cd / exit  standard"
+            ),
             "desktop" => {
                 let _ = Command::new("desktop").status();
             }
             "ps" => print_ternary_ps(),
+            "kill" => kill_transition(&parts[1..]),
             _ => {
-                let parts: Vec<&str> = cmd.split_whitespace().collect();
                 if !parts.is_empty() {
                     let _ = Command::new(parts[0])
                         .args(&parts[1..])
@@ -64,6 +70,33 @@ fn run_shell() {
                 }
             }
         }
+    }
+}
+
+/// `kill <pid> <state>` — drive scheduler::ProcessController::transition()
+/// which maps each ternary state to a real Linux signal:
+///     +1 → SIGCONT  (resume / activate)
+///      0 → SIGSTOP  (dormant)
+///     -1 → SIGTERM  (terminate / suppress)
+fn kill_transition(args: &[&str]) {
+    use scheduler::{ProcessController, TernaryState};
+    if args.len() != 2 {
+        println!("usage: kill <pid> <+1|0|-1>");
+        return;
+    }
+    let pid: i32 = match args[0].parse() {
+        Ok(n) => n,
+        Err(_) => { println!("kill: bad pid '{}'", args[0]); return; }
+    };
+    let state = match args[1] {
+        "+1" | "1"  | "active"     => TernaryState::Active,
+        "0"  | "dormant"           => TernaryState::Dormant,
+        "-1" | "suppress" | "kill" => TernaryState::Suppressed,
+        other => { println!("kill: bad state '{}' (want +1, 0, -1)", other); return; }
+    };
+    match ProcessController::transition(pid, state) {
+        Ok(()) => println!("pid {} → {} ({})", pid, state.symbol(), state.label()),
+        Err(e) => println!("kill: {}", e),
     }
 }
 
