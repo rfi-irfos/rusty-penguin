@@ -43,11 +43,13 @@ Dormancy is sacred. Zero is not nothing.
 Boot the ISO in QEMU or VirtualBox. You get:
 
 - **Modern graphical desktop** with Ubuntu-inspired visual design, rendered directly to `/dev/fb0`
-- **Window manager** with drag, minimize to taskbar, maximize, and proper window clipping
+- **Window manager** with drag, minimize/maximize, proper clipping, smooth ~25Hz drag rendering
+- **Graphical text editor** (dedicated GUI, not terminal-based) with file open/save operations
 - **Live stats bar**: clock, memory usage, ternary state indicator
 - **Start menu** (Dingir 𒀭 icon) with five launchers
-  - **psh** — Interactive shell with pipes, redirects, loops, variables
-  - **ps** — Process viewer with ternary state tracking
+  - **psh** — Interactive shell with pipes, redirects, loops, variables, command substitution
+  - **Files** — File browser with `ls -la` output
+  - **Edit** — Graphical text editor (Ctrl+S to save, Ctrl+Q to close)
   - **ai** — Sparse ternary neural network inference demo
   - **trit** — Balanced ternary arithmetic inspector  
   - **km** — Kernel manager for bare-metal kernel staging
