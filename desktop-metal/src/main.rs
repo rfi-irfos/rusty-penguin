@@ -334,24 +334,24 @@ fn draw_scene_static(fb: &mut Framebuffer) {
                 |  0x1Au8.saturating_add(blend) as u32;
         fb.fill_rect(0, tb_y + dy, w, 1, col);
     }
-    fb.fill_rect(0, tb_y, w, 1, 0x1A3028);       // green-tint separator line
-    fb.fill_rect(0, tb_y + 1, w, 1, 0x0D161F);   // shadow line below separator
-    // Menu button — rounded pill style
-    fb.fill_rounded_rect(4, tb_y as i32 + 3, 62, 22, 4, 0x152230);
-    fb.fill_rect(4, tb_y + 3, 62, 1, 0x22C55E);  // green top edge
-    fb.draw_bitmap_2x(8, tb_y + 6, &DINGIR, GREEN, 0x152230);
-    fb.draw_str(30, tb_y + 10, "Menu", WHITE, 0x152230);
-    // Left icon dock panel — dark pill behind all icons
+    // Separator — subtle, clean line
+    fb.fill_rect(0, tb_y, w, 1, 0x2C2C38);
+    // Menu button — refined rounded style
+    fb.fill_rounded_rect(4, tb_y as i32 + 3, 62, 22, 5, 0x2C2C38);
+    fb.fill_rect(4, tb_y + 3, 62, 1, GREEN);  // green top accent
+    fb.draw_bitmap_2x(8, tb_y + 6, &DINGIR, GREEN, 0x2C2C38);
+    fb.draw_str(30, tb_y + 9, "Menu", WHITE, 0x2C2C38);
+    // Left icon dock panel — refined appearance
     let dock_h = (tb_y - TOPBAR_H).saturating_sub(8);
-    fb.fill_rounded_rect(4, TOPBAR_H as i32 + 4, 62, dock_h as i32, 10, 0x07101A);
-    fb.fill_rect(4, TOPBAR_H + 4, 1, dock_h, 0x1A3040);   // left accent line
-    fb.fill_rect(65, TOPBAR_H + 4, 1, dock_h, 0x0D1E2C);   // right edge shadow
+    fb.fill_rounded_rect(4, TOPBAR_H as i32 + 4, 62, dock_h as i32, 12, 0x1A1A24);
+    fb.fill_rect(4, TOPBAR_H + 4, 2, dock_h, 0x3C3C48);   // left edge highlight
+    fb.fill_rect(64, TOPBAR_H + 4, 2, dock_h, 0x0F0F17);  // right edge shadow
 
     // Separator after menu button
-    fb.fill_rect(70, tb_y + 5, 1, 18, 0x1E3030);
-    // "Show desktop" strip — far right of taskbar (Mint/GNOME-style)
-    fb.fill_rect(w - 6, tb_y, 6, 28, 0x0E1C16);   // dark backing
-    fb.fill_rect(w - 5, tb_y, 1, 28, 0x22C55E);   // green accent stripe
+    fb.fill_rect(70, tb_y + 5, 1, 18, 0x2C2C38);
+    // "Show desktop" strip — far right of taskbar
+    fb.fill_rect(w - 6, tb_y, 6, 28, 0x1A1A24);   // refined backing
+    fb.fill_rect(w - 5, tb_y, 1, 28, GREEN);      // green accent stripe
 
 }
 
@@ -590,29 +590,27 @@ fn start_menu_bounds(fh: u32) -> (i32, i32, i32, i32) {
 
 fn draw_start_menu(fb: &mut Framebuffer) {
     let (x, y, w, h) = start_menu_bounds(fb.height);
-    // Drop shadow
-    fb.fill_rounded_rect(x + 3, y + 3, w, h, 6, 0x030810);
-    // Panel
-    fb.fill_rounded_rect(x, y, w, h, 6, 0x0F1E2E);
-    // Green accent header bar
-    fb.fill_rounded_rect(x, y, w, 18, 4, 0x152E22);
-    fb.fill_rect_s(x, y + 14, w, 4, 0x152E22); // square bottom of header
-    fb.fill_rect_s(x, y, w, 2, 0x22C55E);       // top green line
-    fb.draw_bitmap_2x((x + 3) as u32, (y + 2) as u32, &DINGIR, GREEN, 0x152E22);
-    fb.draw_str((x + 23) as u32, (y + 5) as u32, "RUSTY PENGUIN", GREEN, 0x152E22);
-    fb.fill_rect_s(x, y + 17, w, 1, 0x253545);  // separator
+    // Modern drop shadow (multi-layer)
+    fb.fill_rounded_rect(x + 2, y + 2, w, h, 8, 0x00000080.min(0x0A0A14));
+    // Panel background — refined
+    fb.fill_rounded_rect(x, y, w, h, 8, 0x1A1A24);
+    // Header with accent
+    fb.fill_rounded_rect(x, y, w, 20, 6, 0x2C2C38);
+    fb.fill_rect_s(x, y, w, 3, GREEN);  // top accent stripe
+    fb.draw_bitmap_2x((x + 3) as u32, (y + 4) as u32, &DINGIR, GREEN, 0x2C2C38);
+    fb.draw_str((x + 23) as u32, (y + 6) as u32, "RUSTY PENGUIN", WHITE, 0x2C2C38);
+    fb.fill_rect_s(x, y + 19, w, 1, 0x3C3C48);  // separator
+    // Menu items
     for (i, l) in LAUNCHERS.iter().enumerate() {
-        let iy = y + 19 + i as i32 * 20;
-        let bg = if i % 2 == 0 { 0x0F1E2Eu32 } else { 0x111F30u32 };
+        let iy = y + 20 + i as i32 * 20;
+        let bg = 0x1A1A24u32;  // consistent background
         fb.fill_rect_s(x + 1, iy, w - 2, 20, bg);
         // Colored left accent bar per item
-        fb.fill_rect_s(x + 2, iy + 3, 3, 14, l.color);
+        fb.fill_rect_s(x + 2, iy + 4, 2, 12, l.color);
         fb.draw_str((x + 8) as u32, (iy + 6) as u32, l.label, l.color, bg);
         let desc = l.title.split('-').nth(1).unwrap_or(l.title).trim();
         fb.draw_str((x + 52) as u32, (iy + 6) as u32, desc, DIM, bg);
     }
-    // Bottom border
-    fb.fill_rect_s(x + 1, y + h - 2, w - 2, 1, 0x253545);
 }
 
 fn start_menu_hit(fh: u32, mx: i32, my: i32) -> Option<usize> {
