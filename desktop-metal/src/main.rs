@@ -91,6 +91,18 @@ fn sys_serial_debug(b: u8) {
     }
 }
 
+fn serial_write_str(s: &str) {
+    for &b in s.as_bytes() { sys_serial_debug(b); }
+}
+
+fn serial_write_u64(mut n: u64) {
+    if n == 0 { sys_serial_debug(b'0'); return; }
+    let mut buf = [0u8; 20];
+    let mut i = 0;
+    while n > 0 { buf[i] = b'0' + (n % 10) as u8; n /= 10; i += 1; }
+    while i > 0 { i -= 1; sys_serial_debug(buf[i]); }
+}
+
 // ---- Palette ────────────────────────────────────────────────────────────────
 // Ubuntu-inspired color scheme: clean, modern, accessible
 const BG:       u32 = 0x13131B;  // Deep charcoal (polished dark)
@@ -1019,6 +1031,8 @@ pub extern "C" fn _start() -> ! {
 
     let mut last_topbar_tick: u64 = 0;
     let mut last_blink_tick: u64 = 0;
+    let mut last_stat_tick: u64 = 0;
+    let mut frames_since_stat: u32 = 0;
     let mut blink_on: bool = true;
     let mut wins: Vec<TermWin> = Vec::new();
     let mut scene_dirty = false;
@@ -1118,6 +1132,28 @@ pub extern "C" fn _start() -> ! {
         if topbar_due {
             last_topbar_tick = now_ticks;
             stats = sample_stats();
+        }
+
+        // Periodic stat line to serial (every 500 ticks = 5s). Host-side
+        // log inspection can read these to see heap drift, frame rate,
+        // and window count without opening QEMU. Doctrine: observable.
+        if now_ticks.wrapping_sub(last_stat_tick) >= 500 {
+            let elapsed = now_ticks.wrapping_sub(last_stat_tick).max(1);
+            last_stat_tick = now_ticks;
+            let heap_pct = {
+                let u = allocator::used_bytes() as u64;
+                let t = allocator::total_bytes() as u64;
+                if t > 0 { (u * 100 / t).min(100) } else { 0 }
+            };
+            serial_write_str("[stat] heap=");
+            serial_write_u64(heap_pct);
+            serial_write_str("% wins=");
+            serial_write_u64(wins.len() as u64);
+            serial_write_str(" fps=");
+            // frames per second over the elapsed window
+            serial_write_u64((frames_since_stat as u64) * 100 / elapsed);
+            serial_write_str("\n");
+            frames_since_stat = 0;
         }
 
         // Text cursor blink: toggle every 50 ticks (~500ms @ 100Hz).
@@ -1370,6 +1406,7 @@ pub extern "C" fn _start() -> ! {
             // intermediate paint states (border fills, partial composites)
             // were all confined to RAM.
             fb.present();
+            frames_since_stat = frames_since_stat.saturating_add(1);
         }
     }
 }
