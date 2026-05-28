@@ -686,9 +686,11 @@ fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, 
     let n = wins.len();
     for (i, tw) in wins.iter_mut().enumerate() {
         if tw.win.minimized { continue; }
-        wm::draw_window(fb, &tw.win, i == n - 1);
+        let focused = i == n - 1;
+        wm::draw_window(fb, &tw.win, focused);
         let (ox, oy) = wm::content_origin(&tw.win);
         tw.term.render(fb, ox as u32, oy as u32);
+        wm::draw_resize_grip(fb, &tw.win, focused);
         tw.term.dirty = false;
         tw.win_dirty  = false;
     }
@@ -897,6 +899,12 @@ pub extern "C" fn _start() -> ! {
                     } else if wm::max_btn_hit(&tw.win, cx, cy) {
                         tw.win.toggle_maximize(w, h, TOPBAR_H as i32);
                         scene_dirty = true;
+                    } else if wm::resize_corner_hit(&tw.win, cx, cy) {
+                        tw.win.resizing  = true;
+                        tw.win.resize_mx = cx;
+                        tw.win.resize_my = cy;
+                        tw.win.resize_ow = tw.win.w;
+                        tw.win.resize_oh = tw.win.h;
                     } else if wm::titlebar_hit(&tw.win, cx, cy) {
                         tw.win.dragging = true;
                         tw.win.drag_ox  = cx - tw.win.x;
@@ -921,7 +929,7 @@ pub extern "C" fn _start() -> ! {
             }
         }
 
-        // Drag
+        // Drag / resize
         if left_down {
             if let Some(tw) = wins.last_mut() {
                 if tw.win.dragging {
@@ -931,10 +939,23 @@ pub extern "C" fn _start() -> ! {
                         tw.win.x = nx2; tw.win.y = ny2;
                         scene_dirty = true;
                     }
+                } else if tw.win.resizing {
+                    let nw = (tw.win.resize_ow + cx - tw.win.resize_mx).max(wm::WIN_MIN_W);
+                    let nh = (tw.win.resize_oh + cy - tw.win.resize_my).max(wm::WIN_MIN_H);
+                    // Also clamp so window doesn't exceed screen bounds
+                    let nw = nw.min(w - tw.win.x);
+                    let nh = nh.min(h - tw.win.y - 28);
+                    if nw != tw.win.w || nh != tw.win.h {
+                        tw.win.w = nw; tw.win.h = nh;
+                        scene_dirty = true;
+                    }
                 }
             }
         } else {
-            for tw in wins.iter_mut() { tw.win.dragging = false; }
+            for tw in wins.iter_mut() {
+                tw.win.dragging = false;
+                tw.win.resizing = false;
+            }
         }
 
         prev_btn = btn;

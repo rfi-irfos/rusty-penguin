@@ -114,8 +114,10 @@ impl Terminal {
             hist_pos:    0,
             saved_line:  Vec::new(),
         };
-        t.write_output(b"\x1b[32mRusty Penguin\x1b[0m psh 1.0\r\n");
-        t.write_output(b"\x1b[90mtype 'help' for commands\x1b[0m\r\n\x1b[32m>\x1b[0m ");
+        t.write_output(b"\x1b[32m  Rusty Penguin\x1b[0m \x1b[90mv1.0.0 \xB7 psh 1.0\x1b[0m\r\n");
+        t.write_output(b"\x1b[36m  Binary hardware. Ternary mind.\x1b[0m\r\n");
+        t.write_output(b"\x1b[90m  Type 'help' for commands.\x1b[0m\r\n\r\n");
+        t.write_output(b"\x1b[32mring3\x1b[0m@\x1b[36mrusty-penguin\x1b[90m:~$\x1b[0m ");
         Ok(t)
     }
 
@@ -378,7 +380,7 @@ impl Terminal {
                     self.hist_pos = self.history.len();
                 }
                 self.exec_command(&line[..line_len]);
-                self.write_output(b"\x1b[32m>\x1b[0m ");
+                self.write_output(b"\x1b[32mring3\x1b[0m@\x1b[36mrusty-penguin\x1b[90m:~$\x1b[0m ");
             }
             0x08 | 0x7F => {
                 if self.line_cursor > 0 {
@@ -407,14 +409,14 @@ impl Terminal {
                 self.line_cursor = 0;
                 self.hist_pos = self.history.len();
                 self.saved_line.clear();
-                self.write_output(b"\x1b[32m>\x1b[0m ");
+                self.write_output(b"\x1b[32mring3\x1b[0m@\x1b[36mrusty-penguin\x1b[90m:~$\x1b[0m ");
             }
             0x0C => {
                 // Ctrl+L — clear screen, redraw prompt and current line content
                 let blank = Cell::default();
                 for c in self.cells.iter_mut() { *c = blank; }
                 self.cur_col = 0; self.cur_row = 0;
-                self.write_output(b"\x1b[32m>\x1b[0m ");
+                self.write_output(b"\x1b[32mring3\x1b[0m@\x1b[36mrusty-penguin\x1b[90m:~$\x1b[0m ");
                 // Replay current line up to line_len
                 for i in 0..self.line_len {
                     let ch = self.line_buf[i];

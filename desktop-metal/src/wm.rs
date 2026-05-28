@@ -19,10 +19,14 @@ const BTN_CLOSE:   u32 = 0xEF4444;
 const BTN_MIN:     u32 = 0xF59E0B;
 const BTN_MAX:     u32 = 0x22C55E;
 
-// Traffic-light buttons: circles on the RIGHT side of the titlebar (Windows/Mint style).
+// Traffic-light buttons on the RIGHT side of the titlebar.
 const BTN_R:      i32 = 5;   // radius in pixels
 const BTN_GAP:    i32 = 14;  // center-to-center spacing
 const BTN_MARGIN: i32 = 12;  // distance from window right edge to close button center
+
+// Minimum window size — can't resize below the default terminal dimensions.
+pub const WIN_MIN_W: i32 = WINDOW_W;
+pub const WIN_MIN_H: i32 = WINDOW_H;
 
 pub struct Window {
     pub x: i32, pub y: i32,
@@ -30,6 +34,9 @@ pub struct Window {
     pub title: String,
     pub dragging: bool,
     pub drag_ox: i32, pub drag_oy: i32,
+    pub resizing: bool,
+    pub resize_mx: i32, pub resize_my: i32,  // mouse pos when resize started
+    pub resize_ow: i32, pub resize_oh: i32,  // window size when resize started
     pub minimized: bool,
     pub maximized: bool,
     pub restore_x: i32, pub restore_y: i32,
@@ -42,6 +49,8 @@ impl Window {
             x, y, w: WINDOW_W, h: WINDOW_H,
             title: title.to_string(),
             dragging: false, drag_ox: 0, drag_oy: 0,
+            resizing: false, resize_mx: 0, resize_my: 0,
+            resize_ow: WINDOW_W, resize_oh: WINDOW_H,
             minimized: false, maximized: false,
             restore_x: x, restore_y: y,
             restore_w: WINDOW_W, restore_h: WINDOW_H,
@@ -91,6 +100,13 @@ pub fn window_hit(win: &Window, mx: i32, my: i32) -> bool {
         && my >= win.y && my < win.y + win.h
 }
 
+// Bottom-right 12×12 corner for resize drag.
+pub fn resize_corner_hit(win: &Window, mx: i32, my: i32) -> bool {
+    !win.minimized && !win.maximized
+        && mx >= win.x + win.w - 12 && mx < win.x + win.w
+        && my >= win.y + win.h - 12 && my < win.y + win.h
+}
+
 pub fn content_origin(win: &Window) -> (i32, i32) {
     (win.x + 1, win.y + 1 + TITLEBAR_H)
 }
@@ -116,15 +132,12 @@ fn draw_btn(fb: &mut Framebuffer, cx: i32, cy: i32, color: u32) {
     }
 }
 
-// Update comment: buttons are now on the RIGHT side
-
 pub fn draw_window(fb: &mut Framebuffer, win: &Window, focused: bool) {
     if win.minimized || win.w <= 0 || win.h <= 0 { return; }
 
     let x = win.x; let y = win.y; let w = win.w; let h = win.h;
 
     // Graduated soft shadow — three layers from outermost to innermost.
-    // Each inner layer overwrites the previous, leaving only the ring visible.
     fb.fill_rect_s(x + 7, y + 7, w, h, 0x030709);
     fb.fill_rect_s(x + 5, y + 5, w, h, 0x040C12);
     fb.fill_rect_s(x + 3, y + 3, w, h, SHADOW);
@@ -133,13 +146,12 @@ pub fn draw_window(fb: &mut Framebuffer, win: &Window, focused: bool) {
     let border = if focused { BORDER_ACT } else { BORDER_DIM };
     fb.fill_rect(x as u32, y as u32, w as u32, h as u32, border);
 
-    // Titlebar — subtle vertical gradient: 0x10 lighter at top, base at bottom
+    // Titlebar — vertical gradient: brighter at top, base color at bottom
     let tb_col = if focused { TITLE_ACT } else { TITLE_DIM };
     let tr = (tb_col >> 16 & 0xFF) as u8;
     let tg = (tb_col >>  8 & 0xFF) as u8;
     let tb = (tb_col       & 0xFF) as u8;
     for dy in 0..TITLEBAR_H as u32 {
-        // top row: +0x14 on all channels; bottom row: +0x00 — no hue shift
         let hi = (0x14u32 * (TITLEBAR_H as u32 - 1 - dy) / (TITLEBAR_H as u32 - 1)) as u8;
         let row_col = (tr.saturating_add(hi) as u32) << 16
                     | (tg.saturating_add(hi) as u32) << 8
@@ -156,8 +168,8 @@ pub fn draw_window(fb: &mut Framebuffer, win: &Window, focused: bool) {
         fb.fill_rect((x + 1) as u32, cy2 as u32, (w - 2) as u32, ch as u32, CONTENT_BG);
     }
 
-    // Title text — centered in the space left of the buttons
-    let right_reserved = BTN_MARGIN + BTN_GAP * 2 + BTN_R + 6; // ~49px
+    // Title text — use gradient-correct background so there's no visible box
+    let right_reserved = BTN_MARGIN + BTN_GAP * 2 + BTN_R + 6;
     let left_reserved  = 6;
     let avail_w = (w - right_reserved - left_reserved).max(0);
     let max_chars = (avail_w / 8).max(0) as usize;
@@ -166,12 +178,35 @@ pub fn draw_window(fb: &mut Framebuffer, win: &Window, focused: bool) {
     let title_px_w = title.len() as i32 * 8;
     let title_x = x + left_reserved + (avail_w - title_px_w).max(0) / 2;
     let txt_col = if focused { TXT_ACT } else { TXT_DIM };
-    let txt_y   = y + 1 + (TITLEBAR_H - 8) / 2;
-    fb.draw_str(title_x as u32, txt_y as u32, title, txt_col, tb_col);
+    let txt_dy  = (TITLEBAR_H - 8) / 2;  // pixel row inside the titlebar
+    let txt_hi  = (0x14u32 * (TITLEBAR_H as u32 - 1 - txt_dy as u32) / (TITLEBAR_H as u32 - 1)) as u8;
+    let txt_bg  = (tr.saturating_add(txt_hi) as u32) << 16
+               | (tg.saturating_add(txt_hi) as u32) << 8
+               |  tb.saturating_add(txt_hi) as u32;
+    let txt_y   = y + 1 + txt_dy;
+    fb.draw_str(title_x as u32, txt_y as u32, title, txt_col, txt_bg);
 
-    // Traffic-light buttons (left side)
+    // Traffic-light buttons on the RIGHT side
     let bcy = btn_cy(win);
     draw_btn(fb, close_cx(win), bcy, BTN_CLOSE);
     draw_btn(fb, min_cx(win),   bcy, BTN_MIN);
     draw_btn(fb, max_cx(win),   bcy, BTN_MAX);
+}
+
+/// Called AFTER the terminal renders so the grip is drawn on top of any content.
+pub fn draw_resize_grip(fb: &mut Framebuffer, win: &Window, focused: bool) {
+    if win.minimized || win.maximized || win.w < 20 || win.h < 20 { return; }
+    let col = if focused { 0x475569 } else { 0x1E293B };
+    // Three 2-pixel dots along the bottom-right diagonal, inside the content area
+    let bx = win.x + win.w - 3;
+    let by = win.y + win.h - 3;
+    for i in 0..3i32 {
+        let px = (bx - i * 4) as u32;
+        let py = (by - i * 4) as u32;
+        if (bx - i * 4) > win.x + 1 && (by - i * 4) > win.y + TITLEBAR_H + 1 {
+            fb.set_pixel(px, py, col);
+            fb.set_pixel(px.wrapping_sub(1), py, col);
+            fb.set_pixel(px, py.wrapping_sub(1), col);
+        }
+    }
 }
