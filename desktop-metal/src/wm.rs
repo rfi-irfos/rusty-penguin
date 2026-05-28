@@ -101,11 +101,13 @@ pub fn window_hit(win: &Window, mx: i32, my: i32) -> bool {
         && my >= win.y && my < win.y + win.h
 }
 
-// Bottom-right 12×12 corner for resize drag.
+// Bottom-right corner for resize drag. 20×20 hit zone so it's actually
+// grabbable with a mouse — the visible grip is still small (drawn by
+// draw_resize_grip) but the click area extends inward.
 pub fn resize_corner_hit(win: &Window, mx: i32, my: i32) -> bool {
     !win.minimized && !win.maximized
-        && mx >= win.x + win.w - 12 && mx < win.x + win.w
-        && my >= win.y + win.h - 12 && my < win.y + win.h
+        && mx >= win.x + win.w - 20 && mx < win.x + win.w
+        && my >= win.y + win.h - 20 && my < win.y + win.h
 }
 
 pub fn content_origin(win: &Window) -> (i32, i32) {
@@ -211,17 +213,22 @@ pub fn draw_window(fb: &mut Framebuffer, win: &Window, focused: bool) {
 /// Called AFTER the terminal renders so the grip is drawn on top of any content.
 pub fn draw_resize_grip(fb: &mut Framebuffer, win: &Window, focused: bool) {
     if win.minimized || win.maximized || win.w < 20 || win.h < 20 { return; }
-    let col = if focused { 0x475569 } else { 0x1E293B };
-    // Three 2-pixel dots along the bottom-right diagonal, inside the content area
-    let bx = win.x + win.w - 3;
-    let by = win.y + win.h - 3;
-    for i in 0..3i32 {
-        let px = (bx - i * 4) as u32;
-        let py = (by - i * 4) as u32;
-        if (bx - i * 4) > win.x + 1 && (by - i * 4) > win.y + TITLEBAR_H + 1 {
-            fb.set_pixel(px, py, col);
-            fb.set_pixel(px.wrapping_sub(1), py, col);
-            fb.set_pixel(px, py.wrapping_sub(1), col);
+    let col = if focused { 0x6B7280 } else { 0x2C2C38 };
+    // Diagonal striped grip in the bottom-right corner. Six 3-pixel ticks
+    // along the anti-diagonal makes the affordance visible without
+    // overpowering the window content.
+    let bx = win.x + win.w - 2;
+    let by = win.y + win.h - 2;
+    for i in 0..6i32 {
+        let off = i * 3;
+        if (bx - off) <= win.x + 1 || (by - off) <= win.y + TITLEBAR_H + 1 { break; }
+        // Each tick is a 3-pixel anti-diagonal segment.
+        for k in 0..3i32 {
+            let px = bx - off + k;
+            let py = by - off - k;
+            if px >= 0 && py >= 0 && px < win.x + win.w && py < win.y + win.h {
+                fb.set_pixel(px as u32, py as u32, col);
+            }
         }
     }
 }
