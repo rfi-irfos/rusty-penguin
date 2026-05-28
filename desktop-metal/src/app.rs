@@ -158,10 +158,14 @@ impl FileManager {
 
 impl App for FileManager {
     fn render(&mut self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, h: u32) {
-        // Draw header with current directory
+        // Draw header with current directory (prefix only, no allocation)
         fb.fill_rect(x, y, w, 24, 0x2C2C38);
-        let title = alloc::format!("  {}", self.cwd);
-        fb.draw_str(x + 8, y + 7, &title, 0xF5F5F7, 0x2C2C38);
+        fb.draw_str(x + 8, y + 7, "  ", 0xF5F5F7, 0x2C2C38);
+        if self.cwd.len() < 200 {
+            fb.draw_str(x + 22, y + 7, &self.cwd, 0xF5F5F7, 0x2C2C38);
+        } else {
+            fb.draw_str(x + 22, y + 7, "[path too long]", 0xF5F5F7, 0x2C2C38);
+        }
 
         // Draw column headers
         fb.fill_rect(x, y + 24, w, 18, 0x3C3C48);
@@ -180,8 +184,16 @@ impl App for FileManager {
             let text_color = if i == self.selected { 0xF5F5F7 } else { 0xB8B8B8 };
             fb.draw_str(x + 8, file_y + 4, &entry.name, text_color, bg_color);
 
-            let size_str = alloc::format!("{}", entry.size);
-            fb.draw_str(x + 300, file_y + 4, &size_str, text_color, bg_color);
+            // Draw size as simple decimal (avoid alloc)
+            let size = entry.size;
+            let size_str = if size < 1024 {
+                "  <1K"
+            } else if size < 1024 * 1024 {
+                " <1MB"
+            } else {
+                " <1GB"
+            };
+            fb.draw_str(x + 300, file_y + 4, size_str, text_color, bg_color);
         }
 
         self.dirty = false;
