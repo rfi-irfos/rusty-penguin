@@ -526,21 +526,27 @@ fn draw_taskbar_win_btns(fb: &mut Framebuffer, term_wins: &[TermWin]) {
         if x + w >= fw as i32 { break; }
         let is_focused   = slot == n - 1;
         let is_minimized = tw.win.minimized;
-        let bg  = if is_minimized { 0x0D1520u32 } else { 0x152230u32 };
-        let txt = if is_minimized { DIM } else { WHITE };
-        let accent = if is_focused { BLUE } else { BORDER };
-        // Rounded pill
-        fb.fill_rounded_rect(x, y, w, h, 4, bg);
-        // Top accent strip (focused = blue, unfocused = dim)
-        fb.fill_rect_s(x + 4, y, w - 8, 2, accent);
-        // App icon dot (small filled circle in accent color)
+        // Modern colors that match system palette
+        let bg  = if is_minimized { 0x1A1A24u32 } else { 0x2C2C38u32 };
+        let txt = if is_minimized { 0x6B7280u32 } else { WHITE };
+        let accent = if is_focused { BLUE } else { 0x3C3C48u32 };
+        // Rounded pill with subtle shadow
+        fb.fill_rounded_rect(x - 1, y - 1, w + 2, h + 2, 5, 0x0A0A14);
+        fb.fill_rounded_rect(x, y, w, h, 5, bg);
+        // Accent indicator (bottom stripe for focused)
+        if is_focused {
+            fb.fill_rect_s(x + 2, y + h - 2, w - 4, 2, accent);
+        } else {
+            fb.fill_rect_s(x + 2, y + h - 1, w - 4, 1, 0x3C3C48);
+        }
+        // App indicator dot
         fb.fill_circle(x + 6, y + h / 2, 2, accent);
-        // Show only the app name (before " - ") when space is tight.
+        // Window title with proper truncation
         let title = tw.win.title.as_str();
         let short = title.find(" - ").map(|i| &title[..i]).unwrap_or(title);
         let max_chars = ((w - 18) / 8).max(0) as usize;
         let lbl = &short[..max_chars.min(short.len())];
-        fb.draw_str((x + 14) as u32, (y + 5) as u32, lbl, txt, bg);
+        fb.draw_str((x + 14) as u32, (y + 4) as u32, lbl, txt, bg);
     }
 }
 
@@ -639,17 +645,20 @@ fn ctx_menu_bounds(mx: i32, my: i32, fw: u32, fh: u32) -> (i32, i32, i32, i32) {
 
 fn draw_ctx_menu(fb: &mut Framebuffer, mx: i32, my: i32) {
     let (x, y, w, h) = ctx_menu_bounds(mx, my, fb.width, fb.height);
-    fb.fill_rounded_rect(x + 3, y + 3, w, h, 5, 0x030810); // shadow
-    fb.fill_rounded_rect(x, y, w, h, 5, 0x0F1E2E);
-    fb.fill_rect_s(x, y, w, 1, 0x334155);  // top border
+    // Modern shadow effect
+    fb.fill_rounded_rect(x + 2, y + 2, w, h, 6, 0x0A0A14);
+    // Menu background matching system palette
+    fb.fill_rounded_rect(x, y, w, h, 6, 0x1A1A24);
+    // Top accent line
+    fb.fill_rect_s(x, y, w, 2, GREEN);
     for (i, (label, color)) in CTX_ITEMS.iter().enumerate() {
-        let iy = y + 3 + i as i32 * 20;
-        let bg = if i % 2 == 0 { 0x0F1E2Eu32 } else { 0x111F30u32 };
+        let iy = y + 2 + i as i32 * 20;
+        let bg = 0x1A1A24u32;  // consistent background
         fb.fill_rect_s(x + 1, iy, w - 2, 20, bg);
-        fb.fill_rect_s(x + 2, iy + 4, 3, 12, *color); // color accent
+        // Color accent bar (smaller, refined)
+        fb.fill_rect_s(x + 2, iy + 4, 2, 12, *color);
         fb.draw_str((x + 8) as u32, (iy + 6) as u32, label, *color, bg);
     }
-    fb.fill_rect_s(x + 1, y + h - 2, w - 2, 1, 0x253545);
 }
 
 fn ctx_menu_item_hit(mx: i32, my: i32, cmx: i32, cmy: i32, fw: u32, fh: u32) -> Option<usize> {
