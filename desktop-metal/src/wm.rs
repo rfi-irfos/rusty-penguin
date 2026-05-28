@@ -18,7 +18,11 @@ const TXT_ACT:     u32 = 0xE2E8F0;
 const BTN_CLOSE:   u32 = 0xEF4444;
 const BTN_MIN:     u32 = 0xF59E0B;
 const BTN_MAX:     u32 = 0x22C55E;
-// BTN_SYM color is computed inline in draw_btn (half-brightness of button color)
+
+// Traffic-light buttons: circles on the LEFT side of the titlebar.
+const BTN_R:    i32 = 5;   // radius in pixels
+const BTN_GAP:  i32 = 14;  // center-to-center spacing
+const BTN_LEFT: i32 = 10;  // x offset of first button center from window left
 
 pub struct Window {
     pub x: i32, pub y: i32,
@@ -59,18 +63,19 @@ impl Window {
     }
 }
 
-fn btn_y(win: &Window) -> i32 { win.y + (TITLEBAR_H - 10) / 2 }
-fn close_x(win: &Window) -> i32 { win.x + win.w - 14 }
-fn min_x  (win: &Window) -> i32 { win.x + win.w - 26 }
-fn max_x  (win: &Window) -> i32 { win.x + win.w - 38 }
+fn btn_cy(win: &Window) -> i32   { win.y + TITLEBAR_H / 2 }
+fn close_cx(win: &Window) -> i32 { win.x + BTN_LEFT }
+fn min_cx(win: &Window) -> i32   { win.x + BTN_LEFT + BTN_GAP }
+fn max_cx(win: &Window) -> i32   { win.x + BTN_LEFT + BTN_GAP * 2 }
 
-fn hit(mx: i32, my: i32, x: i32, y: i32) -> bool {
-    mx >= x && mx < x + 10 && my >= y && my < y + 10
+fn hit_btn(mx: i32, my: i32, cx: i32, cy: i32) -> bool {
+    let dx = mx - cx; let dy = my - cy;
+    dx * dx + dy * dy <= (BTN_R + 1) * (BTN_R + 1)
 }
 
-pub fn close_btn_hit(win: &Window, mx: i32, my: i32) -> bool { hit(mx, my, close_x(win), btn_y(win)) }
-pub fn min_btn_hit  (win: &Window, mx: i32, my: i32) -> bool { hit(mx, my, min_x(win),   btn_y(win)) }
-pub fn max_btn_hit  (win: &Window, mx: i32, my: i32) -> bool { hit(mx, my, max_x(win),   btn_y(win)) }
+pub fn close_btn_hit(win: &Window, mx: i32, my: i32) -> bool { hit_btn(mx, my, close_cx(win), btn_cy(win)) }
+pub fn min_btn_hit  (win: &Window, mx: i32, my: i32) -> bool { hit_btn(mx, my, min_cx(win),   btn_cy(win)) }
+pub fn max_btn_hit  (win: &Window, mx: i32, my: i32) -> bool { hit_btn(mx, my, max_cx(win),   btn_cy(win)) }
 
 pub fn titlebar_hit(win: &Window, mx: i32, my: i32) -> bool {
     mx >= win.x && mx < win.x + win.w
@@ -90,19 +95,16 @@ pub fn content_origin(win: &Window) -> (i32, i32) {
     (win.x + 1, win.y + 1 + TITLEBAR_H)
 }
 
-fn draw_btn(fb: &mut Framebuffer, x: i32, y: i32, color: u32, sym: char, bg: u32) {
-    if x < 0 || y < 0 { return; }
-    let xu = x as u32; let yu = y as u32;
-    fb.fill_rect(xu, yu, 10, 10, color);
-    // Clip corners to titlebar bg for a rounded look
-    fb.set_pixel(xu,     yu,     bg);
-    fb.set_pixel(xu + 9, yu,     bg);
-    fb.set_pixel(xu,     yu + 9, bg);
-    fb.set_pixel(xu + 9, yu + 9, bg);
-    let dark = (((color >> 16) & 0xFF) / 2) << 16
-             | (((color >> 8)  & 0xFF) / 2) << 8
-             |  ((color        & 0xFF) / 2);
-    fb.draw_char(xu + 1, yu + 1, sym, dark, color);
+fn darken(c: u32) -> u32 {
+    ((((c >> 16) & 0xFF) * 2 / 3) << 16)
+  | ((((c >>  8) & 0xFF) * 2 / 3) << 8)
+  |   (((c       & 0xFF) * 2 / 3))
+}
+
+fn draw_btn(fb: &mut Framebuffer, cx: i32, cy: i32, color: u32) {
+    if cx < BTN_R + 2 || cy < BTN_R + 2 { return; }
+    fb.fill_circle(cx, cy, BTN_R + 1, darken(color));
+    fb.fill_circle(cx, cy, BTN_R,     color);
 }
 
 pub fn draw_window(fb: &mut Framebuffer, win: &Window, focused: bool) {
@@ -122,27 +124,37 @@ pub fn draw_window(fb: &mut Framebuffer, win: &Window, focused: bool) {
     // Titlebar
     let tb_col = if focused { TITLE_ACT } else { TITLE_DIM };
     fb.fill_rect((x + 1) as u32, (y + 1) as u32, (w - 2) as u32, TITLEBAR_H as u32, tb_col);
+    // Subtle top-row highlight for depth
+    let hi = (((tb_col >> 16 & 0xFF).saturating_add(0x10)) << 16)
+           | (((tb_col >>  8 & 0xFF).saturating_add(0x10)) << 8)
+           |   (tb_col       & 0xFF).saturating_add(0x10);
+    fb.fill_rect((x + 1) as u32, (y + 1) as u32, (w - 2) as u32, 3, hi);
     // Bottom edge of titlebar
     fb.fill_rect((x + 1) as u32, (y + 1 + TITLEBAR_H) as u32, (w - 2) as u32, 1, TITLE_LINE);
 
     // Content area
-    let cy = y + 2 + TITLEBAR_H;
-    let ch = h - 3 - TITLEBAR_H;
+    let cy2 = y + 2 + TITLEBAR_H;
+    let ch  = h - 3 - TITLEBAR_H;
     if ch > 0 {
-        fb.fill_rect((x + 1) as u32, cy as u32, (w - 2) as u32, ch as u32, CONTENT_BG);
+        fb.fill_rect((x + 1) as u32, cy2 as u32, (w - 2) as u32, ch as u32, CONTENT_BG);
     }
 
-    // Title text
-    let max_chars = ((w - 54) / 8).max(0) as usize;
+    // Title text — centered in the space to the right of the buttons
+    let left_reserved  = BTN_LEFT + BTN_GAP * 2 + BTN_R + 6; // ~43px
+    let right_reserved = 8;
+    let avail_w = (w - left_reserved - right_reserved).max(0);
+    let max_chars = (avail_w / 8).max(0) as usize;
     let n_bytes = max_chars.min(win.title.len());
     let title = &win.title[..n_bytes];
+    let title_px_w = title.len() as i32 * 8;
+    let title_x = x + left_reserved + (avail_w - title_px_w).max(0) / 2;
     let txt_col = if focused { TXT_ACT } else { TXT_DIM };
-    let txt_y = y + 1 + (TITLEBAR_H - 8) / 2;
-    fb.draw_str((x + 6) as u32, txt_y as u32, title, txt_col, tb_col);
+    let txt_y   = y + 1 + (TITLEBAR_H - 8) / 2;
+    fb.draw_str(title_x as u32, txt_y as u32, title, txt_col, tb_col);
 
-    // Buttons
-    let by = btn_y(win);
-    draw_btn(fb, close_x(win), by, BTN_CLOSE, 'x', tb_col);
-    draw_btn(fb, min_x(win),   by, BTN_MIN,   '-', tb_col);
-    draw_btn(fb, max_x(win),   by, BTN_MAX,   '+', tb_col);
+    // Traffic-light buttons (left side)
+    let bcy = btn_cy(win);
+    draw_btn(fb, close_cx(win), bcy, BTN_CLOSE);
+    draw_btn(fb, min_cx(win),   bcy, BTN_MIN);
+    draw_btn(fb, max_cx(win),   bcy, BTN_MAX);
 }
