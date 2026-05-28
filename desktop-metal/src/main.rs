@@ -413,10 +413,10 @@ fn draw_topbar(fb: &mut Framebuffer, time: &str, s: &SysStats, ticks: u64) {
 
 struct Launcher { label: &'static str, cmd: Option<&'static str>, title: &'static str, color: u32 }
 const LAUNCHERS: &[Launcher] = &[
-    Launcher { label: " psh ", cmd: None,               title: "psh — Terminal",   color: GREEN },
-    Launcher { label: " ps  ", cmd: Some("ps\n"),       title: "ps — Processes",   color: BLUE  },
-    Launcher { label: " ai  ", cmd: Some("ai 32\n"),    title: "ai — Inference",   color: AMBER },
-    Launcher { label: " trit", cmd: Some("trit 42\n"),  title: "trit — Ternary",   color: 0xC084FC },
+    Launcher { label: " psh ", cmd: None,               title: "psh - Terminal",   color: GREEN },
+    Launcher { label: " ps  ", cmd: Some("ps\n"),       title: "ps - Processes",   color: BLUE  },
+    Launcher { label: " ai  ", cmd: Some("ai 32\n"),    title: "ai - Inference",   color: AMBER },
+    Launcher { label: " trit", cmd: Some("trit 42\n"),  title: "trit - Ternary",   color: 0xC084FC },
 ];
 
 
@@ -709,7 +709,7 @@ pub extern "C" fn _start() -> ! {
 
     let mut stats = sample_stats();
     draw_scene_static(&mut fb);
-    draw_desktop_icons(&mut fb);
+    draw_desktop_icons(&mut fb, None);
     let up0 = rtc_str();
     draw_topbar(&mut fb, up0.as_str(), &stats, sys_ticks());
 

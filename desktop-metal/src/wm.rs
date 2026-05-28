@@ -132,21 +132,27 @@ fn draw_btn(fb: &mut Framebuffer, cx: i32, cy: i32, color: u32) {
     }
 }
 
+// Horizontal clip from each side for the inner fill (inner_r=7) at the top corner zone.
+// Index = row offset dy from y+1. Valid for dy in 0..7; beyond that, no clip.
+const TOP_INNER_CLIP: [i32; 7] = [7, 4, 3, 2, 1, 1, 1];
+
 pub fn draw_window(fb: &mut Framebuffer, win: &Window, focused: bool) {
     if win.minimized || win.w <= 0 || win.h <= 0 { return; }
 
     let x = win.x; let y = win.y; let w = win.w; let h = win.h;
 
-    // Graduated soft shadow — three layers from outermost to innermost.
-    fb.fill_rect_s(x + 7, y + 7, w, h, 0x030709);
-    fb.fill_rect_s(x + 5, y + 5, w, h, 0x040C12);
-    fb.fill_rect_s(x + 3, y + 3, w, h, SHADOW);
+    // Soft shadow — rounded to match the window shape.
+    fb.fill_rounded_rect(x + 7, y + 7, w, h, 8, 0x030709);
+    fb.fill_rounded_rect(x + 4, y + 4, w, h, 8, 0x040C12);
+    fb.fill_rounded_rect(x + 2, y + 2, w, h, 8, SHADOW);
 
-    // Outer border (1px) — color signals focus
+    // Outer border (1px) — rounded corners, color signals focus.
     let border = if focused { BORDER_ACT } else { BORDER_DIM };
-    fb.fill_rect(x as u32, y as u32, w as u32, h as u32, border);
+    fb.fill_rounded_rect(x, y, w, h, 8, border);
 
-    // Titlebar — vertical gradient: brighter at top, base color at bottom
+    // Titlebar — vertical gradient, rows clipped to respect the rounded top corners.
+    // Inner radius = 7 (= outer 8 − 1px border). TOP_INNER_CLIP gives the extra
+    // horizontal inset needed for the first 7 rows inside the border.
     let tb_col = if focused { TITLE_ACT } else { TITLE_DIM };
     let tr = (tb_col >> 16 & 0xFF) as u8;
     let tg = (tb_col >>  8 & 0xFF) as u8;
@@ -156,19 +162,22 @@ pub fn draw_window(fb: &mut Framebuffer, win: &Window, focused: bool) {
         let row_col = (tr.saturating_add(hi) as u32) << 16
                     | (tg.saturating_add(hi) as u32) << 8
                     |  tb.saturating_add(hi) as u32;
-        fb.fill_rect((x + 1) as u32, (y + 1 + dy as i32) as u32, (w - 2) as u32, 1, row_col);
+        let clip = if (dy as usize) < TOP_INNER_CLIP.len() { TOP_INNER_CLIP[dy as usize] } else { 0 };
+        let rx = x + 1 + clip;
+        let rw = (w - 2 - clip * 2).max(0);
+        if rw > 0 { fb.fill_rect_s(rx, y + 1 + dy as i32, rw, 1, row_col); }
     }
     // Bottom edge of titlebar
     fb.fill_rect((x + 1) as u32, (y + 1 + TITLEBAR_H) as u32, (w - 2) as u32, 1, TITLE_LINE);
 
-    // Content area
+    // Content area — rounded bottom corners to match the window border.
     let cy2 = y + 2 + TITLEBAR_H;
     let ch  = h - 3 - TITLEBAR_H;
     if ch > 0 {
-        fb.fill_rect((x + 1) as u32, cy2 as u32, (w - 2) as u32, ch as u32, CONTENT_BG);
+        fb.fill_rounded_rect(x + 1, cy2, w - 2, ch, 7, CONTENT_BG);
     }
 
-    // Title text — use gradient-correct background so there's no visible box
+    // Title text
     let right_reserved = BTN_MARGIN + BTN_GAP * 2 + BTN_R + 6;
     let left_reserved  = 6;
     let avail_w = (w - right_reserved - left_reserved).max(0);
@@ -178,16 +187,14 @@ pub fn draw_window(fb: &mut Framebuffer, win: &Window, focused: bool) {
     let title_px_w = title.len() as i32 * 8;
     let title_x = x + left_reserved + (avail_w - title_px_w).max(0) / 2;
     let txt_col = if focused { TXT_ACT } else { TXT_DIM };
-    let txt_dy  = (TITLEBAR_H - 8) / 2;  // pixel row inside the titlebar
+    let txt_dy  = (TITLEBAR_H - 8) / 2;
     let txt_hi  = (0x14u32 * (TITLEBAR_H as u32 - 1 - txt_dy as u32) / (TITLEBAR_H as u32 - 1)) as u8;
     let txt_bg  = (tr.saturating_add(txt_hi) as u32) << 16
                | (tg.saturating_add(txt_hi) as u32) << 8
                |  tb.saturating_add(txt_hi) as u32;
-    let txt_y   = y + 1 + txt_dy;
-    fb.draw_str(title_x as u32, txt_y as u32, title, txt_col, txt_bg);
+    fb.draw_str(title_x as u32, (y + 1 + txt_dy) as u32, title, txt_col, txt_bg);
 
-    // Traffic-light buttons on the RIGHT side.
-    // Unfocused windows show desaturated/dimmed dots (macOS convention).
+    // Traffic-light buttons — dim when unfocused (macOS convention).
     let bcy = btn_cy(win);
     if focused {
         draw_btn(fb, close_cx(win), bcy, BTN_CLOSE);
