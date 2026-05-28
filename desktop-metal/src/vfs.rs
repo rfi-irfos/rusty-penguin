@@ -25,7 +25,35 @@ impl Vfs {
                    ls\n\
                    help\n");
         v.write("motd.txt",
-            b"The penguin runs bare metal today.\n");
+            b" _______________________________________________\n\
+               < Welcome to RustyPenguin 1.0.0 - bare metal! >\n\
+               -----------------------------------------------\n\
+                   \\  ^___^\n\
+                    \\ (o o)\n\
+                      ( =^= )\n\
+                      (\"   \")\n");
+        v.write("QUICKSTART.txt",
+            b"RustyPenguin Quick Start\n\
+              =======================\n\
+              \n\
+              This is a bare-metal x86_64 OS written entirely in Rust.\n\
+              No kernel, no glibc - pure systems programming.\n\
+              \n\
+              Key Commands:\n\
+              - help           : show all available commands\n\
+              - ls             : list files\n\
+              - nano <file>    : edit files\n\
+              - demo.psh       : run full feature demo\n\
+              - sysinfo        : show system info\n\
+              - lsb_release -a : show distro info\n\
+              \n\
+              Scripting:\n\
+              - psh script.psh : run shell script\n\
+              - Supports: for/do/done, if/then/else/fi, pipes (|), redirects (>, >>)\n\
+              \n\
+              For more info:\n\
+              - cat readme.txt\n\
+              - cat QUICKSTART.txt\n");
         v.write("demo.psh",
             b"#!/bin/psh\n\
               # RustyPenguin full-feature demo\n\
