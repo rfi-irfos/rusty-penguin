@@ -186,11 +186,18 @@ pub fn draw_window(fb: &mut Framebuffer, win: &Window, focused: bool) {
     let txt_y   = y + 1 + txt_dy;
     fb.draw_str(title_x as u32, txt_y as u32, title, txt_col, txt_bg);
 
-    // Traffic-light buttons on the RIGHT side
+    // Traffic-light buttons on the RIGHT side.
+    // Unfocused windows show desaturated/dimmed dots (macOS convention).
     let bcy = btn_cy(win);
-    draw_btn(fb, close_cx(win), bcy, BTN_CLOSE);
-    draw_btn(fb, min_cx(win),   bcy, BTN_MIN);
-    draw_btn(fb, max_cx(win),   bcy, BTN_MAX);
+    if focused {
+        draw_btn(fb, close_cx(win), bcy, BTN_CLOSE);
+        draw_btn(fb, min_cx(win),   bcy, BTN_MIN);
+        draw_btn(fb, max_cx(win),   bcy, BTN_MAX);
+    } else {
+        draw_btn(fb, close_cx(win), bcy, 0x5C2020);
+        draw_btn(fb, min_cx(win),   bcy, 0x5C4008);
+        draw_btn(fb, max_cx(win),   bcy, 0x134D20);
+    }
 }
 
 /// Called AFTER the terminal renders so the grip is drawn on top of any content.

@@ -448,31 +448,36 @@ fn dicon_rect(i: usize) -> (u32, u32, u32, u32) {
     (DICON_X, y, DICON_W, DICON_H)
 }
 
-fn draw_desktop_icons(fb: &mut Framebuffer) {
+fn draw_desktop_icons(fb: &mut Framebuffer, hover_icon: Option<usize>) {
     for (i, icon) in DESKTOP_ICONS.iter().enumerate() {
         let (x, y, w, h) = dicon_rect(i);
         let img_h: u32 = h - 12;
         let ix = x as i32; let iy = y as i32;
         let iw = w as i32; let ih = img_h as i32;
-        // Half-brightness border color (correct bit math, no alpha tricks)
-        let border_col = ((icon.color >> 16 & 0xFF) / 2) << 16
-                       | ((icon.color >>  8 & 0xFF) / 2) << 8
-                       |  ((icon.color      & 0xFF) / 2);
-        // Drop shadow
-        fb.fill_rounded_rect(ix + 2, iy + 2, iw, ih, 6, 0x040C14);
-        // Colored 1px border ring, then inner fill
+        let hovered = hover_icon == Some(i);
+        // Border color: full brightness on hover, half-brightness normally
+        let border_col = if hovered { icon.color } else {
+            ((icon.color >> 16 & 0xFF) / 2) << 16
+          | ((icon.color >>  8 & 0xFF) / 2) << 8
+          |  ((icon.color      & 0xFF) / 2)
+        };
+        let inner_bg = if hovered { 0x132435u32 } else { 0x0D1E2Cu32 };
+        // Drop shadow (slightly larger on hover for lift effect)
+        let sd = if hovered { 3 } else { 2 };
+        fb.fill_rounded_rect(ix + sd, iy + sd, iw, ih, 6, 0x040C14);
+        // Colored border ring, then inner fill
         fb.fill_rounded_rect(ix,     iy,     iw,     ih,     6, border_col);
-        fb.fill_rounded_rect(ix + 1, iy + 1, iw - 2, ih - 2, 5, 0x0D1E2C);
-        // Colored top accent strip (inside the border)
+        fb.fill_rounded_rect(ix + 1, iy + 1, iw - 2, ih - 2, 5, inner_bg);
+        // Colored top accent strip
         fb.fill_rect_s(ix + 1, iy + 1, iw - 2, 4, icon.color);
         // 2x bitmap centered
         let bx = x + (w - 16) / 2;
         let by = y + (img_h - 16) / 2;
-        fb.draw_bitmap_2x(bx, by, icon.bitmap, icon.color, 0x0D1E2C);
-        // Label with background pill
+        fb.draw_bitmap_2x(bx, by, icon.bitmap, icon.color, inner_bg);
+        // Label
         let lw = icon.label.len() as u32 * 8;
         let lx = if lw < w { x + (w - lw) / 2 } else { x };
-        let label_bg = 0x0B1726u32;
+        let label_bg = if hovered { 0x0F2030u32 } else { 0x0B1726u32 };
         fb.fill_rect(lx.saturating_sub(2), y + img_h + 2, lw + 4, 11, label_bg);
         fb.draw_str(lx, y + img_h + 4, icon.label, icon.color, label_bg);
     }
@@ -668,9 +673,9 @@ fn open_term(w: i32, h: i32, n: usize, l: &Launcher) -> Option<TermWin> {
 
 // ---- Full scene recomposite ─────────────────────────────────────────────────
 
-fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, ctx_menu: Option<(i32,i32)>, stats: &SysStats, blink_on: bool) {
+fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, ctx_menu: Option<(i32,i32)>, stats: &SysStats, blink_on: bool, hover_icon: Option<usize>) {
     draw_scene_static(fb);
-    draw_desktop_icons(fb);
+    draw_desktop_icons(fb, hover_icon);
     draw_taskbar_win_btns(fb, wins);
     let up = rtc_str();
     let n = wins.len();
@@ -687,6 +692,7 @@ fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, 
     if start_menu { draw_start_menu(fb); }
     if let Some((cmx, cmy)) = ctx_menu { draw_ctx_menu(fb, cmx, cmy); }
     draw_topbar(fb, up.as_str(), stats, sys_ticks());
+    draw_taskbar_clock(fb, up.as_str());
 }
 
 // ── Entry point ──────────────────────────────────────────────────────────────
@@ -721,6 +727,7 @@ pub extern "C" fn _start() -> ! {
     let mut scene_dirty = false;
     let mut start_menu_open = false;
     let mut ctx_menu: Option<(i32, i32)> = None;
+    let mut hover_icon: Option<usize> = None;
 
     if let Some(tw) = open_term(w, h, 0, &LAUNCHERS[0]) {
         wins.push(tw);
@@ -789,6 +796,13 @@ pub extern "C" fn _start() -> ! {
 
         // Update cursor to new position so click/drag handlers see current coords.
         cx = mouse.x; cy = mouse.y;
+
+        // Desktop icon hover — triggers a recomposite when it changes.
+        let new_hover = desktop_icon_hit(cx, cy);
+        if new_hover != hover_icon {
+            hover_icon = new_hover;
+            scene_dirty = true;
+        }
 
         let left_down  = (btn & 0x01) != 0;
         let left_edge  = (mouse.btn_pressed & 0x01) != 0;
@@ -935,7 +949,7 @@ pub extern "C" fn _start() -> ! {
             restore_cursor_bg(&mut fb, prev_cx, prev_cy, &cbuf);
 
             if any_chrome {
-                recomposite(&mut fb, &mut wins, start_menu_open, ctx_menu, &stats, blink_on);
+                recomposite(&mut fb, &mut wins, start_menu_open, ctx_menu, &stats, blink_on, hover_icon);
                 scene_dirty = false;
             } else if any_content {
                 let n = wins.len();
@@ -953,6 +967,7 @@ pub extern "C" fn _start() -> ! {
             if topbar_due && !any_chrome {
                 let up = rtc_str();
                 draw_topbar(&mut fb, up.as_str(), &stats, now_ticks);
+                draw_taskbar_clock(&mut fb, up.as_str());
             }
 
             // Re-stamp the focused terminal cursor over whatever restore_cursor_bg
