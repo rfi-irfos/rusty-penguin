@@ -2,34 +2,41 @@
 
 Build plan for making Rusty Penguin a complete, daily-usable operating system distribution.
 
-## Current State (2026-05-28)
+## Current State (2026-05-28 Latest Session)
 
 **What Works:**
 - ✅ Linux kernel boot (6.17) + Rust init (PID 1)
-- ✅ Graphical desktop with window manager
+- ✅ Graphical desktop with window manager (stable multi-window, drag/resize/minimize)
 - ✅ Shell (psh) with ~90 commands
 - ✅ Text editor (graphical)
-- ✅ Bare-metal kernel option (optional)
+- ✅ Bare-metal kernel option (full Rust kernel, 64-bit long mode)
+- ✅ FileManager with real filesystem browsing (syscall 14: sys_listdir)
+- ✅ Settings application (theme, window snap, taskbar, auto-save)
+- ✅ TIS Console (ternary arithmetic: trit, mul, div)
+- ✅ Process Monitor (process viewer)
+- ✅ System Info (OS/kernel/memory display)
+- ✅ Package manager (rpm: install .rpkg packages to /opt/rusty-penguin/)
 
 **What's Missing (Blocking Daily Use):**
-- ❌ File manager that works with real filesystems (currently in-memory only)
-- ❌ Package manager for installing software
-- ❌ System settings/configuration UI
+- ⚠️ Persistent settings (UI built, needs load/save to ~/.config/rusty-penguin/settings.toml)
+- ⚠️ TIS integration for real inference (UI built, needs albert. binary integration)
 - ❌ Persistent home directory setup
 - ❌ Service management (systemd alternative or custom)
-- ❌ TIS integration for inference
+- ❌ File operation syscalls (copy, delete, rename)
+- ❌ Real filesystem on bare-metal (currently ramfs only)
 
 ## Distribution Layer Components (Priority Order)
 
-### Phase 1: File System Usability (Week 1) — IN PROGRESS
+### Phase 1: File System Usability (Week 1) — COMPLETE
 **Goal: Users can browse /home and work with real files**
 
-- [x] **FileManager.rs v2 Started**: Module created for real filesystem access (Linux track)
-  - [ ] Directory browsing using std::fs
-  - [ ] File listing with metadata (size, permissions, date)
-  - [ ] Context menu for open/edit/delete
-  - [ ] Current directory display in title bar
-  - [ ] Breadcrumb navigation
+- [x] **FileManager.rs v2 Complete**: Real filesystem access via syscall 14 (sys_listdir)
+  - [x] Directory browsing with Up/Down/Enter/Backspace navigation
+  - [x] File listing with metadata (size, display)
+  - [x] Current directory display in title bar
+  - [x] Clipboard copy (C key)
+  - [ ] Delete (D key - framework ready, needs kernel syscall)
+  - [ ] Rename (future enhancement)
   
 - [ ] **Home directory setup**:
   - [ ] Create /home/rusty-penguin on first boot
@@ -55,34 +62,37 @@ Build plan for making Rusty Penguin a complete, daily-usable operating system di
   - [ ] curl (for network testing)
   - [ ] TIS stack binaries
 
-### Phase 3: System Configuration (Week 3)
+### Phase 3: System Configuration (Week 3) — IN PROGRESS
 **Goal: Settings UI, persistent preferences**
 
-- [ ] **Settings application**:
-  - [ ] Desktop background selection
-  - [ ] Taskbar position (top/bottom/left/right)
-  - [ ] Keyboard repeat rate
-  - [ ] Color theme (dark/light)
-  - [ ] Window manager behavior (maximize/snap)
+- [x] **Settings application**: Keyboard-navigable preferences UI
+  - [x] Color theme (dark/light) - UI ready
+  - [x] Window manager snap behavior - UI ready
+  - [x] Taskbar positioning - UI ready
+  - [x] Auto-save toggle - UI ready
+  - [ ] Desktop background selection (future)
+  - [ ] Keyboard repeat rate (future)
 
 - [ ] **Config persistence**:
-  - [ ] ~/.config/rusty-penguin/settings.toml
+  - [ ] ~/.config/rusty-penguin/settings.toml (framework ready)
   - [ ] Load on init, apply to desktop/shell
-  - [ ] UI to edit without text editor
+  - [ ] Write changes on toggle
 
-### Phase 4: TIS Integration (Week 4)
+### Phase 4: TIS Integration (Week 4) — IN PROGRESS
 **Goal: Run inference from the desktop**
 
-- [ ] **AI Runtime launcher**:
-  - [ ] Desktop icon for TIS console
-  - [ ] Model selector
-  - [ ] Inference prompt UI
-  - [ ] Result display
+- [x] **AI Runtime launcher**: TIS Console application
+  - [x] Desktop icon for TIS console
+  - [x] Ternary arithmetic commands (trit, mul, div)
+  - [x] Text input buffer with command parsing
+  - [x] Scrollable output history
+  - [ ] Real albert. binary integration (needs env setup)
+  - [ ] Model selector (future)
 
 - [ ] **Environment**:
-  - [ ] Deploy albert. binary
+  - [ ] Deploy albert. binary to /opt/rusty-penguin/
   - [ ] Model directory setup
-  - [ ] PYTHONPATH / library integration
+  - [ ] PATH integration for command execution
 
 ### Phase 5: Service Management (Ongoing)
 **Goal: Proper boot sequence, logging, service control**

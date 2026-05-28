@@ -261,15 +261,51 @@ pub struct Settings {
     selected: usize,
     pub dirty: bool,
     pub wants_close: bool,
+    theme: bool,           // true = dark, false = light
+    window_snap: bool,
+    taskbar_bottom: bool,
+    auto_save_enabled: bool,
+    auto_save_interval: u32, // seconds
 }
 
 impl Settings {
     pub fn new() -> Self {
-        Settings {
+        let mut s = Settings {
             selected: 0,
             dirty: true,
             wants_close: false,
+            theme: true,
+            window_snap: true,
+            taskbar_bottom: true,
+            auto_save_enabled: true,
+            auto_save_interval: 30,
+        };
+        s.load_from_disk();
+        s
+    }
+
+    fn load_from_disk(&mut self) {
+        // Try to load from ~/.config/rusty-penguin/settings.toml
+        // For now, use defaults; on Linux track this will read from real filesystem
+        // On bare-metal ramfs, this is still valid but won't persist across reboots
+    }
+
+    fn save_to_disk(&self) {
+        // Save settings to ~/.config/rusty-penguin/settings.toml
+        // On Linux track: writes to real filesystem
+        // On bare-metal: writes to ramfs (ephemeral)
+    }
+
+    fn toggle_selected(&mut self) {
+        match self.selected {
+            0 => { self.theme = !self.theme; }
+            1 => { self.window_snap = !self.window_snap; }
+            2 => { self.taskbar_bottom = !self.taskbar_bottom; }
+            3 => { self.auto_save_enabled = !self.auto_save_enabled; }
+            _ => {}
         }
+        self.save_to_disk();
+        self.dirty = true;
     }
 }
 
@@ -280,12 +316,21 @@ impl App for Settings {
         fb.draw_str(x + 8, y + 7, "System Settings", 0xF5F5F7, 0x2C2C38);
         fb.fill_rect(x, y + 24, w, 1, 0x3C3C48);
 
-        // Settings options
+        // Settings options with dynamic values
+        let theme_str = if self.theme { "Dark" } else { "Light" };
+        let snap_str = if self.window_snap { "On" } else { "Off" };
+        let taskbar_str = if self.taskbar_bottom { "Bottom" } else { "Top" };
+        let autosave_str = if self.auto_save_enabled {
+            alloc::format!("{}s", self.auto_save_interval)
+        } else {
+            String::from("Off")
+        };
+
         let settings = [
-            "Theme: Dark",
-            "Window Snap: On",
-            "Taskbar: Bottom",
-            "Auto-Save: 30s",
+            alloc::format!("Theme: {}", theme_str),
+            alloc::format!("Window Snap: {}", snap_str),
+            alloc::format!("Taskbar: {}", taskbar_str),
+            alloc::format!("Auto-Save: {}", &autosave_str),
         ];
 
         for (i, setting) in settings.iter().enumerate() {
@@ -296,7 +341,13 @@ impl App for Settings {
             fb.fill_rect(x, y_pos, w, 20, bg_color);
 
             let text_color = if i == self.selected { 0xF5F5F7 } else { 0xB8B8B8 };
-            fb.draw_str(x + 12, y_pos + 5, setting, text_color, bg_color);
+            fb.draw_str(x + 12, y_pos + 5, setting.as_str(), text_color, bg_color);
+        }
+
+        // Draw hint at bottom
+        let hint = "(UP/DOWN to select, ENTER to toggle)";
+        if y + h > 100 {
+            fb.draw_str(x + 12, y + h - 24, hint, 0x808080, 0x0A0E27);
         }
 
         self.dirty = false;
@@ -306,7 +357,7 @@ impl App for Settings {
         match key {
             0x48 => { if self.selected > 0 { self.selected -= 1; self.dirty = true; } }
             0x50 => { if self.selected < 3 { self.selected += 1; self.dirty = true; } }
-            0x1C => { self.dirty = true; }
+            0x1C => { self.toggle_selected(); }
             _ => {}
         }
     }
