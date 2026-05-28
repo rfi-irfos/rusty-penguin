@@ -23,9 +23,42 @@ impl Vfs {
               \n\
               Try: nano readme.txt\n\
                    ls\n\
-                   cat readme.txt\n");
+                   help\n");
         v.write("motd.txt",
             b"The penguin runs bare metal today.\n");
+        v.write("demo.psh",
+            b"#!/bin/psh\n\
+              # RustyPenguin full-feature demo\n\
+              echo \"=== RustyPenguin OS v1.0.0 ===\"\n\
+              sysinfo\n\
+              echo \"\"\n\
+              echo \"-- Arithmetic --\"\n\
+              calc (2 + 3) * 7\n\
+              calc 1024 / 32\n\
+              echo \"\"\n\
+              echo \"-- Sequences and loops --\"\n\
+              for i in $(seq 1 4)\n\
+              do\n\
+                echo \"  step $i\"\n\
+              done\n\
+              echo \"\"\n\
+              echo \"-- Files and pipes --\"\n\
+              echo \"Rust\" > lang.txt\n\
+              echo \"Python\" >> lang.txt\n\
+              echo \"C\" >> lang.txt\n\
+              echo \"Go\" >> lang.txt\n\
+              echo \"Sorted:\"\n\
+              cat lang.txt | sort\n\
+              echo \"Lines with R:\"\n\
+              cat lang.txt | grep R\n\
+              echo \"\"\n\
+              echo \"-- Variables --\"\n\
+              AUTHOR=Linus\n\
+              echo \"Built for $AUTHOR.\"\n\
+              echo \"\"\n\
+              echo \"-- Kernel ABI --\"\n\
+              kver\n\
+              echo \"Demo complete.\"\n");
         v
     }
 

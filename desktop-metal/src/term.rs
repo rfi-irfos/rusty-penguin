@@ -146,6 +146,17 @@ impl EditorState {
     }
 }
 
+// ── Kernel Manager state ─────────────────────────────────────────────────────
+
+pub struct KmState {
+    pub path:   Vec<u8>,    // kernel ELF path input
+    pub status: String,     // last action status line
+}
+
+impl KmState {
+    fn new() -> Self { KmState { path: Vec::new(), status: String::new() } }
+}
+
 // ── Escape-sequence parsing ──────────────────────────────────────────────────
 
 enum EscState { Normal, Esc, Csi(String) }
@@ -271,6 +282,7 @@ pub struct Terminal {
     hist_pos:        usize,
     saved_line:      Vec<u8>,
     pub editor:      Option<EditorState>,
+    pub km:          Option<KmState>,   // kernel manager TUI
     capture:         Option<Vec<u8>>,   // when Some, write_output feeds this instead of cells
     stdin_data:      Vec<u8>,           // pipe input for the current command
     vars:            Vec<(String, String)>, // shell variables
@@ -342,6 +354,7 @@ impl Terminal {
             hist_pos:    0,
             saved_line:  Vec::new(),
             editor:      None,
+            km:          None,
             capture:     None,
             stdin_data:  Vec::new(),
             vars:        Vec::new(),
@@ -582,10 +595,8 @@ impl Terminal {
     // ── send_key: route to editor or shell ─────────────────────────────────
 
     pub fn send_key(&mut self, b: u8) {
-        if self.editor.is_some() {
-            self.send_key_editor(b);
-            return;
-        }
+        if self.editor.is_some() { self.send_key_editor(b); return; }
+        if self.km.is_some()     { self.send_key_km(b);     return; }
         match b {
             b'\n' | b'\r' => {
                 self.process_byte(b'\n');
@@ -740,6 +751,154 @@ impl Terminal {
             self.editor = Some(ed);
             self.render_editor();
         }
+        self.dirty = true;
+    }
+
+    // ── Kernel Manager input / render ────────────────────────────────────────
+
+    fn send_key_km(&mut self, b: u8) {
+        match b {
+            0x18 | 0x03 => {
+                // Ctrl+X or Ctrl+C — exit
+                self.km = None;
+                let blank = Cell::default();
+                for c in self.cells.iter_mut() { *c = blank; }
+                self.cur_col = 0; self.cur_row = 0;
+                self.write_output(b"\x1b[32mring3\x1b[0m@\x1b[36mrusty-penguin\x1b[90m:~$\x1b[0m ");
+            }
+            0x08 | 0x7F => {
+                if let Some(km) = &mut self.km { km.path.pop(); }
+                self.render_km();
+            }
+            b'\r' | b'\n' | 0x13 => {
+                // Enter or Ctrl+S — stage kernel
+                let path = if let Some(km) = &self.km {
+                    String::from(core::str::from_utf8(&km.path).unwrap_or("").trim())
+                } else { String::new() };
+                if path.is_empty() {
+                    if let Some(km) = &mut self.km { km.status = String::from("No path entered."); }
+                } else {
+                    let manifest = {
+                        let mut m = String::from("kernel_elf=");
+                        m.push_str(&path);
+                        m.push('\n');
+                        m.push_str("staged_by=kmanager\n");
+                        m
+                    };
+                    vfs::vfs().write("boot.manifest", manifest.as_bytes());
+                    if let Some(km) = &mut self.km {
+                        km.status = format!("Staged: {}  ->  iso/boot/kernel.elf", path);
+                    }
+                }
+                self.render_km();
+            }
+            b if b >= 0x20 => {
+                if let Some(km) = &mut self.km {
+                    if km.path.len() < 60 { km.path.push(b); }
+                }
+                self.render_km();
+            }
+            _ => {}
+        }
+        self.dirty = true;
+    }
+
+    pub fn render_km(&mut self) {
+        let km = match &self.km { Some(k) => k, None => return };
+        const H_BG: u32 = 0x1D4ED8; const H_FG: u32 = 0xF8FAFC;
+        const C_BG: u32 = 0x0F172A; const C_FG: u32 = 0x4ADE80;
+        const D_FG: u32 = 0x94A3B8; const Y_FG: u32 = 0xFBBF24;
+        const I_FG: u32 = 0x60A5FA; const W_FG: u32 = 0xF8FAFC;
+
+        let fill = |cells: &mut Vec<Cell>, row: usize, fg: u32, bg: u32, text: &[u8]| {
+            for col in 0..COLS { cells[row * COLS + col] = Cell { ch: b' ', fg, bg }; }
+            for (col, &ch) in text.iter().enumerate().take(COLS) {
+                cells[row * COLS + col] = Cell { ch, fg, bg };
+            }
+        };
+
+        // Row 0 — header
+        let hdr = b"  KERNEL MANAGER   RustyPenguin 1.0.0 bare-metal Rust  x86_64";
+        fill(&mut self.cells, 0, H_FG, H_BG, hdr);
+
+        // Rows 1-2 — current kernel
+        fill(&mut self.cells, 1, C_FG, C_BG, b"");
+        fill(&mut self.cells, 2, C_FG, C_BG, b"  CURRENT KERNEL: RustyPenguin v1.0.0  (built-in, cannot be evicted)");
+
+        // Row 3 — blank
+        fill(&mut self.cells, 3, C_FG, C_BG, b"");
+
+        // Row 4 — syscall header
+        fill(&mut self.cells, 4, Y_FG, C_BG, b"  SYSCALL ABI  (stable: 4 5 7 9 12 13 24   extensions: >=64)");
+
+        // Rows 5-10 — ABI table (two columns)
+        const ABI: &[(&[u8], &[u8])] = &[
+            (b"  sys  4  ticks       u64 monotonic",    b"  sys  5  meminfo     (free<<32|total) MiB"),
+            (b"  sys  7  input_poll  event u64",        b"  sys  9  ps          buf*u8, max_ent"),
+            (b"  sys 12  serial      byte u8",          b"  sys 13  rtc         packed BCD u64"),
+            (b"  sys 24  yield       sleep->IRQ",       b"  sys >=64            extension range"),
+            (b"  ring-3: ELF64 static  e_entry=start", b"  framebuf: 0xFD000000  800x600x24bpp"),
+        ];
+        for (i, (left, right)) in ABI.iter().enumerate() {
+            let row = 5 + i;
+            for col in 0..COLS { self.cells[row * COLS + col] = Cell { ch: b' ', fg: D_FG, bg: C_BG }; }
+            for (col, &ch) in left.iter().enumerate().take(40) {
+                self.cells[row * COLS + col] = Cell { ch, fg: D_FG, bg: C_BG };
+            }
+            for (col, &ch) in right.iter().enumerate().take(40) {
+                self.cells[row * COLS + 40 + col] = Cell { ch, fg: D_FG, bg: C_BG };
+            }
+        }
+        fill(&mut self.cells, 10, C_FG, C_BG, b"");
+
+        // Row 11 — boot manifest
+        fill(&mut self.cells, 11, Y_FG, C_BG, b"  BOOT MANIFEST:");
+        let manifest_line = match vfs::vfs().read("boot.manifest") {
+            Some(d) => {
+                let s = core::str::from_utf8(d).unwrap_or("").trim();
+                let first_line = s.lines().next().unwrap_or(s);
+                format!("  {}", first_line)
+            }
+            None => String::from("  (none — built-in kernel running)"),
+        };
+        fill(&mut self.cells, 12, I_FG, C_BG, manifest_line.as_bytes());
+        fill(&mut self.cells, 13, C_FG, C_BG, b"");
+
+        // Row 14 — install steps
+        fill(&mut self.cells, 14, Y_FG, C_BG, b"  HOW TO SWAP THE KERNEL:");
+        fill(&mut self.cells, 15, D_FG, C_BG, b"  1. Build multiboot2 ELF64 (Rust or C - anything goes)");
+        fill(&mut self.cells, 16, D_FG, C_BG, b"  2. Enter path below and press Enter (stages boot.manifest)");
+        fill(&mut self.cells, 17, D_FG, C_BG, b"  3. On host: bash iso/build.sh  (repacks initramfs + GRUB)");
+        fill(&mut self.cells, 18, D_FG, C_BG, b"  4. Boot the new rusty-penguin.iso - your kernel runs ring-0");
+        fill(&mut self.cells, 19, C_FG, C_BG, b"");
+
+        // Row 20 — path input
+        let mut path_row: Vec<u8> = b"  Path: [".to_vec();
+        let km_path = km.path.clone();
+        path_row.extend_from_slice(&km_path);
+        path_row.push(b'_'); // cursor
+        while path_row.len() < 79 { path_row.push(b' '); }
+        path_row.push(b']');
+        fill(&mut self.cells, 20, W_FG, 0x0B2040, &path_row);
+
+        // Rows 21-22 — blank
+        fill(&mut self.cells, 21, C_FG, C_BG, b"");
+        fill(&mut self.cells, 22, D_FG, C_BG,
+            b"  See docs/syscall-abi.txt  |  github.com/rusty-penguin/kernel-abi");
+
+        // Row 23 — status bar
+        let sb_bg = 0x1E3A5Fu32;
+        let status_text = if km.status.is_empty() {
+            String::from("  Enter to stage   ^X to exit   ^S to stage")
+        } else {
+            format!("  {}", km.status)
+        };
+        fill(&mut self.cells, 23, 0xCBD5E1, sb_bg, status_text.as_bytes());
+
+        // Position cursor in path input field
+        let path_len = km.path.len();
+        self.cur_row = 20;
+        self.cur_col = (9 + path_len).min(COLS - 2);
         self.dirty = true;
     }
 
@@ -940,7 +1099,7 @@ impl Terminal {
         let matches: Vec<String> = if is_cmd {
             const CMDS: &[&str] = &[
                 "ai","bc","calc","cat","clear","cp","date","df","echo","env","exit",
-                "find","free","grep","head","help","hexdump","history","kinstall","kver",
+                "find","free","grep","head","help","hexdump","history","kinstall","kmanager","kver",
                 "ls","lscpu","mem","mkdir","mv","nano","neofetch","printenv","ps","psh",
                 "pwd","rev","rm","seq","sort","sysinfo","tail","touch","trit","uname",
                 "uniq","uptime","vi","wc","which","whoami","xxd",
@@ -1245,6 +1404,7 @@ impl Terminal {
             self.write_output(b"\x1b[36mKernel:\x1b[0m\r\n");
             self.write_output(b"  kver               show kernel version + ABI\r\n");
             self.write_output(b"  kinstall <f>       stage custom kernel ELF\r\n");
+            self.write_output(b"  kmanager           kernel manager TUI (Ctrl+X to exit)\r\n");
             self.write_output(b"\x1b[90m  Tab completion  Up/Down history\x1b[0m\r\n");
             self.write_output(b"\x1b[90m  Ctrl+T new term  Ctrl+W close  Ctrl+L clear\x1b[0m\r\n");
 
@@ -1865,7 +2025,7 @@ impl Terminal {
                 "history","env","printenv","which","set","export","unset",
                 "ps","mem","free","df","lscpu","sysinfo","neofetch",
                 "uname","whoami","uptime","date","trit","ai",
-                "echo","clear","pwd","exit","kver","kinstall",
+                "echo","clear","pwd","exit","kver","kinstall","kmanager",
                 "psh","seq","bc","calc","rev",
             ];
             if BUILTINS.iter().any(|&b| b == cmd_name) {
@@ -1875,6 +2035,10 @@ impl Terminal {
                 let s = format!("\x1b[31m{}: not found\x1b[0m\r\n", cmd_name);
                 self.write_output(s.as_bytes());
             }
+
+        } else if line == b"kmanager" {
+            self.km = Some(KmState::new());
+            self.render_km();
 
         } else if line == b"exit" {
             self.write_output(b"bye\r\n");

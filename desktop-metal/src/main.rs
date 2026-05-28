@@ -120,6 +120,10 @@ const ICON_AI:   [u8; 8] = [0x18, 0x24, 0x42, 0xFF, 0x42, 0x24, 0x18, 0x00];  //
 #[rustfmt::skip]
 const ICON_TRIT: [u8; 8] = [0x08, 0x1C, 0x36, 0x63, 0x63, 0x36, 0x1C, 0x08];  // ternary ring
 
+// Kernel Manager icon: gear/cog shape
+#[rustfmt::skip]
+const ICON_KM: [u8; 8] = [0x18, 0x7E, 0x3C, 0xFF, 0xFF, 0x3C, 0x7E, 0x18];
+
 // Dingir — 8-pointed star, cuneiform divine determinative
 #[rustfmt::skip]
 const DINGIR: [u8; 8] = [
@@ -424,6 +428,7 @@ const LAUNCHERS: &[Launcher] = &[
     Launcher { label: " ps  ", cmd: Some("ps\n"),       title: "ps - Processes",   color: BLUE  },
     Launcher { label: " ai  ", cmd: Some("ai 32\n"),    title: "ai - Inference",   color: AMBER },
     Launcher { label: " trit", cmd: Some("trit 42\n"),  title: "trit - Ternary",   color: 0xC084FC },
+    Launcher { label: " km  ", cmd: Some("kmanager\n"), title: "Kernel Manager",   color: TEAL    },
 ];
 
 
@@ -442,6 +447,7 @@ const DESKTOP_ICONS: &[DesktopIcon] = &[
     DesktopIcon { label: "Procs", bitmap: &ICON_PROC, color: BLUE,     launcher_idx: 1 },
     DesktopIcon { label: "AI",    bitmap: &ICON_AI,   color: AMBER,    launcher_idx: 2 },
     DesktopIcon { label: "Trit",  bitmap: &ICON_TRIT, color: 0xC084FC, launcher_idx: 3 },
+    DesktopIcon { label: "KMgr",  bitmap: &ICON_KM,   color: TEAL,     launcher_idx: 4 },
 ];
 
 // 56px wide keeps icons safely left of the default window start (x=79)
