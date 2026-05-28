@@ -464,7 +464,27 @@ fn exec_psh() -> ! {
     loop { thread::sleep(Duration::from_secs(60)); }
 }
 
+fn install_panic_hook() {
+    // Default Rust panic output goes to stderr, which for an init-spawned
+    // process is effectively /dev/null. Redirect panic info to /dev/ttyS0
+    // so it shows up in /tmp/rusty-penguin.log alongside slog() output.
+    std::panic::set_hook(Box::new(|info| {
+        let loc = info.location()
+            .map(|l| format!("{}:{}", l.file(), l.line()))
+            .unwrap_or_else(|| "unknown".to_string());
+        let msg = if let Some(s) = info.payload().downcast_ref::<&'static str>() {
+            (*s).to_string()
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "(non-string payload)".to_string()
+        };
+        slog(&format!("PANIC @ {} :: {}", loc, msg));
+    }));
+}
+
 fn main() {
+    install_panic_hook();
     slog("=== desktop starting ===");
     let mut fb = match Framebuffer::open() {
         Ok(f) => f, Err(e) => { slog(&format!("fb unavailable: {}", e)); exec_psh(); }
