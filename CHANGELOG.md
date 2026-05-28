@@ -4,6 +4,18 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+### Added — Package integrity verification (SHA-256, 2026-05-28)
+
+- The repo index now carries a digest per package
+  (`@pkg <name> <version> <url> <sha256|-> [deps]`); `rpm install <name>`
+  downloads each package and **verifies its SHA-256 against the index** before
+  installing — install aborts on mismatch (corruption/tamper detection).
+- Unit-tested against the known `SHA-256("abc")` vector; index parses the digest
+  field (9 tests pass).
+- *Honest scope:* this is **integrity** (package matches the published digest),
+  not yet full **authenticity** signing — an ed25519 signature over the index
+  verified against a bundled repo public key is the next step.
+
 ### Added — Package repository + dependency resolution (2026-05-28)
 
 - `rpm update <url>` caches a repo **index in `.tern` format** (ternary-native):

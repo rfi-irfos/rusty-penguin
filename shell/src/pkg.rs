@@ -36,9 +36,10 @@ fn fetch_remote(url: &str) -> Result<String, String> {
 
 // ── Package repository + dependency resolution ───────────────────────────────
 // The repo index is a `.tern` document (ternary-native format):
-//   @pkg <name> <version> <url> [dep ...]
+//   @pkg <name> <version> <url> <sha256|-> [dep ...]
 // `rpm update <url>` caches it; `rpm install <name>` resolves the transitive
-// dependency closure (topological order, cycle-detected) and installs each.
+// dependency closure (topological order, cycle-detected), downloads each, and
+// verifies its SHA-256 against the index before installing (integrity check).
 
 const REPO_CACHE: &str = "/opt/rusty-penguin/repo.tern";
 
@@ -47,7 +48,19 @@ pub struct RepoPkg {
     pub name: String,
     pub version: String,
     pub url: String,
+    pub sha256: Option<String>,   // expected hex digest; None when index says "-"
     pub deps: Vec<String>,
+}
+
+/// SHA-256 of a file, lowercase hex. Used to verify a downloaded package matches
+/// the digest the repo index published (tamper/corruption detection).
+fn file_sha256(path: &str) -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+    let bytes = fs::read(path).map_err(|e| format!("read {}: {}", path, e))?;
+    let digest = Sha256::digest(&bytes);
+    let mut s = String::with_capacity(64);
+    for b in digest { s.push_str(&format!("{:02x}", b)); }
+    Ok(s)
 }
 
 pub struct RepoIndex {
@@ -66,8 +79,9 @@ impl RepoIndex {
             let name = match it.next() { Some(n) => n.to_string(), None => continue };
             let version = it.next().unwrap_or("0").to_string();
             let url = match it.next() { Some(u) => u.to_string(), None => continue };
+            let sha256 = it.next().filter(|s| *s != "-").map(|s| s.to_string());
             let deps = it.map(|s| s.to_string()).collect();
-            pkgs.push(RepoPkg { name, version, url, deps });
+            pkgs.push(RepoPkg { name, version, url, sha256, deps });
         }
         RepoIndex { pkgs }
     }
@@ -145,7 +159,18 @@ pub fn install_by_name(name: &str) -> Result<String, String> {
     let mut log = String::new();
     for n in &order {
         let pkg = idx.get(n).ok_or_else(|| format!("package not found: {}", n))?;
-        log.push_str(&PackageManager::install(&pkg.url)?);
+        // Download, verify integrity against the index, then install locally.
+        let local = fetch_remote(&pkg.url)?;
+        if let Some(want) = &pkg.sha256 {
+            let got = file_sha256(&local)?;
+            if !got.eq_ignore_ascii_case(want) {
+                let _ = fs::remove_file(&local);
+                return Err(format!(
+                    "integrity check FAILED for '{}': expected {}, got {}", n, want, got));
+            }
+            log.push_str(&format!("  {} sha256 ok\n", n));
+        }
+        log.push_str(&PackageManager::install(&local)?);
         log.push('\n');
     }
     Ok(format!("installed {} (+{} dep(s)):\n{}", name, order.len().saturating_sub(1), log))
@@ -353,10 +378,10 @@ mod tests {
 
     const SAMPLE: &str = "\
         # rusty-penguin repo index (.tern)\n\
-        @pkg app     1.0 http://r/app-1.0.rpkg lib gui\n\
-        @pkg lib     2.1 http://r/lib-2.1.rpkg core\n\
-        @pkg gui     0.9 http://r/gui-0.9.rpkg core\n\
-        @pkg core    3.0 http://r/core-3.0.rpkg\n";
+        @pkg app     1.0 http://r/app-1.0.rpkg - lib gui\n\
+        @pkg lib     2.1 http://r/lib-2.1.rpkg - core\n\
+        @pkg gui     0.9 http://r/gui-0.9.rpkg - core\n\
+        @pkg core    3.0 http://r/core-3.0.rpkg -\n";
 
     fn none(_: &str) -> bool { false }
 
@@ -367,8 +392,28 @@ mod tests {
         let app = idx.get("app").unwrap();
         assert_eq!(app.version, "1.0");
         assert_eq!(app.url, "http://r/app-1.0.rpkg");
+        assert_eq!(app.sha256, None); // "-" means no digest
         assert_eq!(app.deps, vec!["lib".to_string(), "gui".to_string()]);
         assert!(idx.get("nope").is_none());
+    }
+
+    #[test]
+    fn test_index_parse_with_sha() {
+        let idx = RepoIndex::parse(
+            "@pkg x 1 http://r/x.rpkg abc123DEF lib\n");
+        let x = idx.get("x").unwrap();
+        assert_eq!(x.sha256.as_deref(), Some("abc123DEF"));
+        assert_eq!(x.deps, vec!["lib".to_string()]);
+    }
+
+    #[test]
+    fn test_file_sha256() {
+        // Known vector: SHA-256("abc")
+        let p = std::env::temp_dir().join("rp_pkg_sha_test.bin");
+        std::fs::write(&p, b"abc").unwrap();
+        let got = file_sha256(p.to_str().unwrap()).unwrap();
+        assert_eq!(got, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+        let _ = std::fs::remove_file(&p);
     }
 
     #[test]
@@ -398,14 +443,14 @@ mod tests {
 
     #[test]
     fn test_resolve_missing_dep() {
-        let idx = RepoIndex::parse("@pkg a 1.0 http://r/a.rpkg ghost\n");
+        let idx = RepoIndex::parse("@pkg a 1.0 http://r/a.rpkg - ghost\n");
         assert!(idx.resolve("a", &none).unwrap_err().contains("not found"));
     }
 
     #[test]
     fn test_resolve_cycle() {
         let idx = RepoIndex::parse(
-            "@pkg a 1 http://r/a.rpkg b\n@pkg b 1 http://r/b.rpkg a\n");
+            "@pkg a 1 http://r/a.rpkg - b\n@pkg b 1 http://r/b.rpkg - a\n");
         assert!(idx.resolve("a", &none).unwrap_err().contains("cycle"));
     }
 }
