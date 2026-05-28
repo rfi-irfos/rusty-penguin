@@ -855,14 +855,38 @@ impl Terminal {
         self.vars.retain(|(k, _)| k != name);
     }
 
-    // Expand $VAR, ${VAR}, $? in raw bytes; does not handle $(...) yet
-    fn expand_vars(&self, raw: &[u8]) -> Vec<u8> {
+    // Expand $VAR, ${VAR}, $?, $(...) in raw bytes
+    fn expand_vars(&mut self, raw: &[u8]) -> Vec<u8> {
         let mut out = Vec::new();
         let mut i = 0;
         while i < raw.len() {
             if raw[i] != b'$' { out.push(raw[i]); i += 1; continue; }
             i += 1;
             if i >= raw.len() { out.push(b'$'); continue; }
+            // $(...)  — command substitution
+            if raw[i] == b'(' {
+                i += 1;
+                let start = i;
+                let mut depth = 1usize;
+                while i < raw.len() {
+                    if raw[i] == b'(' { depth += 1; }
+                    else if raw[i] == b')' { depth -= 1; if depth == 0 { break; } }
+                    i += 1;
+                }
+                let inner: Vec<u8> = raw[start..i].to_vec();
+                if i < raw.len() { i += 1; }
+                // Run inner command, capture output
+                let saved = self.capture.take();
+                self.capture = Some(Vec::new());
+                self.parse_and_exec(&inner);
+                let cap = self.capture.take().unwrap_or_default();
+                self.capture = saved;
+                let clean = strip_ansi(&cap);
+                let end = clean.iter().rposition(|&b| b != b'\n' && b != b'\r' && b != b' ')
+                    .map(|j| j + 1).unwrap_or(0);
+                out.extend_from_slice(&clean[..end]);
+                continue;
+            }
             // $?
             if raw[i] == b'?' {
                 let s = format!("{}", self.last_exit);
@@ -876,8 +900,8 @@ impl Terminal {
                 i += 1;
                 let start = i;
                 while i < raw.len() && raw[i] != b'}' { i += 1; }
-                let name = core::str::from_utf8(&raw[start..i]).unwrap_or("");
-                let val = self.get_var(name);
+                let name = String::from(core::str::from_utf8(&raw[start..i]).unwrap_or(""));
+                let val = self.get_var(&name);
                 out.extend_from_slice(val.as_bytes());
                 if i < raw.len() { i += 1; }
                 continue;
@@ -886,8 +910,8 @@ impl Terminal {
             let start = i;
             while i < raw.len() && (raw[i].is_ascii_alphanumeric() || raw[i] == b'_') { i += 1; }
             if i == start { out.push(b'$'); continue; }
-            let name = core::str::from_utf8(&raw[start..i]).unwrap_or("");
-            let val = self.get_var(name);
+            let name = String::from(core::str::from_utf8(&raw[start..i]).unwrap_or(""));
+            let val = self.get_var(&name);
             out.extend_from_slice(val.as_bytes());
         }
         out
@@ -964,6 +988,151 @@ impl Terminal {
             for i in 0..ll { let b = self.line_buf[i]; self.process_byte(b); }
         }
         self.dirty = true;
+    }
+
+    // ── Script executor (for/while/if/then/else/fi/done) ────────────────────
+
+    fn exec_script(&mut self, lines: &[Vec<u8>]) {
+        let mut i = 0;
+        while i < lines.len() {
+            if self.wants_close { break; }
+            let raw = lines[i].clone();
+            let trimmed = trim_ws(&raw).to_vec();
+            if trimmed.is_empty() || trimmed[0] == b'#' { i += 1; continue; }
+            let s = String::from(core::str::from_utf8(&trimmed).unwrap_or(""));
+
+            if s.starts_with("for ") {
+                // "for VAR in ITEMS" or "for VAR in ITEMS; do"
+                let hdr = if let Some(p) = s.find("; do") { &s[..p] } else { s.as_str() };
+                let rest = hdr[4..].trim();
+                if let Some(in_pos) = rest.find(" in ") {
+                    let var_name = String::from(rest[..in_pos].trim());
+                    let items_raw = rest[in_pos + 4..].trim().trim_end_matches(';').trim();
+                    i += 1;
+                    if i < lines.len() && trim_ws(&lines[i]) == b"do" { i += 1; }
+                    // Collect body until matching "done"
+                    let mut body: Vec<Vec<u8>> = Vec::new();
+                    let mut depth = 1usize;
+                    while i < lines.len() {
+                        let bl = lines[i].clone();
+                        let (is_done, is_for_or_while) = {
+                            let bt = trim_ws(&bl);
+                            let bs = core::str::from_utf8(bt).unwrap_or("");
+                            (bs == "done", bs.starts_with("for ") || bs.starts_with("while "))
+                        };
+                        if is_done {
+                            depth -= 1;
+                            if depth == 0 { i += 1; break; }
+                            body.push(bl);
+                        } else {
+                            if is_for_or_while { depth += 1; }
+                            body.push(bl);
+                        }
+                        i += 1;
+                    }
+                    let items_exp = self.expand_vars(items_raw.as_bytes());
+                    let items_s = String::from(core::str::from_utf8(&items_exp).unwrap_or(""));
+                    let items: Vec<String> = items_s.split_whitespace().map(String::from).collect();
+                    for item in &items {
+                        if self.wants_close { break; }
+                        self.set_var(&var_name, item);
+                        self.exec_script(&body);
+                    }
+                } else {
+                    self.write_output(b"\x1b[31mpsh: syntax error in for\x1b[0m\r\n");
+                    i += 1;
+                }
+
+            } else if s.starts_with("while ") {
+                let cond_part = {
+                    let c = s[6..].trim();
+                    if let Some(p) = c.find("; do") { String::from(c[..p].trim()) } else { String::from(c) }
+                };
+                i += 1;
+                if i < lines.len() && trim_ws(&lines[i]) == b"do" { i += 1; }
+                let mut body: Vec<Vec<u8>> = Vec::new();
+                let mut depth = 1usize;
+                while i < lines.len() {
+                    let bl = lines[i].clone();
+                    let (is_done, is_loop) = {
+                        let bt = trim_ws(&bl);
+                        let bs = core::str::from_utf8(bt).unwrap_or("");
+                        (bs == "done", bs.starts_with("for ") || bs.starts_with("while "))
+                    };
+                    if is_done {
+                        depth -= 1;
+                        if depth == 0 { i += 1; break; }
+                        body.push(bl);
+                    } else {
+                        if is_loop { depth += 1; }
+                        body.push(bl);
+                    }
+                    i += 1;
+                }
+                loop {
+                    if self.wants_close { break; }
+                    let cond_exp = self.expand_vars(cond_part.as_bytes());
+                    self.last_exit = 0;
+                    let saved = self.capture.take();
+                    self.capture = Some(Vec::new());
+                    self.parse_and_exec(&cond_exp);
+                    let _ = self.capture.take();
+                    self.capture = saved;
+                    if self.last_exit != 0 { break; }
+                    self.exec_script(&body);
+                }
+
+            } else if s.starts_with("if ") || s == "if" {
+                let cond_part = {
+                    let c = if s.starts_with("if ") { &s[3..] } else { "" };
+                    let c = c.trim();
+                    if let Some(p) = c.find("; then") { String::from(c[..p].trim()) } else { String::from(c) }
+                };
+                i += 1;
+                if i < lines.len() && trim_ws(&lines[i]) == b"then" { i += 1; }
+                let mut then_body: Vec<Vec<u8>> = Vec::new();
+                let mut else_body: Vec<Vec<u8>> = Vec::new();
+                let mut in_else = false;
+                let mut depth_if = 1usize;
+                while i < lines.len() {
+                    let bl = lines[i].clone();
+                    let (is_fi, is_else, is_if) = {
+                        let bt = trim_ws(&bl);
+                        let bs = core::str::from_utf8(bt).unwrap_or("");
+                        (bs == "fi", bs == "else" && depth_if == 1, bs.starts_with("if "))
+                    };
+                    if is_fi {
+                        depth_if -= 1;
+                        if depth_if == 0 { i += 1; break; }
+                        if in_else { else_body.push(bl); } else { then_body.push(bl); }
+                    } else if is_else {
+                        in_else = true;
+                        i += 1; continue;
+                    } else {
+                        if is_if { depth_if += 1; }
+                        if in_else { else_body.push(bl); } else { then_body.push(bl); }
+                    }
+                    i += 1;
+                }
+                let cond_exp = self.expand_vars(cond_part.as_bytes());
+                self.last_exit = 0;
+                let saved = self.capture.take();
+                self.capture = Some(Vec::new());
+                self.parse_and_exec(&cond_exp);
+                let _ = self.capture.take();
+                self.capture = saved;
+                let ok = self.last_exit == 0;
+                if ok { self.exec_script(&then_body); }
+                else if !else_body.is_empty() { self.exec_script(&else_body); }
+
+            } else {
+                // Normal command
+                let echo_s = format!("\x1b[90m+ {}\x1b[0m\r\n", s);
+                self.write_output(echo_s.as_bytes());
+                self.parse_and_exec(&trimmed);
+                i += 1;
+            }
+        }
     }
 
     // ── Pipe / redirect parser ───────────────────────────────────────────────
@@ -1051,6 +1220,8 @@ impl Terminal {
                 return;
             }
         }
+
+        self.last_exit = 0; // default: success
 
         if line == b"help" {
             self.write_output(b"\x1b[36mFiles:\x1b[0m\r\n");
@@ -1386,8 +1557,11 @@ impl Terminal {
                         matched = true;
                     }
                 }
-                if !matched && data.is_empty() {
-                    self.write_output(b"\x1b[90m(no input - pipe something first)\x1b[0m\r\n");
+                if !matched {
+                    self.last_exit = 1;
+                    if data.is_empty() {
+                        self.write_output(b"\x1b[90m(no input - pipe something first)\x1b[0m\r\n");
+                    }
                 }
             }
 
@@ -1537,28 +1711,69 @@ impl Terminal {
                 }
             }
 
+        } else if line == b"true"  { self.last_exit = 0;
+        } else if line == b"false" { self.last_exit = 1;
+        } else if line.starts_with(b"test ") || (line.starts_with(b"[") && line.ends_with(b"]")) {
+            // Minimal test / [ ... ] implementation
+            let args_bytes: &[u8] = if line.starts_with(b"test ") { &line[5..] }
+                else { let s = trim_ws(&line[1..]); if s.ends_with(&[b']']) { &s[..s.len()-1] } else { s } };
+            let args_str = core::str::from_utf8(args_bytes).unwrap_or("").trim();
+            let args: Vec<&str> = args_str.split_whitespace().collect();
+            let result: bool = match args.as_slice() {
+                ["-f", f]           => vfs::vfs().read(f).is_some(),
+                ["-d", f]           => vfs::vfs().list().iter().any(|e| e.is_dir && e.name == *f),
+                ["-e", f]           => vfs::vfs().exists(f),
+                ["-z", s]           => s.is_empty(),
+                ["-n", s]           => !s.is_empty(),
+                [s]                 => !s.is_empty(),
+                [a, "=",  b2]       => *a == *b2,
+                [a, "!=", b2]       => *a != *b2,
+                [a, "-eq", b2]      => a.parse::<i64>().ok() == b2.parse::<i64>().ok(),
+                [a, "-ne", b2]      => a.parse::<i64>().ok() != b2.parse::<i64>().ok(),
+                [a, "-lt", b2]      => a.parse::<i64>().unwrap_or(0) <  b2.parse::<i64>().unwrap_or(0),
+                [a, "-gt", b2]      => a.parse::<i64>().unwrap_or(0) >  b2.parse::<i64>().unwrap_or(0),
+                [a, "-le", b2]      => a.parse::<i64>().unwrap_or(0) <= b2.parse::<i64>().unwrap_or(0),
+                [a, "-ge", b2]      => a.parse::<i64>().unwrap_or(0) >= b2.parse::<i64>().unwrap_or(0),
+                _                   => false,
+            };
+            self.last_exit = if result { 0 } else { 1 };
+
+        } else if line.starts_with(b"for ") {
+            // Single-line: for VAR in ITEMS; do CMD; done
+            let s = core::str::from_utf8(line).unwrap_or("").trim();
+            if let Some(in_pos) = s[4..].find(" in ") {
+                let var_name = s[4..4 + in_pos].trim();
+                let after_in = s[4 + in_pos + 4..].trim();
+                let (items_str, cmd_str) = if let Some(dp) = after_in.find("; do ") {
+                    (&after_in[..dp], after_in[dp + 5..].trim_end_matches("; done").trim_end_matches(" done").trim())
+                } else { (after_in, "") };
+                if !cmd_str.is_empty() {
+                    let items: Vec<String> = items_str.split_whitespace().map(String::from).collect();
+                    let cmd_owned = cmd_str.as_bytes().to_vec();
+                    for item in &items {
+                        self.set_var(var_name, item);
+                        self.parse_and_exec(&cmd_owned);
+                        if self.wants_close { break; }
+                    }
+                } else {
+                    self.write_output(b"usage: for VAR in ITEMS; do CMD; done\r\n");
+                }
+            } else {
+                self.write_output(b"usage: for VAR in ITEMS; do CMD; done\r\n");
+            }
+
         } else if line.starts_with(b"psh ") {
-            // Run a VFS file as a shell script (line by line)
             let fname = arg(4);
             match vfs::vfs().read(fname) {
                 None => {
                     let s = format!("\x1b[31mpsh: {}: no such file\x1b[0m\r\n", fname);
                     self.write_output(s.as_bytes());
+                    self.last_exit = 1;
                 }
                 Some(script_raw) => {
                     let script = script_raw.to_vec();
-                    let script_lines: Vec<Vec<u8>> = script.split(|&b| b == b'\n')
-                        .map(|l| l.to_vec()).collect();
-                    for sl in script_lines {
-                        let t = trim_ws(&sl);
-                        if t.is_empty() || t[0] == b'#' { continue; }
-                        let echo = format!("\x1b[90m+ {}\x1b[0m\r\n",
-                            core::str::from_utf8(t).unwrap_or("?"));
-                        self.write_output(echo.as_bytes());
-                        let cmd_copy = t.to_vec();
-                        self.parse_and_exec(&cmd_copy);
-                        if self.wants_close { break; }
-                    }
+                    let lines: Vec<Vec<u8>> = script.split(|&b| b == b'\n').map(|l| l.to_vec()).collect();
+                    self.exec_script(&lines);
                 }
             }
 
