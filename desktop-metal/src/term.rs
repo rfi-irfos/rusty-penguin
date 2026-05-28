@@ -273,6 +273,8 @@ pub struct Terminal {
     pub editor:      Option<EditorState>,
     capture:         Option<Vec<u8>>,   // when Some, write_output feeds this instead of cells
     stdin_data:      Vec<u8>,           // pipe input for the current command
+    vars:            Vec<(String, String)>, // shell variables
+    last_exit:       u8,               // exit code of last command
 }
 
 // ── Syscall helpers ──────────────────────────────────────────────────────────
@@ -342,6 +344,8 @@ impl Terminal {
             editor:      None,
             capture:     None,
             stdin_data:  Vec::new(),
+            vars:        Vec::new(),
+            last_exit:   0,
         };
         t.write_output(b"\x1b[32m  Rusty Penguin\x1b[0m \x1b[90mv1.0.0 \xB7 psh 1.0\x1b[0m\r\n");
         t.write_output(b"\x1b[36m  Binary hardware. Ternary mind.\x1b[0m\r\n");
@@ -827,6 +831,68 @@ impl Terminal {
         self.dirty = true;
     }
 
+    // ── Shell variables ──────────────────────────────────────────────────────
+
+    fn get_var(&self, name: &str) -> String {
+        for (k, v) in &self.vars { if k == name { return v.clone(); } }
+        match name {
+            "SHELL" => String::from("/bin/psh"),
+            "HOME"  => String::from("/"),
+            "PATH"  => String::from("/bin:/usr/local/bin"),
+            "USER"  => String::from("ring3"),
+            "OS"    => String::from("RustyPenguin"),
+            "ARCH"  => String::from("x86_64"),
+            _ => String::new(),
+        }
+    }
+
+    fn set_var(&mut self, name: &str, value: &str) {
+        for (k, v) in &mut self.vars { if k == name { *v = String::from(value); return; } }
+        self.vars.push((String::from(name), String::from(value)));
+    }
+
+    fn unset_var(&mut self, name: &str) {
+        self.vars.retain(|(k, _)| k != name);
+    }
+
+    // Expand $VAR, ${VAR}, $? in raw bytes; does not handle $(...) yet
+    fn expand_vars(&self, raw: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < raw.len() {
+            if raw[i] != b'$' { out.push(raw[i]); i += 1; continue; }
+            i += 1;
+            if i >= raw.len() { out.push(b'$'); continue; }
+            // $?
+            if raw[i] == b'?' {
+                let s = format!("{}", self.last_exit);
+                out.extend_from_slice(s.as_bytes());
+                i += 1; continue;
+            }
+            // $$
+            if raw[i] == b'$' { out.extend_from_slice(b"1"); i += 1; continue; }
+            // ${VAR}
+            if raw[i] == b'{' {
+                i += 1;
+                let start = i;
+                while i < raw.len() && raw[i] != b'}' { i += 1; }
+                let name = core::str::from_utf8(&raw[start..i]).unwrap_or("");
+                let val = self.get_var(name);
+                out.extend_from_slice(val.as_bytes());
+                if i < raw.len() { i += 1; }
+                continue;
+            }
+            // $IDENTIFIER
+            let start = i;
+            while i < raw.len() && (raw[i].is_ascii_alphanumeric() || raw[i] == b'_') { i += 1; }
+            if i == start { out.push(b'$'); continue; }
+            let name = core::str::from_utf8(&raw[start..i]).unwrap_or("");
+            let val = self.get_var(name);
+            out.extend_from_slice(val.as_bytes());
+        }
+        out
+    }
+
     // ── Tab completion ───────────────────────────────────────────────────────
 
     fn tab_common_prefix(strs: &[String]) -> String {
@@ -903,6 +969,10 @@ impl Terminal {
     // ── Pipe / redirect parser ───────────────────────────────────────────────
 
     fn parse_and_exec(&mut self, raw: &[u8]) {
+        // Variable expansion before any splitting
+        let expanded = self.expand_vars(raw);
+        let raw = expanded.as_slice();
+
         // Split on unquoted |
         let mut segs: Vec<&[u8]> = Vec::new();
         let mut start = 0usize;
@@ -966,6 +1036,21 @@ impl Terminal {
         let arg = |prefix: usize| {
             core::str::from_utf8(&line[prefix..]).unwrap_or("").trim()
         };
+
+        // VAR=value assignment (must have no spaces in VAR part, start with alpha/_)
+        if let Some(eq) = line.iter().position(|&b| b == b'=') {
+            let lhs = &line[..eq];
+            if !lhs.is_empty()
+                && (lhs[0].is_ascii_alphabetic() || lhs[0] == b'_')
+                && lhs.iter().all(|&b| b.is_ascii_alphanumeric() || b == b'_')
+                && !lhs.contains(&b' ')
+            {
+                let name = core::str::from_utf8(lhs).unwrap_or("");
+                let val  = core::str::from_utf8(&line[eq + 1..]).unwrap_or("").trim();
+                self.set_var(name, val);
+                return;
+            }
+        }
 
         if line == b"help" {
             self.write_output(b"\x1b[36mFiles:\x1b[0m\r\n");
@@ -1416,6 +1501,41 @@ impl Terminal {
             self.write_output(b"OS=RustyPenguin\r\n");
             self.write_output(b"ARCH=x86_64\r\n");
             self.write_output(b"KERNEL=bare-metal-rust\r\n");
+            let vars_clone = self.vars.clone();
+            for (k, v) in &vars_clone {
+                let s = format!("{}={}\r\n", k, v);
+                self.write_output(s.as_bytes());
+            }
+
+        } else if line.starts_with(b"export ") {
+            let rest = arg(7);
+            if let Some(eq) = rest.find('=') {
+                let name = rest[..eq].trim();
+                let val  = rest[eq + 1..].trim();
+                self.set_var(name, val);
+            } else if !rest.is_empty() {
+                // export existing var (no-op, already global)
+                let s = format!("declare -x {}\r\n", rest);
+                self.write_output(s.as_bytes());
+            } else {
+                self.write_output(b"usage: export VAR=value\r\n");
+            }
+
+        } else if line.starts_with(b"unset ") {
+            let name = arg(6);
+            self.unset_var(name);
+
+        } else if line == b"set" {
+            // Show all variables
+            let vars_clone = self.vars.clone();
+            if vars_clone.is_empty() {
+                self.write_output(b"\x1b[90m(no variables set)\x1b[0m\r\n");
+            } else {
+                for (k, v) in &vars_clone {
+                    let s = format!("{}={}\r\n", k, v);
+                    self.write_output(s.as_bytes());
+                }
+            }
 
         } else if line.starts_with(b"psh ") {
             // Run a VFS file as a shell script (line by line)
@@ -1527,9 +1647,11 @@ impl Terminal {
             const BUILTINS: &[&str] = &[
                 "ls","cat","nano","vi","edit","touch","rm","mkdir","cp","mv",
                 "wc","head","tail","grep","sort","uniq","find","xxd","hexdump",
-                "history","env","printenv","which",
-                "ps","mem","sysinfo","neofetch","uname","whoami","uptime","date",
-                "trit","ai","echo","clear","pwd","exit","kver","kinstall",
+                "history","env","printenv","which","set","export","unset",
+                "ps","mem","free","df","lscpu","sysinfo","neofetch",
+                "uname","whoami","uptime","date","trit","ai",
+                "echo","clear","pwd","exit","kver","kinstall",
+                "psh","seq","bc","calc","rev",
             ];
             if BUILTINS.iter().any(|&b| b == cmd_name) {
                 let s = format!("psh builtin: {}\r\n", cmd_name);
