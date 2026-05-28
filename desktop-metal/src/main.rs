@@ -334,6 +334,12 @@ fn draw_scene_static(fb: &mut Framebuffer) {
     fb.fill_rect(4, tb_y + 3, 62, 1, 0x22C55E);  // green top edge
     fb.draw_bitmap_2x(8, tb_y + 6, &DINGIR, GREEN, 0x152230);
     fb.draw_str(30, tb_y + 10, "Menu", WHITE, 0x152230);
+    // Left icon dock panel — dark pill behind all icons
+    let dock_h = (tb_y - TOPBAR_H).saturating_sub(8);
+    fb.fill_rounded_rect(4, TOPBAR_H as i32 + 4, 62, dock_h as i32, 10, 0x07101A);
+    fb.fill_rect(4, TOPBAR_H + 4, 1, dock_h, 0x1A3040);   // left accent line
+    fb.fill_rect(65, TOPBAR_H + 4, 1, dock_h, 0x0D1E2C);   // right edge shadow
+
     // Separator after menu button
     fb.fill_rect(70, tb_y + 5, 1, 18, 0x1E3030);
     // "Show desktop" strip — far right of taskbar (Mint/GNOME-style)
@@ -519,8 +525,11 @@ fn draw_taskbar_win_btns(fb: &mut Framebuffer, term_wins: &[TermWin]) {
         fb.fill_rect_s(x + 4, y, w - 8, 2, accent);
         // App icon dot (small filled circle in accent color)
         fb.fill_circle(x + 6, y + h / 2, 2, accent);
+        // Show only the app name (before " - ") when space is tight.
+        let title = tw.win.title.as_str();
+        let short = title.find(" - ").map(|i| &title[..i]).unwrap_or(title);
         let max_chars = ((w - 18) / 8).max(0) as usize;
-        let lbl = &tw.win.title[..max_chars.min(tw.win.title.len())];
+        let lbl = &short[..max_chars.min(short.len())];
         fb.draw_str((x + 14) as u32, (y + 5) as u32, lbl, txt, bg);
     }
 }
