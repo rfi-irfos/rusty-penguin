@@ -92,21 +92,22 @@ pub fn handle_irq() {
         if PACKET_IDX == 3 {
             PACKET_IDX = 0;
             let flags = PACKET[0];
-            let dx_raw = PACKET[1] as i8;
-            let dy_raw = PACKET[2] as i8;
 
             // Ignore if overflow bits set
             if flags & 0xC0 != 0 { return; }
 
             let buttons = flags & 0x07;
 
-            // Correct 9-bit PS/2 signed delta: sign bit lives in the flags byte,
-            // not in the data byte. Casting to i8 gives wrong sign for values 128-255.
+            // PS/2 9-bit signed delta: the 9th (sign) bit lives in flags[4] / flags[5],
+            // not in the data byte.  Keep data bytes as unsigned (0..255) and subtract
+            // 256 when the sign bit is set — do NOT cast to i8 first, that would
+            // incorrectly sign-extend values ≥ 128 and flip the cursor direction.
             let x_neg = (flags & 0x10) != 0;
             let y_neg = (flags & 0x20) != 0;
-            let dx = if x_neg { (dx_raw as i32) - 256 } else { dx_raw as i32 };
-            let dy_raw9 = if y_neg { (dy_raw as i32) - 256 } else { dy_raw as i32 };
-            let dy = -dy_raw9;  // PS/2 Y is inverted vs screen coords
+            let dx_u = PACKET[1] as i32;  // 0..255
+            let dy_u = PACKET[2] as i32;  // 0..255
+            let dx = if x_neg { dx_u - 256 } else { dx_u };
+            let dy = -(if y_neg { dy_u - 256 } else { dy_u }); // PS/2 Y inverted vs screen
 
             let w = fb::width() as i32;
             let h = fb::height() as i32;
