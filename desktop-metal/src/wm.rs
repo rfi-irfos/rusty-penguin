@@ -152,43 +152,53 @@ pub fn draw_window(fb: &mut Framebuffer, win: &Window, focused: bool) {
 
     let x = win.x; let y = win.y; let w = win.w; let h = win.h;
 
-    // Soft shadow — multi-layer for modern depth (Ubuntu-style)
-    fb.fill_rounded_rect(x + 6, y + 6, w, h, 8, 0x000000);  // Deep shadow far
-    fb.fill_rounded_rect(x + 4, y + 4, w, h, 8, 0x0A0A14);  // Medium shadow
-    fb.fill_rounded_rect(x + 2, y + 2, w, h, 8, SHADOW);    // Soft shadow near
+    // ── Aero-style atmospheric shadow — large, soft, diffused, suspended look.
+    // Outer bloom (wide, near-transparent): window appears to float above the desk.
+    // Inner layers tighten into the classic drop shadow.
+    fb.fill_rounded_rect(x + 12, y + 16, w - 4, h, 14, 0x07090A); // atmosphere bloom
+    fb.fill_rounded_rect(x +  8, y + 10, w - 2, h, 12, 0x060808); // mid bloom
+    fb.fill_rounded_rect(x +  4, y +  6, w,     h, 10, 0x0A0F0D); // near shadow
+    fb.fill_rounded_rect(x +  2, y +  3, w,     h,  9, SHADOW);   // crisp drop
 
-    // Outer border (1px) — rounded corners, color signals focus.
+    // ── Outer border — focused gets a warm cream-tinted top edge (Aero "light catch").
     let border = if focused { BORDER_ACT } else { BORDER_DIM };
     fb.fill_rounded_rect(x, y, w, h, 8, border);
+    // Top-edge light catch: a 1-px highlight simulating overhead illumination.
+    // Focused = cream-warm, background = barely visible.
+    let top_light = if focused { 0x7A8A7E } else { 0x3A4540 };
+    fb.fill_rect_s(x + 8, y, w - 16, 1, top_light);
 
-    // Titlebar — vertical gradient, rows clipped to respect the rounded top corners.
-    // Inner radius = 7 (= outer 8 − 1px border). TOP_INNER_CLIP gives the extra
-    // horizontal inset needed for the first 7 rows inside the border.
-    let tb_col = if focused { TITLE_ACT } else { TITLE_DIM };
-    let tr = (tb_col >> 16 & 0xFF) as u8;
-    let tg = (tb_col >>  8 & 0xFF) as u8;
-    let tb = (tb_col       & 0xFF) as u8;
-    for dy in 0..TITLEBAR_H as u32 {
-        let hi = (0x14u32 * (TITLEBAR_H as u32 - 1 - dy) / (TITLEBAR_H as u32 - 1)) as u8;
-        let row_col = (tr.saturating_add(hi) as u32) << 16
-                    | (tg.saturating_add(hi) as u32) << 8
-                    |  tb.saturating_add(hi) as u32;
-        let clip = if (dy as usize) < TOP_INNER_CLIP.len() { TOP_INNER_CLIP[dy as usize] } else { 0 };
-        let rx = x + 1 + clip;
-        let rw = (w - 2 - clip * 2).max(0);
-        if rw > 0 { fb.fill_rect_s(rx, y + 1 + dy as i32, rw, 1, row_col); }
+    // ── Titlebar — frosted glass (alpha-blend over window content/shadow bg).
+    // Focused windows are slightly more opaque and brighter (depth hierarchy).
+    // Background windows are dimmer/flatter to visually recede.
+    let glass_alpha = if focused { 230u32 } else { 180u32 };
+    let tb_col      = if focused { TITLE_ACT } else { TITLE_DIM };
+    fb.fill_rounded_rect_glass(x + 1, y + 1, w - 2, TITLEBAR_H, 7, tb_col, glass_alpha);
+
+    // Aero "inner glow" at the top of the titlebar on focused windows:
+    // a faint warm-green luminance line just inside the top edge.
+    if focused {
+        let glow = 0x3A4D40u32; // subtle warm green ambient glow
+        fb.fill_rect_s(x + 8, y + 1, w - 16, 1, glow);
+        fb.fill_rect_s(x + 6, y + 2, w - 12, 1,
+            (((glow >> 16 & 0xFF) / 2) << 16) | (((glow >> 8 & 0xFF) / 2) << 8) | ((glow & 0xFF) / 2));
     }
-    // Bottom edge of titlebar
+
+    // Bottom edge of titlebar (hairline separator)
     fb.fill_rect((x + 1) as u32, (y + 1 + TITLEBAR_H) as u32, (w - 2) as u32, 1, TITLE_LINE);
 
-    // Content area — rounded bottom corners to match the window border.
+    // ── Content area — frosted glass for focused, solid for background (depth).
     let cy2 = y + 2 + TITLEBAR_H;
     let ch  = h - 3 - TITLEBAR_H;
     if ch > 0 {
-        fb.fill_rounded_rect(x + 1, cy2, w - 2, ch, 7, CONTENT_BG);
+        if focused {
+            fb.fill_rounded_rect_glass(x + 1, cy2, w - 2, ch, 7, CONTENT_BG, 220);
+        } else {
+            fb.fill_rounded_rect(x + 1, cy2, w - 2, ch, 7, CONTENT_BG);
+        }
     }
 
-    // Title text
+    // ── Title text
     let right_reserved = BTN_MARGIN + BTN_GAP * 2 + BTN_R + 6;
     let left_reserved  = 6;
     let avail_w = (w - right_reserved - left_reserved).max(0);
@@ -199,22 +209,19 @@ pub fn draw_window(fb: &mut Framebuffer, win: &Window, focused: bool) {
     let title_x = x + left_reserved + (avail_w - title_px_w).max(0) / 2;
     let txt_col = if focused { TXT_ACT } else { TXT_DIM };
     let txt_dy  = (TITLEBAR_H - 8) / 2;
-    let txt_hi  = (0x14u32 * (TITLEBAR_H as u32 - 1 - txt_dy as u32) / (TITLEBAR_H as u32 - 1)) as u8;
-    let txt_bg  = (tr.saturating_add(txt_hi) as u32) << 16
-               | (tg.saturating_add(txt_hi) as u32) << 8
-               |  tb.saturating_add(txt_hi) as u32;
+    let txt_bg  = if focused { TITLE_ACT } else { TITLE_DIM };
     fb.draw_str(title_x as u32, (y + 1 + txt_dy) as u32, title, txt_col, txt_bg);
 
-    // Traffic-light buttons — dim when unfocused (macOS convention).
+    // ── Traffic-light buttons — dim when unfocused (Aero z-hierarchy convention).
     let bcy = btn_cy(win);
     if focused {
         draw_btn(fb, close_cx(win), bcy, BTN_CLOSE);
         draw_btn(fb, min_cx(win),   bcy, BTN_MIN);
         draw_btn(fb, max_cx(win),   bcy, BTN_MAX);
     } else {
-        draw_btn(fb, close_cx(win), bcy, 0x5C2020);
-        draw_btn(fb, min_cx(win),   bcy, 0x5C4008);
-        draw_btn(fb, max_cx(win),   bcy, 0x134D20);
+        draw_btn(fb, close_cx(win), bcy, 0x4A2020);
+        draw_btn(fb, min_cx(win),   bcy, 0x4A3808);
+        draw_btn(fb, max_cx(win),   bcy, 0x0F3A18);
     }
 }
 
