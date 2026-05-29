@@ -4,6 +4,19 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+### Changed — Desktop v2 visual redesign from Simeon's mockup (2026-05-29)
+
+- Adopted the warm-stone-green palette from `docs/design/rusty-penguin-os-mockup.html`
+  (bg `#1B211E`, green `#6FE18B`, warm text `#ECEDE5`, ternary triad
+  `neg/zero/pos = #EF7575/#909A92/#6FE18B`), replacing the cool graphite +
+  system-blue. Warm-stone wallpaper gradient with a soft green glow up top.
+  Clock kept in the topbar (per Simeon). Proof `docs/desktop-v2-palette.png`.
+- **Frosted-glass panels** (`fb.fill_rounded_rect_glass`): panels alpha-blend
+  their color over the wallpaper behind them — the mockup's translucent
+  `--panel` look without a full backdrop blur. The sparse-rendering thesis
+  applied to chrome: read what's dormant behind the panel and only tint it.
+  Proof `docs/desktop-v2-glass.png`. Next slices: dock restyle, TIS visuals.
+
 ### Added — Linux ABI layer brick 4: dynamic linking — a dynamically-linked glibc binary runs (2026-05-29)
 
 - **The bare-metal Rust kernel runs a *dynamically-linked* glibc binary** (the

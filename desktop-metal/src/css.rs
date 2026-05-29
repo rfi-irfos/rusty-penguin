@@ -100,26 +100,27 @@ pub fn paint_panel(fb: &mut Framebuffer, x: i32, y: i32, w: i32, h: i32,
         Trit::Neg  => (dim(style.bg, 1), dim(style.border, 1), false), // disabled: dimmed
     };
 
-    // Soft multi-layer drop shadow (macOS-style): a few translucent-ish darker
-    // rounded rects offset down/right with decreasing spread.
+    // Soft multi-layer drop shadow: darker rounded rects offset down with
+    // decreasing spread (warm-black, matching the mockup's layered shadow).
     if style.shadow {
-        fb.fill_rounded_rect(x - 1, y + 6, w + 2, h, r + 2, 0x05050A);
-        fb.fill_rounded_rect(x,     y + 3, w,     h, r + 1, 0x0A0A12);
+        fb.fill_rounded_rect(x - 1, y + 7, w + 2, h, r + 3, 0x070A08);
+        fb.fill_rounded_rect(x,     y + 3, w,     h, r + 1, 0x0C110E);
     }
 
-    // Border first, then inset background → a crisp hairline edge.
-    let bw = style.border_w.max(1) as i32;
-    fb.fill_rounded_rect(x, y, w, h, r, border);
-    fb.fill_rounded_rect(x + bw, y + bw, w - 2 * bw, h - 2 * bw, (r - bw).max(0), bg);
-
-    // Subtle top highlight (the macOS "light from above" sheen).
-    fb.fill_rect_s(x + r, y + bw, w - 2 * r, 1, 0x2C2C2E);
-
-    // Accent ring when active.
+    // Frosted-glass body: alpha-blend the panel color over the wallpaper behind
+    // it (the mockup's translucent `--panel` look). The wallpaper's green glow
+    // tints through subtly. Sheen line at top = "light from above".
+    let glass = 205; // ~0.80 opacity
     if fg_ring {
+        // Focused: crisp accent ring, frosted interior.
         fb.fill_rounded_rect(x, y, w, h, r, style.accent);
-        fb.fill_rounded_rect(x + 2, y + 2, w - 4, h - 4, (r - 2).max(0), bg);
-        fb.fill_rect_s(x + r, y + 2, w - 2 * r, 1, 0x2C2C2E);
+        fb.fill_rounded_rect_glass(x + 2, y + 2, w - 4, h - 4, (r - 2).max(0), bg, glass);
+        fb.fill_rect_s(x + r, y + 3, w - 2 * r, 1, 0x4C564F);
+    } else {
+        // Normal/dimmed: frosted glass straight over the wallpaper + faint edge.
+        fb.fill_rounded_rect_glass(x, y, w, h, r, bg, glass);
+        fb.fill_rect_s(x + r, y + 1, w - 2 * r, 1, 0x4C564F);     // top sheen
+        let _ = border;                                            // hairline implied by frost edge
     }
 
     (x + style.pad_x as i32, y + style.pad_y as i32,

@@ -257,6 +257,40 @@ impl Framebuffer {
         }
     }
 
+    /// Frosted-glass rounded fill: alpha-blend `color` over the pixels already
+    /// there (which carry the wallpaper), giving the mockup's translucent panel
+    /// look without a full backdrop blur. `alpha` is 0..=255 (opacity of color).
+    /// This is the sparse-rendering thesis applied to chrome: we read what's
+    /// dormant behind the panel and only tint it, rather than re-deriving it.
+    pub fn fill_rounded_rect_glass(&mut self, x: i32, y: i32, w: i32, h: i32, r: i32, color: u32, alpha: u32) {
+        if w <= 0 || h <= 0 { return; }
+        let r = r.min(w / 2).min(h / 2).max(0);
+        let r2 = r * r;
+        let cxl = x + r; let cxr = x + w - 1 - r;
+        let cyt = y + r; let cyb = y + h - 1 - r;
+        let xa = x.max(0); let ya = y.max(0);
+        let xb = (x + w).min(self.width as i32);
+        let yb = (y + h).min(self.height as i32);
+        let a = alpha.min(255); let ia = 255 - a;
+        let sr = (color >> 16) & 0xFF; let sg = (color >> 8) & 0xFF; let sb = color & 0xFF;
+        for py in ya..yb {
+            for px in xa..xb {
+                if r > 0 && (
+                   (px < cxl && py < cyt && { let dx=px-cxl; let dy=py-cyt; dx*dx+dy*dy>r2 })
+                || (px > cxr && py < cyt && { let dx=px-cxr; let dy=py-cyt; dx*dx+dy*dy>r2 })
+                || (px < cxl && py > cyb && { let dx=px-cxl; let dy=py-cyb; dx*dx+dy*dy>r2 })
+                || (px > cxr && py > cyb && { let dx=px-cxr; let dy=py-cyb; dx*dx+dy*dy>r2 }))
+                { continue; }
+                let d = self.get_pixel(px as u32, py as u32);
+                let dr = (d >> 16) & 0xFF; let dg = (d >> 8) & 0xFF; let db = d & 0xFF;
+                let or = (sr * a + dr * ia) / 255;
+                let og = (sg * a + dg * ia) / 255;
+                let ob = (sb * a + db * ia) / 255;
+                self.set_pixel(px as u32, py as u32, (or << 16) | (og << 8) | ob);
+            }
+        }
+    }
+
     // Draw a single character at 2× scale (16×16 px per glyph).
     pub fn draw_char_2x(&mut self, x: u32, y: u32, ch: char, fg: u32, bg: u32) {
         let idx = (ch as u32).wrapping_sub(0x20);
