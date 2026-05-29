@@ -139,9 +139,19 @@ const PANEL_R:      i32 = 14;        // panel corner radius
 
 fn panel_top(h: u32) -> i32 { h as i32 - PANEL_BOTTOM - PANEL_H }
 fn menu_btn_rect(h: u32) -> (i32, i32, i32, i32) { (PANEL_MARGIN + 8, panel_top(h) + 7, MENU_BTN_W, 40) }
+
+// favourites_row: CSS FlexRow for the icon strip inside the dock.
+// Left edge starts after Menu button + separator gap.
+fn favourites_row(h: u32) -> css::FlexRow {
+    let ptop = panel_top(h);
+    let x0 = PANEL_MARGIN + 8 + MENU_BTN_W + 16;  // after menu button
+    css::FlexRow::new(x0, ptop + 7, 9 * (FAV_TILE + FAV_GAP), PANEL_H - 14, FAV_GAP)
+}
+
 fn fav_rect(i: usize, h: u32) -> (i32, i32, i32, i32) {
-    let x = PANEL_MARGIN + 8 + MENU_BTN_W + 16 + i as i32 * (FAV_TILE + FAV_GAP);
-    (x, panel_top(h) + 7, FAV_TILE, FAV_TILE)
+    let row = favourites_row(h);
+    let (x, y) = row.item_rect_centered(9, i, FAV_TILE, FAV_TILE);
+    (x, y, FAV_TILE, FAV_TILE)
 }
 
 // Fill area (hot-spot at (0,0)).  Save/restore adds 1px border on all four sides.

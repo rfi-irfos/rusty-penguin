@@ -191,6 +191,49 @@ impl Node {
     pub fn hide(&mut self) { self.dirty = Trit::Neg; }
 }
 
+// ── FlexRow — one-axis layout primitive ───────────────────────────────────
+// A minimal flex layout container: positions N items of fixed width in a
+// horizontal strip, optionally center-aligned within a parent rect.
+// This replaces hardcoded arithmetic like `MARGIN + i * (TILE + GAP)` with
+// a declarative spec — the same logic, but owned by the CSS engine and
+// reusable across the dock, start menu, and any future panels.
+pub struct FlexRow {
+    pub x: i32, pub y: i32,  // top-left of the container
+    pub w: i32, pub h: i32,  // container size
+    pub gap: i32,             // gap between items
+}
+
+impl FlexRow {
+    pub const fn new(x: i32, y: i32, w: i32, h: i32, gap: i32) -> Self {
+        FlexRow { x, y, w, h, gap }
+    }
+
+    /// X position of item `i` in a row of `n` items each `item_w` wide.
+    /// Items are left-packed from `self.x`; call `center_x` variant to center.
+    pub fn item_x(&self, i: usize, item_w: i32) -> i32 {
+        self.x + i as i32 * (item_w + self.gap)
+    }
+
+    /// X position of item `i`, with the whole row centered inside self.w.
+    pub fn item_x_centered(&self, n: usize, i: usize, item_w: i32) -> i32 {
+        if n == 0 { return self.x; }
+        let total = n as i32 * item_w + (n as i32 - 1).max(0) * self.gap;
+        let start = self.x + (self.w - total).max(0) / 2;
+        start + i as i32 * (item_w + self.gap)
+    }
+
+    /// Y position to vertically center an item of `item_h` inside self.h.
+    pub fn item_y_centered(&self, item_h: i32) -> i32 {
+        self.y + (self.h - item_h).max(0) / 2
+    }
+
+    /// Returns the (x, y) pair for item `i` of size (item_w, item_h),
+    /// centered in both axes within this container.
+    pub fn item_rect_centered(&self, n: usize, i: usize, item_w: i32, item_h: i32) -> (i32, i32) {
+        (self.item_x_centered(n, i, item_w), self.item_y_centered(item_h))
+    }
+}
+
 /// A parsed stylesheet: selector → Style rules. Supports the CSS subset
 /// `.selector { decl; decl; } .other { … }`. Selectors are simple names
 /// (class-like); cascading/specificity comes in a later brick.
