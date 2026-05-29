@@ -83,16 +83,25 @@ fn build_arp_request(frame: &mut [u8; 42], src_mac: &[u8; 6], target_ip: &[u8; 4
     a[24..28].copy_from_slice(target_ip);
 }
 
-/// ARP-probe the gateway to prove TX+RX. Returns the gateway MAC if a reply
-/// arrives within the poll budget.
-pub fn arp_probe() -> Option<[u8; 6]> {
+/// ARP-resolve any on-link IP. Returns the host's MAC if a reply arrives within
+/// the poll budget. Used for the gateway (TX+RX proof) and the DNS server.
+pub fn arp_resolve(target_ip: &[u8; 4]) -> Option<[u8; 6]> {
     let nic = rtl8139::nic()?;
-    log_mac("  [net] our MAC ", &nic.mac);
 
     let mut frame = [0u8; 42];
-    build_arp_request(&mut frame, &nic.mac, &GW_IP);
+    build_arp_request(&mut frame, &nic.mac, target_ip);
     nic.send(&frame);
-    crate::serial::write_str("  [net] ARP who-has 10.0.2.2 sent\n");
+    crate::serial::write_str("  [net] ARP who-has ");
+    let mut ipbuf = [0u8; 15]; // dotted-quad for the log line
+    let mut p = 0;
+    for (i, &b) in target_ip.iter().enumerate() {
+        if b >= 100 { ipbuf[p] = b'0' + b / 100; p += 1; }
+        if b >= 10  { ipbuf[p] = b'0' + (b / 10) % 10; p += 1; }
+        ipbuf[p] = b'0' + b % 10; p += 1;
+        if i < 3 { ipbuf[p] = b'.'; p += 1; }
+    }
+    crate::serial::write_str(core::str::from_utf8(&ipbuf[..p]).unwrap_or("?"));
+    crate::serial::write_str(" sent\n");
 
     let mut rx = [0u8; 1536];
     for _ in 0..2_000_000u32 {
@@ -100,11 +109,11 @@ pub fn arp_probe() -> Option<[u8; 6]> {
             if len >= 42
                 && rx[12] == 0x08 && rx[13] == 0x06          // ethertype ARP
                 && rx[20] == 0x00 && rx[21] == 0x02           // op = reply
-                && rx[28..32] == GW_IP                        // sender IP = gateway
+                && rx[28..32] == *target_ip                   // sender IP = our target
             {
                 let mut mac = [0u8; 6];
                 mac.copy_from_slice(&rx[22..28]);             // ARP sender MAC
-                log_mac("  [net] gateway MAC ", &mac);
+                log_mac("  [net] resolved MAC ", &mac);
                 return Some(mac);
             }
         }
@@ -370,9 +379,11 @@ fn parse_tcp(rx: &[u8], len: usize) -> Option<(u32, u32, u8, usize, usize)> {
     Some((seq, ackn, flags, poff, plen))
 }
 
-/// Fetch `GET /` from dst_ip:dport over TCP. Returns true if an HTTP response
-/// arrived. `gw_mac` is the on-link next hop (the SLIRP gateway).
-fn tcp_http_get(gw_mac: &[u8; 6], dst_ip: [u8; 4], dport: u16) -> bool {
+/// Fetch `GET /` from dst_ip:dport over TCP, sending `host` in the Host header.
+/// Returns true if an HTTP response arrived. `next_mac` is the on-link next hop
+/// — the SLIRP gateway for any remote (off-link) destination.
+fn tcp_http_get(next_mac: &[u8; 6], dst_ip: [u8; 4], dport: u16, host: &str) -> bool {
+    let gw_mac = next_mac;
     let nic = match rtl8139::nic() { Some(n) => n, None => return false };
     let mac = nic.mac;
     let mut f = [0u8; 256];
@@ -382,7 +393,9 @@ fn tcp_http_get(gw_mac: &[u8; 6], dst_ip: [u8; 4], dport: u16) -> bool {
     // SYN
     let n = build_tcp(&mut f, gw_mac, &mac, &OUR_IP, &dst_ip, dport, isn, 0, TCP_SYN, &[]);
     nic.send(&f[..n]);
-    crate::serial::write_str("  [net] TCP SYN -> 10.0.2.2:8088\n");
+    crate::serial::write_str("  [net] TCP SYN -> ");
+    crate::serial::write_str(host);
+    crate::serial::write_str("\n");
 
     // SYN-ACK
     let mut their_seq = 0u32;
@@ -409,7 +422,16 @@ fn tcp_http_get(gw_mac: &[u8; 6], dst_ip: [u8; 4], dport: u16) -> bool {
     // ACK the handshake, then PSH the HTTP request.
     let n = build_tcp(&mut f, gw_mac, &mac, &OUR_IP, &dst_ip, dport, snd, rcv_nxt, TCP_ACK, &[]);
     nic.send(&f[..n]);
-    let req = b"GET / HTTP/1.0\r\nHost: 10.0.2.2\r\nConnection: close\r\n\r\n";
+    // Build "GET / HTTP/1.0\r\nHost: <host>\r\nConnection: close\r\n\r\n".
+    let mut reqbuf = [0u8; 160];
+    let mut rl = 0;
+    for part in [b"GET / HTTP/1.0\r\nHost: ".as_slice(), host.as_bytes(),
+                 b"\r\nConnection: close\r\n\r\n".as_slice()] {
+        let take = part.len().min(reqbuf.len() - rl);
+        reqbuf[rl..rl + take].copy_from_slice(&part[..take]);
+        rl += take;
+    }
+    let req = &reqbuf[..rl];
     let n = build_tcp(&mut f, gw_mac, &mac, &OUR_IP, &dst_ip, dport, snd, rcv_nxt, TCP_PSH | TCP_ACK, req);
     nic.send(&f[..n]);
     crate::serial::write_str("  [net] HTTP GET / sent\n");
@@ -460,6 +482,153 @@ fn tcp_http_get(gw_mac: &[u8; 6], dst_ip: [u8; 4], dport: u16) -> bool {
     }
 }
 
+// ── UDP transport + DNS ─────────────────────────────────────────────────────
+// Brick 5: resolve a hostname to an IPv4 address over UDP/53. SLIRP runs a DNS
+// proxy at 10.0.2.3 that forwards to the host's resolver, so a real-domain
+// lookup works whenever the host has outbound DNS. UDP checksum 0 (allowed v4).
+const DNS_IP:       [u8; 4] = [10, 0, 2, 3];
+const DNS_PORT:     u16     = 53;
+const OUR_DNS_PORT: u16     = 49153;
+
+/// Build an Ethernet+IPv4+UDP frame carrying `payload`; returns its length.
+fn build_udp(f: &mut [u8], dst_mac: &[u8; 6], src_mac: &[u8; 6],
+             src_ip: &[u8; 4], dst_ip: &[u8; 4], sport: u16, dport: u16,
+             payload: &[u8]) -> usize {
+    for b in f.iter_mut() { *b = 0; }
+    f[0..6].copy_from_slice(dst_mac);
+    f[6..12].copy_from_slice(src_mac);
+    f[12] = 0x08; f[13] = 0x00;
+
+    let u = 34; // UDP header offset
+    f[u]     = (sport >> 8) as u8; f[u + 1] = sport as u8;
+    f[u + 2] = (dport >> 8) as u8; f[u + 3] = dport as u8;
+    let udp_len = (8 + payload.len()) as u16;
+    f[u + 4] = (udp_len >> 8) as u8; f[u + 5] = udp_len as u8;
+    f[u + 8..u + 8 + payload.len()].copy_from_slice(payload);
+    // checksum (f[u+6..u+8]) left 0 — optional for IPv4 UDP
+
+    // IPv4
+    f[14] = 0x45;
+    let total = (20 + 8 + payload.len()) as u16;
+    f[16] = (total >> 8) as u8; f[17] = total as u8;
+    f[20] = 0x40; f[22] = 64; f[23] = PROTO_UDP;
+    f[26..30].copy_from_slice(src_ip);
+    f[30..34].copy_from_slice(dst_ip);
+    let ipck = inet_checksum(&f[14..34]);
+    f[24] = (ipck >> 8) as u8; f[25] = ipck as u8;
+    14 + total as usize
+}
+
+/// If `rx[..len]` is a UDP datagram matching the (src,dst) ports, return the
+/// payload window (offset, length).
+fn parse_udp_payload(rx: &[u8], len: usize, want_sport: u16, want_dport: u16)
+    -> Option<(usize, usize)> {
+    if len < 42 { return None; }
+    if !(rx[12] == 0x08 && rx[13] == 0x00 && rx[23] == PROTO_UDP) { return None; }
+    let u = 34;
+    let sport = u16::from_be_bytes([rx[u], rx[u + 1]]);
+    let dport = u16::from_be_bytes([rx[u + 2], rx[u + 3]]);
+    if sport != want_sport || dport != want_dport { return None; }
+    let udp_len = u16::from_be_bytes([rx[u + 4], rx[u + 5]]) as usize;
+    let poff = u + 8;
+    let plen = udp_len.saturating_sub(8).min(len.saturating_sub(poff));
+    Some((poff, plen))
+}
+
+/// Encode a DNS query for an A record of `domain` into `buf`; returns its length.
+fn build_dns_query(buf: &mut [u8], domain: &str, txid: u16) -> usize {
+    buf[0] = (txid >> 8) as u8; buf[1] = txid as u8;
+    buf[2] = 0x01; buf[3] = 0x00;        // flags: RD (recursion desired)
+    buf[4] = 0; buf[5] = 1;              // QDCOUNT = 1
+    buf[6] = 0; buf[7] = 0;              // ANCOUNT
+    buf[8] = 0; buf[9] = 0;              // NSCOUNT
+    buf[10] = 0; buf[11] = 0;            // ARCOUNT
+    let mut p = 12;
+    for label in domain.split('.') {
+        let l = label.as_bytes();
+        if l.is_empty() || l.len() > 63 || p + 1 + l.len() >= buf.len() { break; }
+        buf[p] = l.len() as u8; p += 1;
+        buf[p..p + l.len()].copy_from_slice(l); p += l.len();
+    }
+    buf[p] = 0; p += 1;                  // root label
+    buf[p] = 0; buf[p + 1] = 1; p += 2;  // QTYPE = A
+    buf[p] = 0; buf[p + 1] = 1; p += 2;  // QCLASS = IN
+    p
+}
+
+/// Advance past a DNS name starting at `p` (handles a trailing compression
+/// pointer, which terminates the name). Returns the offset just after it.
+fn dns_skip_name(msg: &[u8], mut p: usize) -> Option<usize> {
+    loop {
+        if p >= msg.len() { return None; }
+        let len = msg[p];
+        if len == 0 { return Some(p + 1); }
+        if len & 0xC0 == 0xC0 { return Some(p + 2); } // pointer ends the name
+        p += 1 + len as usize;
+    }
+}
+
+/// Parse the first A record out of a DNS response with our `txid`.
+fn parse_dns_a(msg: &[u8], txid: u16) -> Option<[u8; 4]> {
+    if msg.len() < 12 { return None; }
+    if msg[0] != (txid >> 8) as u8 || msg[1] != txid as u8 { return None; }
+    if msg[2] & 0x80 == 0 { return None; }                 // QR = response
+    let qd = u16::from_be_bytes([msg[4], msg[5]]);
+    let an = u16::from_be_bytes([msg[6], msg[7]]);
+    if an == 0 { return None; }
+    let mut p = 12;
+    for _ in 0..qd {                                       // skip questions
+        p = dns_skip_name(msg, p)?;
+        p += 4;                                            // QTYPE + QCLASS
+    }
+    for _ in 0..an {                                       // walk answers
+        p = dns_skip_name(msg, p)?;
+        if p + 10 > msg.len() { return None; }
+        let rtype = u16::from_be_bytes([msg[p], msg[p + 1]]);
+        let rdlen = u16::from_be_bytes([msg[p + 8], msg[p + 9]]) as usize;
+        p += 10;
+        if rtype == 1 && rdlen == 4 && p + 4 <= msg.len() {
+            return Some([msg[p], msg[p + 1], msg[p + 2], msg[p + 3]]);
+        }
+        p += rdlen;                                        // skip non-A (e.g. CNAME)
+    }
+    None
+}
+
+/// Resolve `domain` to an IPv4 address via the DNS server. `dns_mac` is the
+/// on-link MAC of the DNS host (from ARP).
+fn dns_resolve(dns_mac: &[u8; 6], domain: &str) -> Option<[u8; 4]> {
+    let nic = rtl8139::nic()?;
+    let mac = nic.mac;
+    let txid: u16 = 0x1A2B;
+    let mut query = [0u8; 256];
+    let qlen = build_dns_query(&mut query, domain, txid);
+
+    let mut f = [0u8; 512];
+    let n = build_udp(&mut f, dns_mac, &mac, &OUR_IP, &DNS_IP,
+                      OUR_DNS_PORT, DNS_PORT, &query[..qlen]);
+    nic.send(&f[..n]);
+    crate::serial::write_str("  [net] DNS query A? ");
+    crate::serial::write_str(domain);
+    crate::serial::write_str(" -> 10.0.2.3\n");
+
+    let mut rx = [0u8; 1536];
+    for _ in 0..4_000_000u32 {
+        if let Some(l) = nic.poll_rx(&mut rx) {
+            if let Some((poff, plen)) = parse_udp_payload(&rx, l, DNS_PORT, OUR_DNS_PORT) {
+                if let Some(ip) = parse_dns_a(&rx[poff..poff + plen], txid) {
+                    crate::serial::write_str("  [net] DNS ");
+                    crate::serial::write_str(domain);
+                    log_ip(" -> ", &ip);
+                    return Some(ip);
+                }
+            }
+        }
+    }
+    crate::serial::write_str("  [net] no DNS reply (timeout)\n");
+    None
+}
+
 /// Bring up the NIC, ARP the gateway, then ping it. Ternary result:
 /// Pos = ping round-trip OK, Zero = NIC up but ARP/ping failed, Neg = no NIC.
 pub fn init() -> ternary_core::Trit {
@@ -467,15 +636,27 @@ pub fn init() -> ternary_core::Trit {
     if !rtl8139::init() {
         return Trit::Neg;
     }
-    let gw = match arp_probe() {
+    let nic_mac = rtl8139::nic().map(|n| n.mac);
+    if let Some(m) = nic_mac { log_mac("  [net] our MAC ", &m); }
+    let gw = match arp_resolve(&GW_IP) {
         Some(m) => m,
         None    => return Trit::Zero,
     };
     let _ = icmp_ping(&gw);   // ping (result logged)
     let lease = dhcp();
-    // TCP + HTTP fetch from the host via SLIRP (10.0.2.2:8088). Logged; fails
-    // fast with RST if no server is listening, so it never stalls normal boots.
-    let _ = tcp_http_get(&gw, GW_IP, 8088);
+    // DNS (brick 5): resolve a real hostname over UDP/53. The DNS host (10.0.2.3)
+    // is on-link, so ARP it directly. Real-domain resolves whenever the host has
+    // outbound DNS; logged either way and never stalls boot.
+    if let Some(dns_mac) = arp_resolve(&DNS_IP) {
+        if let Some(ip) = dns_resolve(&dns_mac, "example.com") {
+            // Brick 6: fetch the REAL page by name. The destination is off-link,
+            // so the next hop is the gateway MAC; the resolved IP is the peer.
+            let _ = tcp_http_get(&gw, ip, 80, "example.com");
+        }
+    }
+    // Local loopback proof: TCP + HTTP from the host via SLIRP (10.0.2.2:8088).
+    // Logged; fails fast with RST if no server is listening, so it never stalls.
+    let _ = tcp_http_get(&gw, GW_IP, 8088, "10.0.2.2:8088");
     match lease {
         Some(_) => Trit::Pos, // full DHCP lease — the strongest proof
         None    => Trit::Zero,

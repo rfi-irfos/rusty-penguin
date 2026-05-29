@@ -6,7 +6,7 @@
 //
 // DMA buffers live at fixed addresses in the 64 MiB identity map (virt == phys),
 // same arena strategy as the HDA driver. We POLL the RX ring (no IRQ wiring yet);
-// that is enough to prove a full TX→RX round-trip (see net::arp_probe).
+// that is enough to prove a full TX→RX round-trip (see net::arp_resolve).
 
 use crate::port::{inb, outb, outl, outw};
 
