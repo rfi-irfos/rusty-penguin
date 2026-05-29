@@ -4,6 +4,25 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+### Added — X11 display server: real GUI apps render (2026-05-29)
+
+- **Rusty Penguin runs a real X server and renders third-party Linux GUI apps.**
+  A new `Web (X11)` GRUB entry / `rp.web` init mode starts **Xorg + the
+  `modesetting` driver on virtio-gpu DRM + Mesa software GL (DRISWRAST)**, and a
+  real **xterm** renders on the Linux track (proof: `docs/x11-xterm-on-rusty-penguin.png`).
+  This is the foundation for running Firefox/Chrome.
+- `iso/build-web-rootfs.sh` assembles the X stack (Xorg + xterm + full ldd
+  closure + dlopen extras: xkb data, fonts, Mesa, xorg modules) + the DRM
+  modules into `initrd-web.img`. Default desktop boot is untouched (separate
+  initrd + entry).
+- Five fixes were needed: bundle the *real* `/usr/lib/xorg/Xorg` (not the
+  wrapper script); create `/var/lib/xkb`; add a `/bin/sh` symlink (Xorg runs
+  xkbcomp via `popen()`); use **modesetting on DRM** instead of fbdev (fbdev
+  never reached the visible scanout on truecolor efifb); and mount **devpts**
+  (xterm needs a pseudo-terminal).
+- Next: bundle Chrome (+ deps + the GBM `dri_gbm.so` EGL loader + a dbus
+  session) onto the install-to-disk root — it's too big for the initramfs.
+
 ### Added — Package integrity verification (SHA-256, 2026-05-28)
 
 - The repo index now carries a digest per package
