@@ -379,6 +379,24 @@ pub extern "C" fn syscall_handler(nr: u64, arg1: u64, arg2: u64, arg3: u64) -> u
             }
             u64::MAX // not found
         }
+        16 => {
+            // sys_http_get(host_ptr, host_len | out_cap<<16, out_ptr)
+            //   -> bytes written into out (0 on failure)
+            // Fetches GET / over HTTP/1.0 via the kernel TCP/IP stack (brick 6).
+            // host_len is the low 16 bits of arg2; the output capacity is the high
+            // bits, so the kernel never writes past the caller's buffer.
+            let host_ptr = arg1 as *const u8;
+            let host_len = (arg2 & 0xFFFF) as usize;
+            let out_cap  = (arg2 >> 16) as usize;
+            let out_ptr  = arg3 as *mut u8;
+            if host_len == 0 || host_len > 256 || out_cap == 0 || out_ptr.is_null() {
+                return 0;
+            }
+            let host = unsafe { core::slice::from_raw_parts(host_ptr, host_len) };
+            let host = match core::str::from_utf8(host) { Ok(s) => s, Err(_) => return 0 };
+            let out = unsafe { core::slice::from_raw_parts_mut(out_ptr, out_cap) };
+            crate::net::http_get(host, out).unwrap_or(0) as u64
+        }
         24 => {
             // sys_yield — cooperative yield (no-op: single process)
             crate::sched::yield_();

@@ -1,0 +1,20 @@
+  [net] our MAC 52:54:00:12:34:56
+  [net] ARP who-has 10.0.2.2 sent
+  [net] resolved MAC 52:55:0a:00:02:02
+  [net] ICMP echo -> 10.0.2.2 sent
+  [net] ICMP echo reply from 10.0.2.2 (ping OK)
+  [net] DHCP DISCOVER sent
+  [net] DHCP OFFER 10.0.2.15
+  [net] DHCP REQUEST sent
+  [net] DHCP ACK — lease 10.0.2.15
+  [net] ARP who-has 10.0.2.3 sent
+  [net] resolved MAC 52:55:0a:00:02:03
+  [net] DNS query A? example.com -> 10.0.2.3
+  [net] DNS example.com -> 172.66.147.243
+  [net] TCP SYN -> example.com
+  [net] HTTP GET / sent
+  [net] <- HTTP/1.1 200 OK
+  [net] HTTP body 797 bytes received (TCP fetch OK)
+  [net] http_get("example.com") -> 797 bytes (userspace fetch path OK)
+  [net] TCP SYN -> 10.0.2.2:8088
+  [net] TCP connection refused (RST)

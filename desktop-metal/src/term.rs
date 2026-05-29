@@ -337,6 +337,26 @@ fn sys_ps_raw(buf: *mut u8, max: usize) -> usize {
     n as usize
 }
 
+/// sys_http_get(host, out) — fetch GET / over HTTP via the kernel TCP/IP stack.
+/// host_len is packed into the low 16 bits of arg2, the output capacity into the
+/// high bits, so the kernel never overruns `out`. Returns bytes written.
+fn sys_http_get(host: &[u8], out: &mut [u8]) -> usize {
+    let n: u64;
+    let arg2 = (host.len() as u64 & 0xFFFF) | ((out.len() as u64) << 16);
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            inout("rax") 16u64 => n,
+            in("rdi") host.as_ptr(),
+            in("rsi") arg2,
+            in("rdx") out.as_mut_ptr(),
+            out("rcx") _, out("r11") _,
+            options(nostack),
+        );
+    }
+    n as usize
+}
+
 fn sys_yield() {
     unsafe {
         core::arch::asm!(
@@ -1142,7 +1162,7 @@ impl Terminal {
             const CMDS: &[&str] = &[
                 "ai","alias","bc","calc","cat","cd","clear","cp","cut","date","df","du","echo","env","exit",
                 "file","find","free","grep","head","help","hexdump","history","hostname","hostid","id",
-                "kinstall","kmanager","kver","ls","lscpu","lsb_release","mem","mkdir","mv","nano",
+                "fetch","kinstall","kmanager","kver","ls","lscpu","lsb_release","mem","mkdir","mv","nano",
                 "neofetch","printf","printenv","ps","psh","pwd","rev","rm","seq","sort","stat","sysinfo",
                 "tail","touch","tr","trit","uname","unalias","uniq","uptime","vi","wc","which","whoami","xxd",
             ];
@@ -1455,6 +1475,8 @@ impl Terminal {
             self.write_output(b"  kver               show kernel version + ABI\r\n");
             self.write_output(b"  kinstall <f>       stage custom kernel ELF\r\n");
             self.write_output(b"  kmanager           kernel manager TUI\r\n");
+            self.write_output(b"\x1b[36mNetwork:\x1b[0m\r\n");
+            self.write_output(b"  fetch <host>       HTTP GET / over the kernel TCP/IP stack\r\n");
             self.write_output(b"\x1b[90m  Tab completion  Up/Down history  Shift+Ctrl+T new window\x1b[0m\r\n");
             self.write_output(b"\x1b[90m  Ctrl+W close  Ctrl+L clear terminal\x1b[0m\r\n");
 
@@ -1864,6 +1886,38 @@ impl Terminal {
             self.write_output(b"  2. Drop it into iso/boot/kernel.elf\r\n");
             self.write_output(b"  3. Run  bash iso/build.sh  to repack\r\n");
             self.write_output(b"  Or use 'kinstall <path>' to stage it via the shell.\r\n");
+
+        } else if line == b"fetch" || line.starts_with(b"fetch ") {
+            // fetch <host> — GET / over HTTP through the kernel TCP/IP stack.
+            let host = if line.len() > 6 {
+                core::str::from_utf8(&line[6..]).unwrap_or("").trim()
+            } else { "" };
+            if host.is_empty() {
+                self.write_output(b"usage: fetch <host>   (e.g. fetch example.com)\r\n");
+            } else {
+                self.write_output(b"\x1b[90mGET http://\x1b[0m");
+                self.write_output(host.as_bytes());
+                self.write_output(b"\x1b[90m/ ...\x1b[0m\r\n");
+                let mut buf = [0u8; 8192];
+                let n = sys_http_get(host.as_bytes(), &mut buf);
+                if n == 0 {
+                    self.write_output(b"\x1b[31mfetch failed\x1b[0m (no network, DNS miss, or refused)\r\n");
+                    self.last_exit = 1;
+                } else {
+                    let s = format!("\x1b[32m{} bytes\x1b[0m\r\n\x1b[90m----\x1b[0m\r\n", n);
+                    self.write_output(s.as_bytes());
+                    // Print up to ~1400 bytes, normalizing bare LF to CRLF.
+                    for &b in &buf[..n.min(1400)] {
+                        match b {
+                            b'\r' => {}                          // CRLF handled on \n
+                            b'\n' => self.write_output(b"\r\n"),
+                            0x20..=0x7E | b'\t' => self.write_output(&[b]),
+                            _ => self.write_output(b"."),        // non-printable
+                        }
+                    }
+                    self.write_output(b"\r\n\x1b[90m----\x1b[0m\r\n");
+                }
+            }
 
         } else if line.starts_with(b"kinstall ") {
             // Stage a kernel ELF for next boot. Writes a manifest note into VFS.
@@ -2284,7 +2338,7 @@ impl Terminal {
                 "cut","tr","history","env","printenv","which","set","export","unset",
                 "ps","mem","free","df","du","lscpu","sysinfo","neofetch","lsb_release",
                 "uname","whoami","uptime","date","trit","ai","stat","file","hostname","hostid","id",
-                "echo","clear","pwd","cd","exit","kver","kinstall","kmanager",
+                "echo","clear","pwd","cd","exit","kver","kinstall","kmanager","fetch",
                 "psh","seq","bc","calc","rev","alias","printf","unalias",
                 "true","false","sleep","test","[",
             ];

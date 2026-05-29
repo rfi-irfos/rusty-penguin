@@ -380,15 +380,18 @@ fn parse_tcp(rx: &[u8], len: usize) -> Option<(u32, u32, u8, usize, usize)> {
 }
 
 /// Fetch `GET /` from dst_ip:dport over TCP, sending `host` in the Host header.
-/// Returns true if an HTTP response arrived. `next_mac` is the on-link next hop
-/// — the SLIRP gateway for any remote (off-link) destination.
-fn tcp_http_get(next_mac: &[u8; 6], dst_ip: [u8; 4], dport: u16, host: &str) -> bool {
+/// Captures the response (headers+body, truncated to `out`) and returns the
+/// number of bytes captured, or `None` on failure. `next_mac` is the on-link
+/// next hop — the SLIRP gateway for any remote (off-link) destination.
+fn tcp_http_get(next_mac: &[u8; 6], dst_ip: [u8; 4], dport: u16, host: &str,
+                out: &mut [u8]) -> Option<usize> {
     let gw_mac = next_mac;
-    let nic = match rtl8139::nic() { Some(n) => n, None => return false };
+    let nic = match rtl8139::nic() { Some(n) => n, None => return None };
     let mac = nic.mac;
     let mut f = [0u8; 256];
     let mut rx = [0u8; 1536];
     let isn: u32 = 0x0001_2000;
+    let mut written = 0usize; // bytes copied into `out`
 
     // SYN
     let n = build_tcp(&mut f, gw_mac, &mac, &OUR_IP, &dst_ip, dport, isn, 0, TCP_SYN, &[]);
@@ -405,7 +408,7 @@ fn tcp_http_get(next_mac: &[u8; 6], dst_ip: [u8; 4], dport: u16, host: &str) -> 
             if let Some((seq, ackn, flags, _, _)) = parse_tcp(&rx, l) {
                 if flags & TCP_RST != 0 {
                     crate::serial::write_str("  [net] TCP connection refused (RST)\n");
-                    return false;
+                    return None;
                 }
                 if flags & TCP_SYN != 0 && flags & TCP_ACK != 0 && ackn == isn.wrapping_add(1) {
                     their_seq = seq;
@@ -415,7 +418,7 @@ fn tcp_http_get(next_mac: &[u8; 6], dst_ip: [u8; 4], dport: u16, host: &str) -> 
             }
         }
     }
-    if !established { crate::serial::write_str("  [net] no SYN-ACK (timeout)\n"); return false; }
+    if !established { crate::serial::write_str("  [net] no SYN-ACK (timeout)\n"); return None; }
 
     let mut rcv_nxt = their_seq.wrapping_add(1);
     let snd = isn.wrapping_add(1);
@@ -455,6 +458,12 @@ fn tcp_http_get(next_mac: &[u8; 6], dst_ip: [u8; 4], dport: u16, host: &str) -> 
                         logged = true;
                     }
                     total += plen;
+                    // Capture the response into the caller's buffer (truncate).
+                    if written < out.len() {
+                        let take = plen.min(out.len() - written);
+                        out[written..written + take].copy_from_slice(&rx[poff..poff + take]);
+                        written += take;
+                    }
                     rcv_nxt = rcv_nxt.wrapping_add(plen as u32);
                     let n = build_tcp(&mut f, gw_mac, &mac, &OUR_IP, &dst_ip, dport, snd_after, rcv_nxt, TCP_ACK, &[]);
                     nic.send(&f[..n]);
@@ -475,10 +484,10 @@ fn tcp_http_get(next_mac: &[u8; 6], dst_ip: [u8; 4], dport: u16, host: &str) -> 
         crate::serial::write_str("  [net] HTTP body ");
         log_dec(total as u32);
         crate::serial::write_str(" bytes received (TCP fetch OK)\n");
-        true
+        Some(written)
     } else {
         crate::serial::write_str("  [net] TCP: no data received\n");
-        false
+        None
     }
 }
 
@@ -629,6 +638,26 @@ fn dns_resolve(dns_mac: &[u8; 6], domain: &str) -> Option<[u8; 4]> {
     None
 }
 
+// On-link next-hop MACs cached at boot so userspace fetches (http_get) can
+// reuse them without re-ARPing every call. virt==phys identity map, single core,
+// no preemption during these short routines → plain statics are fine here.
+static mut GW_MAC:  Option<[u8; 6]> = None;
+static mut DNS_MAC: Option<[u8; 6]> = None;
+static mut NET_UP:  bool            = false;
+
+/// Public userspace-facing fetch: resolve `host` and `GET /` it over HTTP/1.0,
+/// writing the raw response (headers+body, truncated) into `out`. Returns the
+/// number of bytes written, or `None` if the network is down or the fetch fails.
+/// Backs the `sys_http_get` syscall (brick 6 — the OS lets programs hit the web).
+pub fn http_get(host: &str, out: &mut [u8]) -> Option<usize> {
+    let (gw, dns) = unsafe {
+        if !NET_UP { return None; }
+        (GW_MAC?, DNS_MAC?)
+    };
+    let ip = dns_resolve(&dns, host)?;
+    tcp_http_get(&gw, ip, 80, host, out)
+}
+
 /// Bring up the NIC, ARP the gateway, then ping it. Ternary result:
 /// Pos = ping round-trip OK, Zero = NIC up but ARP/ping failed, Neg = no NIC.
 pub fn init() -> ternary_core::Trit {
@@ -642,21 +671,27 @@ pub fn init() -> ternary_core::Trit {
         Some(m) => m,
         None    => return Trit::Zero,
     };
+    unsafe { GW_MAC = Some(gw); NET_UP = true; }
     let _ = icmp_ping(&gw);   // ping (result logged)
     let lease = dhcp();
     // DNS (brick 5): resolve a real hostname over UDP/53. The DNS host (10.0.2.3)
     // is on-link, so ARP it directly. Real-domain resolves whenever the host has
     // outbound DNS; logged either way and never stalls boot.
     if let Some(dns_mac) = arp_resolve(&DNS_IP) {
-        if let Some(ip) = dns_resolve(&dns_mac, "example.com") {
-            // Brick 6: fetch the REAL page by name. The destination is off-link,
-            // so the next hop is the gateway MAC; the resolved IP is the peer.
-            let _ = tcp_http_get(&gw, ip, 80, "example.com");
+        unsafe { DNS_MAC = Some(dns_mac); }
+        // Brick 6 proof: exercise the public http_get() wrapper end to end — the
+        // exact path the sys_http_get syscall (and the browser) use.
+        let mut scratch = [0u8; 1024];
+        if let Some(n) = http_get("example.com", &mut scratch) {
+            crate::serial::write_str("  [net] http_get(\"example.com\") -> ");
+            log_dec(n as u32);
+            crate::serial::write_str(" bytes (userspace fetch path OK)\n");
         }
     }
     // Local loopback proof: TCP + HTTP from the host via SLIRP (10.0.2.2:8088).
     // Logged; fails fast with RST if no server is listening, so it never stalls.
-    let _ = tcp_http_get(&gw, GW_IP, 8088, "10.0.2.2:8088");
+    let mut scratch = [0u8; 256];
+    let _ = tcp_http_get(&gw, GW_IP, 8088, "10.0.2.2:8088", &mut scratch);
     match lease {
         Some(_) => Trit::Pos, // full DHCP lease — the strongest proof
         None    => Trit::Zero,
