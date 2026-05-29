@@ -50,6 +50,23 @@ mkdir -p "$STAGE/usr/share/fonts/truetype/dejavu"
 cp -aL /usr/share/fonts/truetype/dejavu/DejaVuSans*.ttf "$STAGE/usr/share/fonts/truetype/dejavu/" 2>/dev/null
 cp -aL /etc/fonts "$STAGE/etc/" 2>/dev/null
 
+# DRM modules for the `modesetting` X driver (drm core is built-in; these bind
+# the QEMU display device → /dev/dri/card0). fbdev didn't render on truecolor
+# efifb; modesetting on DRM is the reliable path. init loads these in rp.web.
+KVER=$(uname -r)
+mkdir -p "$STAGE/lib/modules"
+for m in virtio_dma_buf virtio-gpu bochs; do
+    src=$(find "/lib/modules/$KVER" -name "$m.ko*" 2>/dev/null | head -1)
+    [ -z "$src" ] && { echo "  WARNING: $m.ko not found"; continue; }
+    base=$(echo "$m" | tr - _)
+    if [ "${src##*.}" = "zst" ]; then
+        zstd -d "$src" -o "$STAGE/lib/modules/$base.ko" --force >/dev/null 2>&1
+    else
+        cp "$src" "$STAGE/lib/modules/$base.ko"
+    fi
+    echo "  bundled DRM module $base.ko"
+done
+
 # xkbcomp shim: Xorg's invocation (source on stdin + -em1/-emp/-eml error-format
 # flags) fails to produce the .xkm when Xorg forks it in this minimal
 # environment — yet the equivalent FILE-input form compiles fine. So capture the
@@ -79,14 +96,12 @@ Section "ServerFlags"
     Option "DontVTSwitch"   "true"
 EndSection
 Section "Device"
-    Identifier "fb"
-    Driver     "fbdev"
-    Option     "fbdev"    "/dev/fb0"
-    Option     "ShadowFB"  "true"
+    Identifier "gpu"
+    Driver     "modesetting"
 EndSection
 Section "Screen"
     Identifier "scr"
-    Device     "fb"
+    Device     "gpu"
 EndSection
 Section "InputClass"
     Identifier      "kbd"

@@ -78,9 +78,17 @@ fn web_mode() -> bool {
     fs::read_to_string("/proc/cmdline").map(|c| c.contains("rp.web")).unwrap_or(false)
 }
 
-/// Load input modules so Xorg/libinput sees a keyboard+mouse via /dev/input.
+/// Load the modules the X session needs: DRM (for the modesetting driver →
+/// /dev/dri) and virtio_input (keyboard/mouse via /dev/input). drm core is
+/// built into the kernel; these just bind the QEMU display + input devices.
+/// Order matters: virtio_dma_buf before virtio_gpu.
 fn load_input_modules() {
-    for m in ["/lib/modules/virtio_input.ko"] {
+    for m in [
+        "/lib/modules/virtio_dma_buf.ko",
+        "/lib/modules/virtio_gpu.ko",
+        "/lib/modules/bochs.ko",
+        "/lib/modules/virtio_input.ko",
+    ] {
         let _ = Command::new("/bin/busybox").args(["insmod", m]).status();
     }
 }
@@ -130,10 +138,13 @@ const PERSIST_HOME: &str = "/persist/home/rusty-penguin";
 fn mount_pseudo_filesystems() {
     use nix::mount::{mount, MsFlags};
     let mounts = [
-        ("proc",     "/proc", "proc"),
-        ("sysfs",    "/sys",  "sysfs"),
-        ("devtmpfs", "/dev",  "devtmpfs"),
-        ("tmpfs",    "/tmp",  "tmpfs"),
+        ("proc",     "/proc",    "proc"),
+        ("sysfs",    "/sys",     "sysfs"),
+        ("devtmpfs", "/dev",     "devtmpfs"),
+        ("tmpfs",    "/tmp",     "tmpfs"),
+        // devpts provides pseudo-terminals (/dev/pts/N) — without it, terminal
+        // emulators like xterm fail with "Error 32, errno 2" (no PTY).
+        ("devpts",   "/dev/pts", "devpts"),
     ];
     for (src, target, fstype) in mounts {
         let _ = fs::create_dir_all(target);
