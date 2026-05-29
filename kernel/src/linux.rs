@@ -69,6 +69,61 @@ unsafe fn wrmsr(msr: u32, val: u64) {
         in("eax") val as u32, in("edx") (val >> 32) as u32, options(nostack));
 }
 
+// ── Open-file table: Linux fd → ramfs-backed file ────────────────────────────
+// Read-only files served from the initrd. Foundation for dynamic linking
+// (ld.so openat()s + mmap()s the interpreter and shared libraries).
+#[derive(Clone, Copy)]
+struct OpenFile { used: bool, data: *const u8, size: usize, off: usize }
+const FD_BASE: usize = 3;          // 0/1/2 = stdio
+const MAX_OPEN: usize = 32;
+static mut FDS: [OpenFile; MAX_OPEN] =
+    [OpenFile { used: false, data: core::ptr::null(), size: 0, off: 0 }; MAX_OPEN];
+
+/// Read a NUL-terminated user C string (bounded).
+unsafe fn cstr(ptr: u64) -> &'static [u8] {
+    if ptr == 0 { return &[]; }
+    let p = ptr as *const u8;
+    let mut n = 0usize;
+    while n < 4096 && *p.add(n) != 0 { n += 1; }
+    core::slice::from_raw_parts(p, n)
+}
+
+/// Open a ramfs file by path → fd, or negative errno.
+fn open_path(path: &[u8]) -> u64 {
+    let p = if path.starts_with(b"/") { &path[1..] } else { path };
+    match crate::ramfs::find(p) {
+        Some(data) => unsafe {
+            for i in 0..MAX_OPEN {
+                if !FDS[i].used {
+                    FDS[i] = OpenFile { used: true, data: data.as_ptr(), size: data.len(), off: 0 };
+                    return (FD_BASE + i) as u64;
+                }
+            }
+            errno(-24) // EMFILE
+        },
+        None => errno(-2), // ENOENT
+    }
+}
+
+fn fd_slot(fd: u64) -> Option<usize> {
+    let fd = fd as usize;
+    if fd >= FD_BASE && fd < FD_BASE + MAX_OPEN && unsafe { FDS[fd - FD_BASE].used } {
+        Some(fd - FD_BASE)
+    } else { None }
+}
+
+/// Fill a Linux `struct stat` (x86-64, 144 bytes) for a regular file or char dev.
+unsafe fn fill_stat(sb: *mut u8, is_reg: bool, size: u64) {
+    if sb.is_null() { return; }
+    core::ptr::write_bytes(sb, 0, 144);
+    const S_IFREG: u32 = 0x8000;
+    const S_IFCHR: u32 = 0x2000;
+    let mode = if is_reg { S_IFREG | 0o644 } else { S_IFCHR | 0o666 };
+    (sb.add(24) as *mut u32).write_unaligned(mode);     // st_mode
+    (sb.add(48) as *mut u64).write_unaligned(size);     // st_size
+    (sb.add(56) as *mut u64).write_unaligned(4096);     // st_blksize
+}
+
 // ── The Linux syscall dispatcher ─────────────────────────────────────────────
 /// Returns the Linux ABI value for rax (>=0 success, <0 negated errno).
 /// Per-syscall serial trace toggle (debugging the ABI layer brick by brick).
@@ -93,11 +148,62 @@ pub fn syscall(nr: u64, a1: u64, a2: u64, a3: u64) -> u64 {
         dbg_hex("  [sc] nr=", nr); dbg_hex(" a1=", a1); dbg_hex(" a2=", a2);
         dbg_hex(" a3=", a3); dbg_hex(" a4=", a4); serial::write_byte(b'\n');
     }
-    // Ternary view of the call's outcome, for the findings log / future telemetry.
-    let _outcome: Trit;
-    match nr {
-        // read(fd, buf, len) — no input source yet → EOF.
-        0 => { _outcome = Trit::Zero; 0 }
+    let ret: u64 = match nr {
+        // read(fd, buf, len) — ramfs-backed files; stdin → EOF.
+        0 => unsafe {
+            if let Some(i) = fd_slot(a1) {
+                let avail = FDS[i].size.saturating_sub(FDS[i].off);
+                let n = (a3 as usize).min(avail);
+                if n > 0 {
+                    core::ptr::copy_nonoverlapping(FDS[i].data.add(FDS[i].off), a2 as *mut u8, n);
+                    FDS[i].off += n;
+                }
+                n as u64
+            } else { 0 }
+        }
+        // openat(dirfd, path, flags, mode) / open(path, flags, mode).
+        257 => open_path(unsafe { cstr(a2) }),
+        2   => open_path(unsafe { cstr(a1) }),
+        // close(fd).
+        3 => { if let Some(i) = fd_slot(a1) { unsafe { FDS[i].used = false; } } 0 }
+        // lseek(fd, off, whence): 0=SET 1=CUR 2=END.
+        8 => unsafe {
+            if let Some(i) = fd_slot(a1) {
+                let no = match a3 {
+                    0 => a2 as usize,
+                    1 => FDS[i].off.wrapping_add(a2 as usize),
+                    2 => FDS[i].size.wrapping_add(a2 as usize),
+                    _ => FDS[i].off,
+                };
+                FDS[i].off = no.min(FDS[i].size);
+                FDS[i].off as u64
+            } else { errno(EBADF) }
+        }
+        // pread64(fd, buf, count, pos).
+        17 => unsafe {
+            if let Some(i) = fd_slot(a1) {
+                let pos = a4 as usize;
+                let n = (a3 as usize).min(FDS[i].size.saturating_sub(pos));
+                if n > 0 { core::ptr::copy_nonoverlapping(FDS[i].data.add(pos), a2 as *mut u8, n); }
+                n as u64
+            } else { errno(EBADF) }
+        }
+        // newfstatat(dirfd, path, statbuf, flags): path-based or AT_EMPTY_PATH.
+        262 => unsafe {
+            let path = cstr(a2);
+            if (a4 & 0x1000) != 0 || path.is_empty() {
+                match fd_slot(a1) {
+                    Some(i) => { fill_stat(a3 as *mut u8, true, FDS[i].size as u64); 0 }
+                    None => { fill_stat(a3 as *mut u8, false, 0); 0 }
+                }
+            } else {
+                let p = if path.starts_with(b"/") { &path[1..] } else { path };
+                match crate::ramfs::find(p) {
+                    Some(d) => { fill_stat(a3 as *mut u8, true, d.len() as u64); 0 }
+                    None => errno(-2),
+                }
+            }
+        }
         // write(fd, buf, len) → console + serial (so headless boots are captured).
         1 => {
             let len = (a3 as usize).min(1 << 20);
@@ -135,26 +241,32 @@ pub fn syscall(nr: u64, a1: u64, a2: u64, a3: u64) -> u64 {
                 BRK_CUR = a1; a1
             } else { BRK_CUR }
         }
-        // mmap(addr, len, prot, flags, fd, off): anonymous bump only.
+        // mmap(addr, len, prot, flags, fd, off): bump-allocate; file-backed if
+        // a real fd is given (a5=fd, a6=offset) — needed for dynamic linking,
+        // where ld.so mmaps segments of the interpreter and shared libraries.
         9 => unsafe {
             let len = page_up(a2);
-            if MMAP_CUR + len > MMAP_CAP { return errno(-12 /*ENOMEM*/); }
-            let p = MMAP_CUR; MMAP_CUR += len;
-            // anonymous memory is expected zeroed
-            core::ptr::write_bytes(p as *mut u8, 0, len as usize);
-            p
-        }
-        // fstat(fd, statbuf): report fd 1/2 as a character device so glibc
-        // treats stdout sensibly (line-buffered, BUFSIZ from st_blksize).
-        5 => {
-            let sb = a2 as *mut u8;
-            if !sb.is_null() {
-                unsafe {
-                    core::ptr::write_bytes(sb, 0, 144); // sizeof(struct stat)
-                    const S_IFCHR: u32 = 0x2000;
-                    (sb.add(24) as *mut u32).write_unaligned(S_IFCHR | 0o666); // st_mode
-                    (sb.add(56) as *mut u64).write_unaligned(4096);            // st_blksize
+            if MMAP_CUR + len > MMAP_CAP { errno(-12 /*ENOMEM*/) } else {
+                let p = MMAP_CUR; MMAP_CUR += len;
+                core::ptr::write_bytes(p as *mut u8, 0, len as usize); // zero (anon semantics)
+                let anon = (a4 & 0x20) != 0 || a5 == u64::MAX;          // MAP_ANONYMOUS | fd==-1
+                if !anon {
+                    if let Some(i) = fd_slot(a5) {
+                        let off = a6 as usize;
+                        let copy = FDS[i].size.saturating_sub(off).min(a2 as usize);
+                        if copy > 0 {
+                            core::ptr::copy_nonoverlapping(FDS[i].data.add(off), p as *mut u8, copy);
+                        }
+                    }
                 }
+                p
+            }
+        }
+        // fstat(fd, statbuf): regular file (real fd) or char device (stdio).
+        5 => unsafe {
+            match fd_slot(a1) {
+                Some(i) => fill_stat(a2 as *mut u8, true, FDS[i].size as u64),
+                None    => fill_stat(a2 as *mut u8, false, 0),
             }
             0
         }
@@ -221,7 +333,14 @@ pub fn syscall(nr: u64, a1: u64, a2: u64, a3: u64) -> u64 {
             let _ = (a4, EBADF);
             errno(ENOSYS)
         }
-    }
+    };
+    // Ternary model of the syscall outcome — the lens the whole OS is built on,
+    // applied at the syscall boundary: +1 ok / 0 empty-or-EAGAIN / -1 errno.
+    let _outcome = if (ret as i64) < 0 { Trit::Neg }
+                   else if ret == 0 { Trit::Zero }
+                   else { Trit::Pos };
+    let _ = _outcome;
+    ret
 }
 
 // ── Load + enter an unmodified Linux ELF in ring-3 ───────────────────────────

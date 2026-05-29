@@ -38,8 +38,9 @@ thread liveness will be modelled the same way as scheduling lands.
 | 1 | Run a **freestanding** static Linux ELF (raw `write`+`exit_group`), SysV initial stack (argc/argv/envp/auxv), per-process ABI mode, Linux syscall dispatch | ✅ **DONE 2026-05-29** — proof `docs/linux-abi-brick1-serial.txt`; harness `iso/build-linux-abi-test.sh` |
 | 2 | A real **static glibc** binary runs natively — `printf` + working **TLS** (`__thread`) verified, full startup syscall sequence (`brk`/`arch_prctl`/`set_tid_address`/`fstat`/`prlimit64`/`getrandom`/…), clean exit via `exit_group`. Proof `docs/linux-abi-brick2-serial.txt` | ✅ **DONE 2026-05-29** |
 | 2.5 | **Return-from-`main` / `exit(3)` / `atexit`** — a full standard C program (glibc startup → main → atexit handlers → glibc cleanup → `exit_group`) runs and exits cleanly. Fix: **zero the GP registers at process entry** (Linux exec semantics — RDX must be 0, or glibc atexit-registers a garbage `rtld_fini` and jumps to it). | ✅ **DONE 2026-05-29** |
-| 3 | **Real per-process VMM + memory** (demand paging, proper mmap/munmap, reclaim) — current arenas are crude bumps in the identity map | ❌ |
-| 4 | **Dynamic linking** (`ld-linux`/`ld-musl`): `openat`/`read`/`fstat`/`mmap` of the loader + libs, `PT_INTERP`, relocations | ❌ |
+| 3 | **File syscalls + file-backed mmap** against the ramfs: `openat`/`open`/`read`/`pread64`/`lseek`/`close`/`fstat`/`newfstatat`, and `mmap` with a real fd (copies file segments). Verified: a glibc program opens a ramfs file and reads its bytes. Proof `docs/linux-abi-brick3-fileio-serial.txt` | ✅ **DONE 2026-05-29** (groundwork for dynamic linking) |
+| 3b | **Real per-process VMM** (demand paging, proper mmap/munmap, reclaim) — current arenas are crude bumps in the identity map | ❌ |
+| 4 | **Dynamic linking** (`ld-linux`): load `PT_INTERP` at `AT_BASE`, ship `ld-linux-x86-64.so.2` + `libc.so.6` in the initrd, let ld.so openat/mmap/relocate. (File syscalls + file-backed mmap now exist — this is the next big push.) | ❌ next |
 | 5 | **glibc** dynamic binaries (busybox-glibc, coreutils) | ❌ |
 | 6 | **Threads**: `clone`, `futex`, `set_robust_list`, TLS per thread, a real scheduler | ❌ |
 | 7 | **epoll/poll/eventfd/signalfd/timerfd**, signals (`rt_sigaction` delivery) | ❌ |

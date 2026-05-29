@@ -1,0 +1,44 @@
+  Rusty Penguin v1.0.0 -- bare metal kernel
+  Binary hardware. Ternary mind.
+
+  [GDT+TSS: OK]
+  [interrupts: OK]
+  [memory map]
+    0x0 + 27F KiB
+    0x100000 + 7FB80 KiB
+    total available: 1FF MiB
+
+  [PMM] 509 MiB free / 511 MiB total
+
+  [VMM] identity map extended to 64 MiB
+  [ramfs] 1 files loaded (initrd relocated to 40 MiB)
+  [FB] 1920x1080x32bpp @ 0xFD000000
+  [SYSCALL: OK]
+  [sched: OK]
+[INIT]
+1
+2
+3faaa00
+4fa
+5fa
+[MSE OK]
+  [PS/2 mouse: OK]
+  [mathematics]
+    42+(-7)=35  6*7=42  scale(100,-)=-100  cons(+,+)=Pos
+    ALU 9+3=12
+  [sparse AI]
+    [+,0,-,+] → [+,-]  37% dormancy
+
+
+  [LINUX-ABI] executing an unmodified Linux ELF
+
+  [LINUX-ABI] executing an unmodified Linux ELF
+  [linux] entering ring-3 @ 0x401720
+  [linux] IRETQ into unmodified Linux ELF
+  [linux] ENOSYS nr=334
+  [linux] ENOSYS nr=267
+openat+read OK: fd=3 n=16 magic=7f 'ELF' (expect 7f 'ELF')
+
+  [linux] process exited, code=0
+
+  [linux] exit code=0
