@@ -4,6 +4,24 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+### Added — Mozilla Firefox renders too: "firefox and chrome gotta work" MET (2026-05-29)
+
+- **A real Mozilla Firefox renders on Rusty Penguin's Linux track**, completing
+  the "firefox and chrome gotta work" directive (both browsers now work). Full
+  Firefox UI (tabs, address bar, menu) + the CSS/flexbox page render via the
+  same Xorg + modesetting stack, with WebRender on its **software backend
+  (swgl)** — no system GL needed. Proof: `docs/firefox-on-rusty-penguin.png`.
+- Uses the **self-contained Mozilla tarball** (not the confinement-bound snap),
+  cached to `iso/cache/firefox` (gitignored). `iso/build-web-rootfs.sh` gains
+  an opt-in Firefox bundle (`RP_WEB_FIREFOX=1`): the 303 MB tree + its system
+  ldd closure (GTK3/glib/pango/cairo — Firefox ships its own NSS + codecs).
+- Launcher disables Firefox's sandboxes via env (`MOZ_DISABLE_CONTENT_SANDBOX`
+  etc. — no user namespaces in the initramfs), forces software WebRender
+  (`MOZ_ACCELERATED=0`), and points `FONTCONFIG_PATH=/etc/fonts`.
+- `start-x.sh` now picks the browser by marker: Firefox > Chrome > xterm.
+- Same honest scope as Chrome: initramfs proof, not the production install-to-disk
+  layout; software rendering only.
+
 ### Added — Google Chrome renders real web content (2026-05-29)
 
 - **A real, full Google Chrome (142) runs on Rusty Penguin's Linux track** —

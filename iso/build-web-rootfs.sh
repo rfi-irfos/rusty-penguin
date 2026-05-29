@@ -137,7 +137,10 @@ for i in $(seq 1 150); do
     sleep 1
 done
 [ "$xready" = 1 ] || echo "[start-x] WARNING: X readiness marker not seen; launching client anyway"
-if [ -f /.rp-web-chrome ] && [ -x /start-chrome.sh ]; then
+if [ -f /.rp-web-firefox ] && [ -x /start-firefox.sh ]; then
+    # Browser session: launch Firefox on the now-ready X server.
+    /start-firefox.sh
+elif [ -f /.rp-web-chrome ] && [ -x /start-chrome.sh ]; then
     # Browser session: launch Chrome on the now-ready X server.
     /start-chrome.sh
 else
@@ -241,6 +244,53 @@ CSH
     echo "[web-rootfs] Chrome bundled; start-x.sh will launch it (RP_WEB_CHROME)."
     # Tell start-x.sh to launch Chrome instead of the bare xterm banner.
     touch "$STAGE/.rp-web-chrome"
+fi
+
+# ---------------------------------------------------------------------------
+# Optional: bundle Mozilla Firefox (RP_WEB_FIREFOX=1). Uses the self-contained
+# Mozilla tarball (NOT the snap, which is confinement-bound), pre-extracted to
+# iso/cache/firefox by build.sh/build-web-test.sh. Firefox bundles its own NSS
+# and image codecs; we only need its system-lib closure (GTK3/glib/pango/cairo,
+# all dlopen-visible via ldd of firefox + libxul.so). Sandbox is disabled via
+# env (no user namespaces in the minimal initramfs); WebRender falls back to its
+# software backend (swgl, in libxul) so no system GL is required.
+# ---------------------------------------------------------------------------
+FF_SRC="$(cd "$(dirname "$0")" && pwd)/cache/firefox"
+if [ "${RP_WEB_FIREFOX:-0}" = "1" ] && [ -d "$FF_SRC" ]; then
+    echo "[web-rootfs] bundling Mozilla Firefox (RP_WEB_FIREFOX=1)..."
+    mkdir -p "$STAGE/opt"
+    cp -a "$FF_SRC" "$STAGE/opt/firefox"
+    for f in "$STAGE/opt/firefox/firefox-bin" "$STAGE/opt/firefox/firefox" "$STAGE/opt/firefox"/*.so; do
+        [ -e "$f" ] || continue
+        ldd "$f" 2>/dev/null | awk '/=>/{print $3} /ld-linux/{print $1}' \
+            | while read -r lib; do copy "$lib"; done
+    done
+    cat > "$STAGE/start-firefox.sh" <<'FSH'
+#!/bin/busybox sh
+export HOME=/tmp MOZ_ENABLE_WAYLAND=0 FONTCONFIG_PATH=/etc/fonts
+# No user namespaces in the initramfs → disable Firefox's sandboxes.
+export MOZ_DISABLE_CONTENT_SANDBOX=1 MOZ_DISABLE_GMP_SANDBOX=1 MOZ_SANDBOX_LOGGING=0
+# Force WebRender's software backend (no system GL on this stack).
+export MOZ_ACCELERATED=0 LIBGL_ALWAYS_SOFTWARE=1
+mkdir -p /tmp/ffprofile
+cat > /tmp/rusty.html <<'HTML'
+<!doctype html><meta charset=utf-8><title>Rusty Penguin</title>
+<style>html,body{margin:0;height:100%;background:#1d1d1f;color:#f5f5f7;
+font:600 48px/1.3 sans-serif;display:flex;align-items:center;justify-content:center;
+flex-direction:column}small{font-size:20px;color:#86868b;font-weight:400;margin-top:18px}</style>
+<div>Rusty Penguin<small>Mozilla Firefox rendering on a from-scratch Rust distro &mdash; X11 + ternary init</small></div>
+HTML
+DISPLAY=:0 /opt/firefox/firefox --no-remote --profile /tmp/ffprofile \
+    --width 1280 --height 800 file:///tmp/rusty.html >/tmp/firefox.log 2>&1 &
+FPID=$!
+echo "[start-firefox] firefox launched pid=$FPID; waiting for paint..."
+sleep 35
+if /bin/busybox kill -0 "$FPID" 2>/dev/null; then echo "[start-firefox] firefox ALIVE after 35s (pid $FPID)"; else echo "[start-firefox] firefox EXITED within 35s"; fi
+echo "=== firefox.log (full) ==="; /bin/busybox cat /tmp/firefox.log 2>/dev/null
+FSH
+    chmod +x "$STAGE/start-firefox.sh"
+    touch "$STAGE/.rp-web-firefox"
+    echo "[web-rootfs] Firefox bundled."
 fi
 
 echo "[web-rootfs] staged: $(find "$STAGE" -type f | wc -l) files, $(du -sh "$STAGE" | cut -f1)"
