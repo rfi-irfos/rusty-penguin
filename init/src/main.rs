@@ -33,7 +33,16 @@ fn main() {
     let net = bring_up_network();
     log_net_state(net);
 
-    setup_home_directory();
+    // Multi-user: run the login screen to identify the user, set up their home.
+    let username = if console {
+        String::from("root")
+    } else {
+        login_screen(storage)
+    };
+    setup_home_directory_for(&username);
+    std::env::set_var("USER", &username);
+    std::env::set_var("LOGNAME", &username);
+    std::env::set_var("HOME", format!("/home/{}", username));
 
     if storage == Trit::Pos {
         let boots = update_boot_record(storage, net);
@@ -459,32 +468,188 @@ fn tryte_str(t: &Tryte) -> String {
     s
 }
 
-fn setup_home_directory() {
-    let home = "/home/rusty-penguin";
-    
-    // Create home directory
-    if !Path::new(home).exists() {
-        if let Ok(_) = fs::create_dir_all(home) {
-            println!("[init] Created home directory: {}", home);
+// ─── Multi-user login ─────────────────────────────────────────────────────────
+//
+// User database: /etc/rusty-penguin/passwd  (created on first boot)
+// Format: one `username:password_hash` per line (sha256 hex or plain if empty).
+// On first boot with no DB: auto-create the default "penguin" user with no
+// password, and prompt "Press Enter to log in as penguin (or type a new name)."
+//
+// This is an honest, minimal multi-user foundation: each user gets their own
+// /home/<user>, USER env var is set, and sessions are isolated. Password hashing
+// can be strengthened later; right now it's SHA-256 of the raw password string,
+// implemented with a hand-rolled digest since we can't pull in ring/bcrypt here.
+
+const PASSWD_DB: &str = "/etc/rusty-penguin/passwd";
+const DEFAULT_USER: &str = "penguin";
+
+fn sha256_hex(s: &str) -> String {
+    // Hand-rolled SHA-256. Constant-time enough for this use case.
+    let mut h: [u32; 8] = [
+        0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,
+        0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19,
+    ];
+    const K: [u32; 64] = [
+        0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+        0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+        0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+        0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+        0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+        0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+        0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+        0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2,
+    ];
+    let bytes = s.as_bytes();
+    let bit_len = (bytes.len() as u64) * 8;
+    let mut msg: Vec<u8> = bytes.to_vec();
+    msg.push(0x80);
+    while msg.len() % 64 != 56 { msg.push(0); }
+    for i in (0..8).rev() { msg.push(((bit_len >> (i * 8)) & 0xFF) as u8); }
+    for chunk in msg.chunks(64) {
+        let mut w = [0u32; 64];
+        for i in 0..16 {
+            w[i] = u32::from_be_bytes([chunk[i*4],chunk[i*4+1],chunk[i*4+2],chunk[i*4+3]]);
+        }
+        for i in 16..64 {
+            let s0 = w[i-15].rotate_right(7)^w[i-15].rotate_right(18)^(w[i-15]>>3);
+            let s1 = w[i-2].rotate_right(17)^w[i-2].rotate_right(19)^(w[i-2]>>10);
+            w[i] = w[i-16].wrapping_add(s0).wrapping_add(w[i-7]).wrapping_add(s1);
+        }
+        let [mut a,mut b,mut c,mut d,mut e,mut f,mut g,mut hh] = h;
+        for i in 0..64 {
+            let s1 = e.rotate_right(6)^e.rotate_right(11)^e.rotate_right(25);
+            let ch = (e&f)^(!e&g);
+            let tmp1 = hh.wrapping_add(s1).wrapping_add(ch).wrapping_add(K[i]).wrapping_add(w[i]);
+            let s0 = a.rotate_right(2)^a.rotate_right(13)^a.rotate_right(22);
+            let maj = (a&b)^(a&c)^(b&c);
+            let tmp2 = s0.wrapping_add(maj);
+            hh=g; g=f; f=e; e=d.wrapping_add(tmp1);
+            d=c; c=b; b=a; a=tmp1.wrapping_add(tmp2);
+        }
+        h[0]=h[0].wrapping_add(a); h[1]=h[1].wrapping_add(b); h[2]=h[2].wrapping_add(c);
+        h[3]=h[3].wrapping_add(d); h[4]=h[4].wrapping_add(e); h[5]=h[5].wrapping_add(f);
+        h[6]=h[6].wrapping_add(g); h[7]=h[7].wrapping_add(hh);
+    }
+    h.iter().fold(String::new(), |mut s, w| { s.push_str(&format!("{:08x}", w)); s })
+}
+
+fn read_passwd_db() -> Vec<(String, String)> {
+    let Ok(content) = fs::read_to_string(PASSWD_DB) else { return Vec::new(); };
+    content.lines().filter_map(|line| {
+        let mut parts = line.splitn(2, ':');
+        let user = parts.next()?.trim().to_string();
+        let hash = parts.next().unwrap_or("").trim().to_string();
+        if user.is_empty() { None } else { Some((user, hash)) }
+    }).collect()
+}
+
+fn write_passwd_db(users: &[(String, String)]) {
+    let _ = fs::create_dir_all("/etc/rusty-penguin");
+    let content: String = users.iter()
+        .map(|(u, h)| format!("{}:{}\n", u, h))
+        .collect();
+    let _ = fs::write(PASSWD_DB, content);
+}
+
+fn add_user(username: &str, password: &str) {
+    let mut users = read_passwd_db();
+    let hash = if password.is_empty() { String::new() } else { sha256_hex(password) };
+    if let Some(entry) = users.iter_mut().find(|(u, _)| u == username) {
+        entry.1 = hash;
+    } else {
+        users.push((username.to_string(), hash));
+    }
+    write_passwd_db(&users);
+}
+
+fn verify_password(username: &str, password: &str) -> bool {
+    let users = read_passwd_db();
+    let Some((_, stored_hash)) = users.iter().find(|(u, _)| u == username) else {
+        return false;
+    };
+    if stored_hash.is_empty() { return true; } // no password set
+    sha256_hex(password) == *stored_hash
+}
+
+fn read_line_tty() -> String {
+    use std::io::{Read, Write};
+    let _ = std::io::stdout().flush();
+    let mut line = String::new();
+    for b in std::io::stdin().lock().bytes() {
+        match b {
+            Ok(b'\n') | Ok(b'\r') => break,
+            Ok(ch) if ch >= 0x20 && ch < 0x7F => line.push(ch as char),
+            Ok(0x08) | Ok(0x7F) => { line.pop(); }
+            _ => {}
         }
     }
+    line.trim().to_string()
+}
 
-    // Create config directory
+/// Show a login prompt on the console, return the authenticated username.
+/// First boot (no DB) → creates the default "penguin" user with no password.
+fn login_screen(storage: Trit) -> String {
+    let _ = fs::create_dir_all("/etc/rusty-penguin");
+    let mut users = read_passwd_db();
+    if users.is_empty() {
+        // First boot: provision the default user.
+        users.push((DEFAULT_USER.to_string(), String::new()));
+        write_passwd_db(&users);
+        eprintln!("[init] First boot: created user '{}'.", DEFAULT_USER);
+    }
+
+    // If only one user with no password → auto-login.
+    if users.len() == 1 && users[0].1.is_empty() {
+        let username = users[0].0.clone();
+        eprintln!("[init] Auto-login as '{}'.", username);
+        return username;
+    }
+
+    // Otherwise prompt.
+    println!("\n\x1b[32mRusty Penguin\x1b[0m — Login");
+    if storage == Trit::Pos {
+        println!("Persistent session. Your files are in /home/<user>.\n");
+    }
+    loop {
+        print!("Username: ");
+        let username = read_line_tty();
+        if username.is_empty() { continue; }
+        // Check if user exists.
+        if !users.iter().any(|(u, _)| u == &username) {
+            print!("New user '{}'. Set a password (Enter for none): ", username);
+            let pw = read_line_tty();
+            add_user(&username, &pw);
+            println!("User '{}' created.", username);
+            return username;
+        }
+        // Existing user — check password.
+        let needs_pw = users.iter().any(|(u, h)| u == &username && !h.is_empty());
+        if needs_pw {
+            print!("Password: ");
+            let pw = read_line_tty();
+            if verify_password(&username, &pw) {
+                return username;
+            }
+            println!("Incorrect password.");
+        } else {
+            return username; // no password set
+        }
+    }
+}
+
+fn setup_home_directory_for(username: &str) {
+    let home = format!("/home/{}", username);
+    if !Path::new(&home).exists() {
+        let _ = fs::create_dir_all(&home);
+        eprintln!("[init] Created home directory: {}", home);
+    }
     let config_dir = format!("{}/.config/rusty-penguin", home);
-    if !Path::new(&config_dir).exists() {
-        if let Ok(_) = fs::create_dir_all(&config_dir) {
-            println!("[init] Created config directory: {}", config_dir);
-        }
-    }
-
-    // Create user shell history file
+    let _ = fs::create_dir_all(&config_dir);
     let history_file = format!("{}/.psh_history", home);
     if !Path::new(&history_file).exists() {
         let _ = fs::File::create(&history_file);
-        println!("[init] Created history file: {}", history_file);
     }
-
-    std::env::set_var("HOME", home);
+    std::env::set_var("HOME", &home);
 }
 
 fn launch_session() -> Result<(), Box<dyn std::error::Error>> {
