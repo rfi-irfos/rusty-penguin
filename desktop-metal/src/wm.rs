@@ -6,21 +6,27 @@ pub const TITLEBAR_H: i32 = 22;
 pub const WINDOW_W:   i32 = term::TERM_PIX_W as i32 + 2;
 pub const WINDOW_H:   i32 = term::TERM_PIX_H as i32 + 2 + TITLEBAR_H;
 
-// Window styling — Apple graphite palette (was Ubuntu Yaru blue). Active windows
-// get a faint lighter hairline rather than a bright accent border; titlebars are
-// near-black graphite like macOS dark windows.
-const SHADOW:      u32 = 0x05080F;  // Deep shadow
-const BORDER_DIM:  u32 = 0x2A2A2C;  // Inactive window border (hairline)
-const BORDER_ACT:  u32 = 0x545456;  // Active window border (subtle light edge)
-const TITLE_DIM:   u32 = 0x1E1E20;  // Inactive titlebar
-const TITLE_ACT:   u32 = 0x2C2C2E;  // Active titlebar (macOS graphite)
-const TITLE_LINE:  u32 = 0x3A3A3C;  // Separator line (hairline)
-const CONTENT_BG:  u32 = 0x1C1C1E;  // Content background (matches the CSS card)
-const TXT_DIM:     u32 = 0x8E8E93;  // Inactive text (macOS secondary label)
-const TXT_ACT:     u32 = 0xF5F5F7;  // Active text (warm white)
-const BTN_CLOSE:   u32 = 0xFF6B6B;  // Red close button
-const BTN_MIN:     u32 = 0xFFD43B;  // Yellow minimize button
-const BTN_MAX:     u32 = 0x51CF66;  // Green maximize button
+// Window styling — "Rusty Penguin v2" warm-stone-green palette, adopted from
+// Simeon's HTML design mockup (rusty-penguin-os.html): warm dark stone (not cool
+// graphite), spring-green accent, gold/cream highlights, ternary neg/zero/pos.
+const SHADOW:      u32 = 0x080B09;  // Deep shadow (warm black)
+const BORDER_DIM:  u32 = 0x2A332F;  // Inactive window border (warm hairline)
+const BORDER_ACT:  u32 = 0x5A6A5E;  // Active window border (warm light edge)
+const TITLE_DIM:   u32 = 0x252E2A;  // Inactive titlebar (warm stone)
+const TITLE_ACT:   u32 = 0x323C37;  // Active titlebar (panel-soft)
+const TITLE_LINE:  u32 = 0x3C4641;  // Separator hairline
+const CONTENT_BG:  u32 = 0x222B27;  // Content background (warm stone glass-over-wall)
+const TXT_DIM:     u32 = 0xA8B0A6;  // Secondary label (warm grey-green)
+const TXT_ACT:     u32 = 0xECEDE5;  // Primary text (warm off-white)
+const BTN_CLOSE:   u32 = 0xEF7575;  // Red (--neg)
+const BTN_MIN:     u32 = 0xF5C451;  // Amber
+const BTN_MAX:     u32 = 0x6FE18B;  // Spring green (--pos)
+// Shared accent + ternary triad (mockup tokens) for the rest of the desktop.
+pub const ACCENT_GREEN: u32 = 0x6FE18B;  // --green / --pos
+pub const ACCENT_CREAM: u32 = 0xECDAA7;  // --cream (dingir gold)
+pub const TRIT_NEG:     u32 = 0xEF7575;  // --neg
+pub const TRIT_ZERO:    u32 = 0x909A92;  // --zero
+pub const TRIT_POS:     u32 = 0x6FE18B;  // --pos
 
 // Traffic-light buttons on the RIGHT side of the titlebar.
 const BTN_R:      i32 = 5;   // radius in pixels

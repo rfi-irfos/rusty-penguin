@@ -38,11 +38,11 @@ impl Style {
     /// Sensible Apple-like defaults: dark card, hairline border, soft radius.
     pub const fn new() -> Self {
         Style {
-            bg: 0x1C1C1E,      // graphite (close to macOS dark surface)
-            fg: 0xF5F5F7,      // near-white label
-            border: 0x3A3A3C,  // hairline separator
+            bg: 0x222B27,      // warm stone surface (mockup --panel-solid-ish)
+            fg: 0xECEDE5,      // warm off-white label (--txt)
+            border: 0x3C4641,  // warm hairline separator
             border_w: 1,
-            accent: 0x0A84FF,  // system blue
+            accent: 0x6FE18B,  // spring green (--green / --pos)
             radius: 14,
             pad_x: 16,
             pad_y: 12,

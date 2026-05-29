@@ -105,18 +105,19 @@ fn serial_write_u64(mut n: u64) {
 }
 
 // ---- Palette ────────────────────────────────────────────────────────────────
-// Ubuntu-inspired color scheme: clean, modern, accessible
-const BG:       u32 = 0x13131B;  // Deep charcoal (polished dark)
-const TOPBAR:   u32 = 0x1A1A24;  // Slightly lighter charcoal topbar
-const TASKBAR:  u32 = 0x0F0F17;  // Deep taskbar with subtle depth
-const TOPBAR_H: u32 = 32;        // Slightly taller topbar for better proportions
-const BORDER:   u32 = 0x2C2C38;  // Ubuntu-like medium contrast
-const GREEN:    u32 = 0x5FDD8F;  // Warmer Ubuntu green
-const DIM:      u32 = 0x6B7280;  // Better readable dim text
-const DIMMER:   u32 = 0x2C2C38;  // Match border for consistency
-const WHITE:    u32 = 0xF5F5F7;  // Warmer white (not pure white)
-const AMBER:    u32 = 0xFFA500;  // Ubuntu-like warm accent
-const BLUE:     u32 = 0x4A9EFF;  // Brighter, more vibrant blue
+// "Rusty Penguin v2" warm-stone-green palette — from Simeon's HTML design mockup
+// (rusty-penguin-os.html). Warm dark stone, spring green, gold/cream, ternary triad.
+const BG:       u32 = 0x1B211E;  // Warm stone wall (--wall deep)
+const TOPBAR:   u32 = 0x252E2A;  // Warm panel topbar (--wall2/panel)
+const TASKBAR:  u32 = 0x1B211E;  // Dock backing (warm deep)
+const TOPBAR_H: u32 = 32;        // Topbar height
+const BORDER:   u32 = 0x2A332F;  // Warm hairline / medium contrast (--panel-solid)
+const GREEN:    u32 = 0x6FE18B;  // Spring green (--green / --pos)
+const DIM:      u32 = 0xA8B0A6;  // Secondary text (--txt-dim)
+const DIMMER:   u32 = 0x2A332F;  // Match border
+const WHITE:    u32 = 0xECEDE5;  // Warm off-white (--txt)
+const AMBER:    u32 = 0xF5C451;  // Warm amber accent
+const BLUE:     u32 = 0x8CC6E5;  // Warm sky (--sky)
 const CURSOR:   u32 = 0xF5F5F7;  // Match white
 const TEAL:     u32 = 0x00D4AA;  // More vibrant teal
 
@@ -303,26 +304,23 @@ fn draw_scene_static(fb: &mut Framebuffer) {
     let w = fb.width; let h = fb.height;
     let tb_y = h - 28;
 
-    // Desktop gradient — smooth, refined Ubuntu-style background.
-    // Subtle shift from charcoal to deep blue, giving depth without distraction.
+    // Desktop wallpaper — warm-stone gradient from the v2 mockup: a vertical
+    // lerp #252D29 → #1B211E with a soft green glow lifting the upper third
+    // (approximating the mockup's top-right green radial). Warm, not cool.
     let total_rows = tb_y.saturating_sub(TOPBAR_H);
     let mut y = TOPBAR_H;
     while y < tb_y {
         let t = (y - TOPBAR_H) as u64 * 256 / total_rows.max(1) as u64; // 0..255
-        // Smooth four-step gradient: charcoal → slate → midnight → deep charcoal
-        let (r, g, b) = if t < 85 {
-            // top: charcoal → slate
-            let s = t * 3 / 85;
-            (0x13u64 + s / 4, 0x13u64 + s / 3, 0x1Bu64 + s / 2)
-        } else if t < 170 {
-            // middle-top: slate → midnight blue
-            let s = (t - 85) * 3 / 85;
-            (0x16u64 - s / 8, 0x18u64 + s / 8, 0x26u64 + s / 3)
-        } else {
-            // bottom: midnight → deep charcoal
-            let s = (t - 170) * 3 / 85;
-            (0x14u64 - s / 16, 0x16u64 - s / 32, 0x24u64 - s / 16)
-        };
+        // base warm-stone lerp (top → bottom)
+        let mut r = 0x25u64 - 0x0A * t / 255;
+        let mut g = 0x2Du64 - 0x0C * t / 255;
+        let mut b = 0x29u64 - 0x0B * t / 255;
+        // soft green glow near the top (fades out by mid-screen)
+        if t < 140 {
+            let glow = (140 - t) * 10 / 140;     // 0..10
+            g += glow;
+            r += glow / 3;
+        }
         let col = ((r as u32) << 16) | ((g as u32) << 8) | b as u32;
         fb.fill_rect(0, y, w, 1, col);
         y += 1;
@@ -578,9 +576,9 @@ fn draw_taskbar_win_btns(fb: &mut Framebuffer, term_wins: &[TermWin]) {
         let is_focused   = slot == n - 1;
         let is_minimized = tw.win.minimized;
         // Apple graphite palette — consistent with window chrome + CSS engine.
-        let bg  = if is_minimized { 0x1C1C1Eu32 } else { 0x2C2C2Eu32 };
-        let txt = if is_minimized { 0x8E8E93u32 } else { WHITE };
-        let accent = if is_focused { 0x0A84FFu32 } else { 0x3A3A3Cu32 };  // macOS system blue
+        let bg  = if is_minimized { 0x222B27u32 } else { 0x323C37u32 };  // warm stone
+        let txt = if is_minimized { 0xA8B0A6u32 } else { WHITE };
+        let accent = if is_focused { GREEN } else { 0x3C4641u32 };  // spring-green focus
         // Rounded pill with subtle shadow
         fb.fill_rounded_rect(x - 1, y - 1, w + 2, h + 2, 5, 0x0A0A14);
         fb.fill_rounded_rect(x, y, w, h, 5, bg);

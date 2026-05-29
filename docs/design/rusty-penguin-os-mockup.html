@@ -1,0 +1,893 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rusty Penguin OS — v2.0 vision</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@400;500;600;700&family=Nunito:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  /* warmer dark stone, not cool navy */
+  --bg:#1d2421;
+  --wall1:#293530;
+  --wall2:#252e2a;
+  --panel:rgba(48,57,52,.76);
+  --panel-solid:#2a332f;
+  --panel-soft:#323c37;
+  --hover:rgba(255,255,255,.075);
+  --line:rgba(255,255,255,.09);
+  --line-soft:rgba(255,255,255,.055);
+
+  /* warm off-white text */
+  --txt:#ecede5;
+  --txt-dim:#a8b0a6;
+  --txt-faint:#717a72;
+
+  /* dingir is its own thing: warm parchment/gold */
+  --cream:#ecdaa7;
+  --cream-2:#d9c084;
+  --cream-soft:rgba(236,218,167,.16);
+
+  /* warmer, more saturated spring green (away from cool mint) */
+  --green:#6fe18b;
+  --green-d:#52c46e;
+  --green-soft:rgba(111,225,139,.16);
+
+  /* warm orange */
+  --rust:#ef8b5c;
+  --rust-soft:rgba(239,139,92,.18);
+
+  /* warmer sky blue */
+  --sky:#8cc6e5;
+  --sky-soft:rgba(140,198,229,.16);
+
+  --amber:#f5c451;
+  --red:#ef7575;
+  --violet:#bd9cef;
+  --neg:#ef7575;
+  --zero:#909a92;
+  --pos:#6fe18b;
+
+  /* tighter, less pillowy roundness */
+  --r:12px;
+  --r-sm:10px;
+  --r-xs:8px;
+  --r-pill:999px;
+
+  --sh:0 22px 60px -16px rgba(0,0,0,.55), 0 6px 18px -8px rgba(0,0,0,.45);
+  --sh-sm:0 8px 24px -10px rgba(0,0,0,.5);
+
+  --ui:'Nunito',system-ui,sans-serif;
+  --disp:'Quicksand',var(--ui);
+  --mono:'JetBrains Mono',ui-monospace,monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%;overflow:hidden}
+body{font-family:var(--ui);background:var(--bg);color:var(--txt);font-size:14px;-webkit-font-smoothing:antialiased;user-select:none}
+button{font-family:inherit;color:inherit;cursor:pointer;border:none;background:none}
+input{font-family:inherit}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-thumb{background:rgba(255,255,255,.13);border-radius:99px;border:2px solid transparent;background-clip:padding-box}
+::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.22);background-clip:padding-box}
+::selection{background:var(--green);color:#0a2614}
+
+/* ============ WALLPAPER ============ */
+#os{position:fixed;inset:0}
+#desktop{
+  position:absolute;inset:0;overflow:hidden;
+  background:
+    radial-gradient(1100px 720px at 76% 22%, rgba(95,148,118,.22), transparent 62%),
+    radial-gradient(950px 700px at 16% 84%, rgba(180,120,80,.16), transparent 58%),
+    radial-gradient(700px 520px at 50% 50%, rgba(80,110,95,.18), transparent 70%),
+    linear-gradient(155deg,#252d29,#1b211e 72%);
+}
+.wall-star{position:absolute;color:var(--cream);pointer-events:none}
+.wall-glow{position:absolute;border-radius:50%;filter:blur(80px);pointer-events:none}
+
+/* ============ WINDOWS ============ */
+.win{
+  position:absolute;min-width:300px;min-height:180px;
+  background:var(--panel);
+  backdrop-filter:blur(26px) saturate(1.3);
+  -webkit-backdrop-filter:blur(26px) saturate(1.3);
+  border:1px solid var(--line);
+  border-radius:var(--r);
+  box-shadow:var(--sh);
+  display:flex;flex-direction:column;overflow:hidden;
+  animation:winpop .2s cubic-bezier(.2,.9,.3,1.25);
+}
+@keyframes winpop{from{opacity:0;transform:scale(.97) translateY(10px)}to{opacity:1;transform:none}}
+.win.min{display:none}
+.win.focused{box-shadow:var(--sh), 0 0 0 1px color-mix(in srgb, var(--ac,var(--green)) 28%, transparent)}
+.win-bar{
+  height:42px;flex:0 0 auto;display:flex;align-items:center;gap:10px;
+  padding:0 8px 0 16px;cursor:grab;
+  background:linear-gradient(180deg, rgba(255,255,255,.045), rgba(255,255,255,.005));
+  border-bottom:1px solid var(--line-soft);
+}
+.win-bar:active{cursor:grabbing}
+.win-title{font-family:var(--disp);font-size:14px;color:var(--txt);font-weight:600;display:flex;align-items:center;gap:9px;letter-spacing:.01em}
+.win-title .tw-ic{width:17px;height:17px;color:var(--ac,var(--green));display:grid;place-items:center}
+.win-title .tw-ic svg{width:17px;height:17px}
+.win-ctl{margin-left:auto;display:flex;gap:8px;align-items:center}
+.wc{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;font-size:12px;line-height:1;color:#1a1a1a99;font-weight:700;transition:.12s;font-family:var(--ui)}
+.wc:hover{filter:brightness(1.12);transform:scale(1.06)}
+.wc.min{background:var(--amber)} .wc.max{background:var(--green)} .wc.close{background:var(--red)}
+.wc.close{color:#5a1212cc;font-size:14px}
+.win-body{flex:1;overflow:auto;position:relative}
+.rsz{position:absolute;right:0;bottom:0;width:18px;height:18px;cursor:nwse-resize;z-index:5;opacity:.4}
+.rsz::after{content:"";position:absolute;right:4px;bottom:4px;width:7px;height:7px;border-right:2px solid var(--txt-dim);border-bottom:2px solid var(--txt-dim);border-radius:0 0 3px 0}
+
+/* ---- terminal ---- */
+.term{background:rgba(15,20,18,.86);height:100%;padding:14px 16px;font-family:var(--mono);font-size:13px;line-height:1.6;overflow:auto;color:#daefe2}
+.term .out{white-space:pre-wrap;color:#a7bcb1}
+.term .ok{color:var(--green)} .term .warn{color:var(--amber)} .term .err{color:var(--red)} .term .dim{color:var(--txt-dim)} .term .b{color:var(--sky)} .term .v{color:var(--violet)} .term .ru{color:var(--rust)} .term .gold{color:var(--cream)}
+.term-line{display:flex;gap:8px}
+.term .pl{color:var(--green);font-weight:500}.term .pl .h{color:var(--rust)}.term .pl .p{color:var(--sky)}
+.term input{flex:1;background:transparent;border:none;outline:none;color:#e0f5ea;font-family:var(--mono);font-size:13px}
+
+/* ---- TIS console ---- */
+.tis{height:100%;display:grid;grid-template-rows:auto 1fr;background:rgba(22,28,25,.5)}
+.tis-head{padding:14px 18px;border-bottom:1px solid var(--line-soft);display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.tis-badge{font-family:var(--disp);font-weight:700;font-size:16px;color:var(--green)}
+.chip{font-size:11.5px;color:var(--txt-dim);background:rgba(255,255,255,.055);padding:4px 10px;border-radius:var(--r-pill);font-weight:600}
+.chip b{color:var(--txt);font-weight:700}
+.chip.live b{color:var(--green)}
+.tis-grid{display:grid;grid-template-columns:1.25fr 1fr;gap:14px;padding:16px;overflow:auto}
+.card{background:rgba(255,255,255,.04);border:1px solid var(--line-soft);border-radius:var(--r-sm);padding:14px 15px}
+.card h4{font-family:var(--disp);font-size:12.5px;letter-spacing:.02em;color:var(--txt-dim);margin-bottom:11px;display:flex;justify-content:space-between;font-weight:600}
+.card h4 span{color:var(--green)}
+.spark{width:100%;height:70px;display:block}
+.metric-row{display:flex;justify-content:space-between;font-size:13px;padding:5px 0}
+.metric-row+.metric-row{border-top:1px solid var(--line-soft)}
+.metric-row b{color:var(--txt);font-weight:700;font-variant-numeric:tabular-nums}
+.bar{height:9px;background:rgba(0,0,0,.28);border-radius:99px;overflow:hidden;margin:6px 0 14px}
+.bar i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,var(--rust),var(--green));transition:width 1s}
+.expert-row{display:grid;grid-template-columns:38px 1fr 40px;gap:9px;align-items:center;font-size:11.5px;padding:3px 0}
+.expert-row .nm{color:var(--txt-dim);font-weight:700;letter-spacing:.03em}
+.ebar{height:8px;background:rgba(0,0,0,.28);border-radius:99px;overflow:hidden}
+.ebar i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,var(--rust),var(--green));transition:width 1s}
+.expert-row .pc{text-align:right;color:var(--txt);font-variant-numeric:tabular-nums;font-weight:700}
+.layerheat{display:grid;grid-template-columns:repeat(10,1fr);gap:5px;margin-top:6px}
+.lcell{aspect-ratio:1;border-radius:6px;position:relative;display:grid;place-items:center}
+.lcell b{font-size:8px;color:#0008;font-weight:700}
+
+/* ---- files ---- */
+.files{height:100%;display:grid;grid-template-columns:172px 1fr;background:rgba(22,28,25,.5)}
+.fside{border-right:1px solid var(--line-soft);padding:12px 10px;font-size:13px}
+.fside .ti{font-size:10px;letter-spacing:.12em;color:var(--txt-faint);text-transform:uppercase;padding:4px 8px 8px;font-weight:700}
+.fside .fs{padding:8px 10px;color:var(--txt-dim);display:flex;gap:9px;align-items:center;cursor:pointer;border-radius:8px;font-weight:600}
+.fside .fs svg{width:16px;height:16px}
+.fside .fs:hover{background:var(--hover);color:var(--txt)}
+.fside .fs.act{background:var(--green-soft);color:var(--green)}
+.fmain{padding:14px;display:grid;grid-template-columns:repeat(auto-fill,minmax(92px,1fr));gap:6px;align-content:start;overflow:auto}
+.fitem{display:flex;flex-direction:column;align-items:center;gap:7px;padding:12px 6px;border-radius:10px;cursor:pointer;text-align:center}
+.fitem:hover{background:var(--hover)}
+.fitem .fi{width:42px;height:42px;border-radius:10px;display:grid;place-items:center}
+.fitem .fi svg{width:22px;height:22px}
+.fitem .fn{font-size:11px;color:var(--txt);word-break:break-word;line-height:1.3;font-weight:600}
+.fitem .fz{font-size:9.5px;color:var(--txt-faint)}
+
+/* ---- calc ---- */
+.calc{height:100%;display:flex;flex-direction:column;background:rgba(22,28,25,.5);padding:14px}
+.calc-sub{font-size:12px;color:var(--txt-faint);text-align:right;height:16px;font-variant-numeric:tabular-nums}
+.calc-disp{text-align:right;font-family:var(--disp);font-size:38px;color:var(--txt);font-weight:600;letter-spacing:-.01em;font-variant-numeric:tabular-nums;padding:4px 6px 14px;overflow:hidden;text-overflow:ellipsis}
+.calc-grid{flex:1;display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.calc-grid button{background:rgba(255,255,255,.05);border-radius:11px;font-family:var(--disp);font-size:18px;font-weight:600;color:var(--txt);transition:.1s}
+.calc-grid button:hover{background:rgba(255,255,255,.1)}
+.calc-grid button:active{transform:scale(.94)}
+.calc-grid button.op{color:var(--rust);background:var(--rust-soft)}
+.calc-grid button.fn{color:var(--sky);background:var(--sky-soft)}
+.calc-grid button.eq{background:var(--green);color:#0a2614}
+
+/* ---- settings ---- */
+.sett{height:100%;overflow:auto;background:rgba(22,28,25,.5);padding:20px 24px}
+.sett h3{font-family:var(--disp);font-size:13px;letter-spacing:.04em;color:var(--green);margin:22px 0 6px;font-weight:700}
+.sett h3:first-child{margin-top:0}
+.set-card{background:rgba(255,255,255,.04);border:1px solid var(--line-soft);border-radius:var(--r-sm);overflow:hidden}
+.set-row{display:flex;justify-content:space-between;align-items:center;padding:13px 16px;font-size:14px;font-weight:600}
+.set-row+.set-row{border-top:1px solid var(--line-soft)}
+.set-row .sv{color:var(--txt-dim);font-weight:600}
+.set-row .sv b{color:var(--green)}
+.swatches{display:flex;gap:9px}
+.sw{width:26px;height:26px;border-radius:50%;cursor:pointer;border:2px solid transparent;transition:.12s}
+.sw:hover{transform:scale(1.1)}
+.sw.on{border-color:#fff;box-shadow:0 0 0 2px var(--bg)}
+.toggle{width:46px;height:26px;background:rgba(0,0,0,.32);border-radius:99px;position:relative;cursor:pointer;transition:.18s}
+.toggle i{position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:var(--txt-dim);transition:.18s}
+.toggle.on{background:var(--green)}
+.toggle.on i{left:23px;background:#0a2614}
+.set-note{font-size:12px;color:var(--txt-faint);line-height:1.6;margin-top:12px}
+
+/* ---- docs / help / editor ---- */
+.doc{height:100%;overflow:auto;background:rgba(22,28,25,.5);padding:24px 28px;font-size:14px;line-height:1.75;color:var(--txt)}
+.doc h2{font-family:var(--disp);font-size:22px;color:var(--green);margin-bottom:6px;font-weight:700}
+.doc .sub{color:var(--txt-dim);margin-bottom:20px}
+.doc h4{font-family:var(--disp);color:var(--rust);font-size:14px;letter-spacing:.02em;margin:20px 0 8px;font-weight:700}
+.doc p{color:#bbc6c0;margin-bottom:10px}
+.doc code{background:rgba(0,0,0,.3);border-radius:6px;padding:2px 7px;color:var(--green);font-family:var(--mono);font-size:12px}
+.doc ul{margin:0 0 10px 20px;color:#bbc6c0}
+.doc li{margin-bottom:6px}
+.doc .gold{color:var(--cream)}
+.editor{width:100%;height:100%;background:rgba(15,20,18,.85);border:none;outline:none;resize:none;color:#dff6ea;font-family:var(--mono);font-size:13px;line-height:1.75;padding:16px 18px}
+
+/* ============ MENU ============ */
+#menu{
+  position:absolute;left:14px;bottom:74px;z-index:8000;width:304px;
+  background:var(--panel);backdrop-filter:blur(28px) saturate(1.3);-webkit-backdrop-filter:blur(28px);
+  border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--sh);
+  display:none;overflow:hidden;
+}
+#menu.open{display:block;animation:menupop .18s cubic-bezier(.2,.9,.3,1.2)}
+@keyframes menupop{from{opacity:0;transform:translateY(14px) scale(.97)}to{opacity:1;transform:none}}
+.menu-h{display:flex;align-items:center;gap:11px;padding:16px}
+.menu-av{width:40px;height:40px;border-radius:50%;background:radial-gradient(circle at 35% 30%, var(--cream), var(--cream-2));display:grid;place-items:center;color:#5a4419}
+.menu-av svg{width:22px;height:22px}
+.menu-h .mn{font-family:var(--disp);font-weight:700;font-size:15px}
+.menu-h .ms{font-size:11.5px;color:var(--txt-dim)}
+.menu-search{margin:0 16px 10px;display:flex;align-items:center;gap:8px;background:rgba(0,0,0,.25);border:1px solid var(--line-soft);border-radius:var(--r-pill);padding:8px 14px}
+.menu-search input{flex:1;background:none;border:none;outline:none;color:var(--txt);font-size:13px}
+.menu-search svg{width:15px;height:15px;color:var(--txt-faint)}
+.menu-list{padding:4px 8px 8px;max-height:46vh;overflow:auto}
+.menu-it{display:flex;align-items:center;gap:12px;padding:8px 8px;border-radius:9px;cursor:pointer}
+.menu-it:hover{background:var(--hover)}
+.menu-it .mi{width:34px;height:34px;border-radius:9px;display:grid;place-items:center;flex:0 0 auto}
+.menu-it .mi svg{width:18px;height:18px}
+.menu-it .mt{font-weight:700;font-size:13.5px}
+.menu-it .md{font-size:11px;color:var(--txt-dim)}
+.menu-foot{display:flex;gap:8px;padding:10px 16px;border-top:1px solid var(--line-soft)}
+.menu-foot button{flex:1;padding:9px;border-radius:9px;color:var(--txt-dim);font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center;gap:7px}
+.menu-foot button:hover{background:var(--hover);color:var(--txt)}
+.menu-foot button svg{width:15px;height:15px}
+.menu-foot .pw:hover{color:var(--red)}
+.menu-foot .lk:hover{color:var(--sky)}
+
+/* ============ BOTTOM PANEL ============ */
+#panel{
+  position:absolute;left:14px;right:14px;bottom:12px;height:54px;z-index:7000;
+  display:flex;align-items:center;gap:8px;padding:0 8px;
+  background:var(--panel);backdrop-filter:blur(26px) saturate(1.3);-webkit-backdrop-filter:blur(26px);
+  border:1px solid var(--line);border-radius:16px;box-shadow:var(--sh);
+}
+#menubtn{display:flex;align-items:center;gap:9px;padding:9px 16px 9px 13px;border-radius:11px;font-family:var(--disp);font-weight:700;font-size:14px;color:var(--green);transition:.14s}
+#menubtn:hover{background:var(--hover)}
+#menubtn.on{background:var(--green);color:#0a2614}
+#menubtn.on .dingir-color{color:#0a2614 !important}
+.psep{width:1px;height:26px;background:var(--line);margin:0 2px}
+.fav{display:flex;gap:4px}
+.favbtn{width:40px;height:40px;border-radius:10px;display:grid;place-items:center;position:relative;transition:.14s}
+.favbtn:hover{background:var(--hover);transform:translateY(-2px)}
+.favbtn .fi{width:38px;height:38px;border-radius:10px;display:grid;place-items:center}
+.favbtn .fi svg{width:21px;height:21px}
+.favbtn.run::after{content:"";position:absolute;bottom:1px;left:50%;transform:translateX(-50%);width:5px;height:5px;border-radius:50%;background:var(--ac,var(--green))}
+.tasks{display:flex;gap:6px;align-items:center;overflow:auto;flex:1;padding:0 4px}
+.task{display:flex;align-items:center;gap:8px;padding:8px 13px;border-radius:10px;font-size:12.5px;font-weight:700;color:var(--txt-dim);max-width:180px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:rgba(255,255,255,.045)}
+.task:hover{background:var(--hover);color:var(--txt)}
+.task.act{color:var(--txt);background:rgba(255,255,255,.1)}
+.task .ti{width:16px;height:16px;flex:0 0 auto;color:var(--ac,var(--green))}
+.task .ti svg{width:16px;height:16px}
+.tray{margin-left:auto;display:flex;align-items:center;gap:6px;padding-right:6px}
+.tray-w{display:flex;align-items:center;gap:7px;padding:7px 11px;border-radius:10px;font-size:12px;color:var(--txt-dim);font-weight:600}
+.tray-w:hover{background:var(--hover)}
+.tray-w b{color:var(--txt);font-weight:700}
+.tern-tray{display:flex;gap:3px;align-items:center}
+.tern-cell{width:8px;height:8px;border-radius:3px;background:rgba(255,255,255,.12);transition:.25s}
+.tern-cell.n{background:var(--neg)} .tern-cell.z{background:var(--zero)} .tern-cell.p{background:var(--pos)}
+.tray-clock{text-align:right;line-height:1.15;color:var(--txt);font-weight:700;font-size:12.5px}
+.tray-clock span{display:block;font-size:10.5px;color:var(--txt-dim);font-weight:600}
+
+/* ============ BOOT ============ */
+#boot{position:fixed;inset:0;z-index:99999;background:radial-gradient(900px 700px at 50% 40%,#2b3833,#171c1a 76%);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:28px;transition:opacity .65s}
+#boot.gone{opacity:0;pointer-events:none}
+.boot-star{color:var(--cream);filter:drop-shadow(0 0 28px rgba(236,218,167,.45));animation:breathe 3.4s ease-in-out infinite}
+.boot-star svg{width:92px;height:92px}
+@keyframes breathe{0%,100%{transform:scale(1);opacity:.95}50%{transform:scale(1.05);opacity:1;filter:drop-shadow(0 0 38px rgba(236,218,167,.6))}}
+.boot-name{font-family:var(--disp);font-weight:600;font-size:26px;letter-spacing:.01em}
+.boot-name b{color:var(--green);font-weight:700}
+.boot-v{font-size:12px;color:var(--rust);letter-spacing:.18em;margin-top:-18px}
+.boot-bar{width:300px;height:6px;background:rgba(255,255,255,.08);border-radius:99px;overflow:hidden}
+.boot-bar i{display:block;height:100%;width:0;border-radius:99px;background:linear-gradient(90deg,var(--rust),var(--green));transition:width .2s}
+.boot-log{font-size:12px;color:var(--txt-dim);height:18px}
+
+/* ============ LOCK SCREEN ============ */
+#lock{
+  position:fixed;inset:0;z-index:9500;
+  background:
+    radial-gradient(1100px 720px at 70% 24%, rgba(95,148,118,.28), transparent 62%),
+    radial-gradient(900px 700px at 18% 84%, rgba(180,120,80,.2), transparent 58%),
+    linear-gradient(155deg,#252d29,#1a201d 75%);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;
+  opacity:0;pointer-events:none;transition:opacity .55s ease;
+}
+#lock.show{opacity:1;pointer-events:auto}
+#lock.gone{opacity:0;pointer-events:none;transition:opacity .55s ease}
+.lock-bg-stars{position:absolute;inset:0;pointer-events:none;color:var(--cream)}
+.lock-time{font-family:var(--disp);font-weight:600;font-size:88px;letter-spacing:-.02em;color:var(--txt);font-variant-numeric:tabular-nums;line-height:1;text-shadow:0 6px 28px rgba(0,0,0,.4)}
+.lock-date{font-size:15px;color:var(--txt-dim);margin-top:-4px;font-weight:600;letter-spacing:.02em}
+.lock-card{
+  margin-top:18px;
+  background:var(--panel);backdrop-filter:blur(28px) saturate(1.3);-webkit-backdrop-filter:blur(28px);
+  border:1px solid var(--line);border-radius:18px;box-shadow:var(--sh);
+  padding:24px 28px 22px;display:flex;flex-direction:column;align-items:center;gap:12px;min-width:300px;
+}
+.lock-av{width:74px;height:74px;border-radius:50%;background:radial-gradient(circle at 35% 30%, var(--cream), var(--cream-2));display:grid;place-items:center;color:#5a4419;box-shadow:0 8px 26px -8px rgba(236,218,167,.55), inset 0 -3px 8px rgba(120,90,30,.25);margin-top:-46px}
+.lock-av svg{width:42px;height:42px}
+.lock-name{font-family:var(--disp);font-weight:700;font-size:18px;margin-top:6px}
+.lock-sub{font-size:11.5px;color:var(--txt-dim);font-weight:600;margin-top:-4px}
+.lock-input-wrap{display:flex;align-items:center;gap:6px;background:rgba(0,0,0,.32);border:1px solid var(--line-soft);border-radius:var(--r-pill);padding:4px 4px 4px 16px;width:260px;margin-top:10px;transition:.18s}
+.lock-input-wrap:focus-within{border-color:var(--green);background:rgba(0,0,0,.4)}
+.lock-input-wrap input{flex:1;background:none;border:none;outline:none;color:var(--txt);font-size:14px;padding:8px 0;font-family:var(--ui)}
+.lock-input-wrap input::placeholder{color:var(--txt-faint)}
+.lock-go{width:32px;height:32px;border-radius:50%;background:var(--green);color:#0a2614;display:grid;place-items:center;font-size:16px;font-weight:700;transition:.12s}
+.lock-go:hover{transform:scale(1.06);filter:brightness(1.05)}
+.lock-go.shake{animation:shake .35s}
+@keyframes shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-4px)}75%{transform:translateX(4px)}}
+.lock-hint{font-size:11px;color:var(--txt-faint);margin-top:4px;font-weight:600;letter-spacing:.02em}
+.lock-tray{position:absolute;bottom:24px;display:flex;gap:8px}
+.lock-tray button{width:38px;height:38px;border-radius:50%;background:rgba(255,255,255,.06);color:var(--txt-dim);display:grid;place-items:center;transition:.14s}
+.lock-tray button:hover{background:rgba(255,255,255,.12);color:var(--txt)}
+.lock-tray button svg{width:18px;height:18px}
+
+@media (max-width:780px){
+  .files{grid-template-columns:1fr}.fside{display:none}
+  .tis-grid{grid-template-columns:1fr}
+  .fav{display:none}
+  .lock-time{font-size:64px}
+}
+</style>
+</head>
+<body>
+
+<!-- ============ BOOT ============ -->
+<div id="boot">
+  <div class="boot-star" id="bstar"></div>
+  <div class="boot-name">Rusty <b>Penguin</b></div>
+  <div class="boot-v">OS · v2.0.0 · bare-metal rust</div>
+  <div class="boot-bar"><i id="bootfill"></i></div>
+  <div class="boot-log" id="bootlog">waking up…</div>
+</div>
+
+<!-- ============ LOCK SCREEN ============ -->
+<div id="lock">
+  <div class="lock-bg-stars" id="lockstars"></div>
+  <div class="lock-time" id="locktime">--:--</div>
+  <div class="lock-date" id="lockdate">—</div>
+  <div class="lock-card">
+    <div class="lock-av" id="lockav"></div>
+    <div class="lock-name">simeon</div>
+    <div class="lock-sub">Skybase · Graz</div>
+    <div class="lock-input-wrap">
+      <input type="password" id="lockpw" placeholder="Password" autocomplete="off" spellcheck="false">
+      <button class="lock-go" id="lockgo" title="unlock">&#8594;</button>
+    </div>
+    <div class="lock-hint" id="lockhint">type anything · press Enter to unlock</div>
+  </div>
+  <div class="lock-tray">
+    <button title="accessibility"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="5" r="1.8" fill="currentColor"/><path d="M5 9l7-1.5L19 9M9 22l3-9 3 9M9 13h6"/></svg></button>
+    <button title="restart"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 12a9 9 0 0115-6.7L21 8M21 4v4h-4"/></svg></button>
+    <button title="power"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 3v9"/><path d="M6.5 7a8 8 0 1011 0"/></svg></button>
+  </div>
+</div>
+
+<div id="os">
+  <div id="desktop">
+    <!-- hero -->
+    <div id="hero" style="position:absolute;inset:0;bottom:66px;display:grid;place-items:center;pointer-events:none">
+      <div style="text-align:center">
+        <div id="herostar" style="color:var(--cream);filter:drop-shadow(0 0 26px rgba(236,218,167,.5));margin-bottom:20px"></div>
+        <div style="font-family:var(--disp);font-weight:600;font-size:32px">Rusty <span style="color:var(--green);font-weight:700">Penguin</span></div>
+        <div style="font-size:13px;color:var(--txt-dim);margin-top:10px;font-weight:600">Bare-metal Rust OS · Sparse ternary inference · Zero binary</div>
+        <div style="font-size:11.5px;color:var(--txt-faint);margin-top:5px">RFI-IRFOS · Ternary Intelligence Stack</div>
+      </div>
+    </div>
+
+    <!-- MENU -->
+    <div id="menu">
+      <div class="menu-h">
+        <div class="menu-av" id="menuav"></div>
+        <div>
+          <div class="mn">simeon</div>
+          <div class="ms">Skybase · Graz</div>
+        </div>
+      </div>
+      <div class="menu-search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
+        <input placeholder="Search apps…" id="menusearch" spellcheck="false">
+      </div>
+      <div class="menu-list" id="menulist"></div>
+      <div class="menu-foot">
+        <button onclick="launch('prefs')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>Settings</button>
+        <button class="lk" onclick="lockNow()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/></svg>Lock</button>
+        <button class="pw" onclick="lockNow()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v8"/><path d="M6.5 7a8 8 0 1011 0"/></svg>Power</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ BOTTOM PANEL ============ -->
+  <div id="panel">
+    <button id="menubtn" onclick="toggleMenu()">
+      <span class="dingir-color" id="menubtnstar" style="color:var(--cream);display:grid;place-items:center"></span>Menu
+    </button>
+    <div class="psep"></div>
+    <div class="fav" id="fav"></div>
+    <div class="psep"></div>
+    <div class="tasks" id="tasks"></div>
+    <div class="tray">
+      <div class="tray-w" title="albert. v3.0 training epoch">albert. ep<b id="trayep" style="color:var(--green)">3437</b></div>
+      <div class="tray-w" title="TIS ternary bus — live {-1,0,+1}">
+        <div class="tern-tray"><div class="tern-cell p" id="t0"></div><div class="tern-cell z" id="t1"></div><div class="tern-cell p" id="t2"></div><div class="tern-cell n" id="t3"></div><div class="tern-cell p" id="t4"></div></div>
+      </div>
+      <div class="tray-w"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 13a9 9 0 0114 0M8 16a5 5 0 018 0M12 19h.01"/></svg></div>
+      <div class="tray-w"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 10v4h4l5 4V6l-5 4z"/><path d="M16 9a3 3 0 010 6"/></svg></div>
+      <div class="tray-w tray-clock" id="trayclock">--:--<span>May 29</span></div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ============================================================
+   DINGIR  𒀭  — 8 uniform tapered wedges (sky/heaven/god)
+   Geometry: 16 polygon points alternating outer radius 11 and inner radius 3
+   on a 24×24 viewBox centered at (12,12). Outer points at 0°/45°/90°…,
+   inner concavities at 22.5°/67.5°… — true 8-point star, not a compass rose.
+   ============================================================ */
+const DINGIR_PTS = "12,1 13.15,9.23 19.78,4.22 14.77,10.85 23,12 14.77,13.15 19.78,19.78 13.15,14.77 12,23 10.85,14.77 4.22,19.78 9.23,13.15 1,12 9.23,10.85 4.22,4.22 10.85,9.23";
+function dingir(size){
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24"><polygon points="${DINGIR_PTS}" fill="currentColor" stroke-linejoin="round"/></svg>`;
+}
+
+/* ============================================================
+   APP ICONS
+   ============================================================ */
+const I = {
+  term:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M7 9l3 3-3 3M13 15h4"/></svg>`,
+  files:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>`,
+  edit:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20l4-1 10-10-3-3L5 16z"/><path d="M14 6l3 3"/></svg>`,
+  calc:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="3"/><rect x="7.5" y="6" width="9" height="3" rx="1"/><circle cx="9" cy="13" r=".8" fill="currentColor"/><circle cx="12" cy="13" r=".8" fill="currentColor"/><circle cx="15" cy="13" r=".8" fill="currentColor"/><circle cx="9" cy="17" r=".8" fill="currentColor"/><circle cx="12" cy="17" r=".8" fill="currentColor"/></svg>`,
+  help:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.4a2.4 2.4 0 113.4 2.2c-.8.4-1 .9-1 1.6"/><circle cx="12" cy="16.6" r=".7" fill="currentColor"/></svg>`,
+  prefs:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/></svg>`,
+  tis:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M12 8v8M8 10l4-2 4 2M8 14l4 2 4-2"/></svg>`,
+  snake:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6h5v5H6zM11 11h6M17 11v6h-6"/></svg>`,
+  mines:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="13" r="6"/><path d="M12 4v3M18 7l-2 2M6 7l2 2"/></svg>`,
+  doom:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 9c0-3 14-3 14 0v8l-3-2-2 2-2-2-2 2-2-2-3 2z"/><circle cx="9.5" cy="11.5" r="1" fill="currentColor"/><circle cx="14.5" cy="11.5" r="1" fill="currentColor"/></svg>`,
+  doc:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M6 3h8l5 5v13H6z"/><path d="M14 3v5h5M9 13h7M9 17h7"/></svg>`,
+  folder:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>`,
+  rust:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3.2"/><path d="M12 4v2.5M12 17.5V20M4 12h2.5M17.5 12H20"/></svg>`,
+  img:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="8.5" cy="9" r="1.6"/><path d="M4 18l5-5 4 4 3-3 4 4"/></svg>`,
+  home:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M4 11l8-7 8 7M6 10v9h12v-9"/></svg>`,
+  trash:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13"/></svg>`,
+};
+
+/* ============================================================
+   APP REGISTRY
+   ============================================================ */
+const APPS = {
+  term:  {name:'Terminal',    desc:'ternsh shell',           ic:'term',  ac:'--green', w:580,h:380, build:buildTerm},
+  files: {name:'Files',       desc:'browse the trit-fs',     ic:'files', ac:'--sky',   w:600,h:380, build:buildFiles},
+  edit:  {name:'Text Editor', desc:'edit code & notes',      ic:'edit',  ac:'--amber', w:560,h:400, build:buildEditor},
+  calc:  {name:'Calculator',  desc:'quick maths',            ic:'calc',  ac:'--rust',  w:300,h:420, build:buildCalc},
+  tis:   {name:'TIS Console', desc:'albert. live telemetry', ic:'tis',   ac:'--green', w:720,h:470, build:buildTIS},
+  prefs: {name:'Settings',    desc:'tune your system',       ic:'prefs', ac:'--green', w:500,h:480, build:buildSettings},
+  help:  {name:'Welcome',     desc:'getting started',        ic:'help',  ac:'--sky',   w:540,h:460, build:buildHelp},
+  snake: {name:'Snake',       desc:'classic time-waster',    ic:'snake', ac:'--green', w:400,h:450, build:buildSnake},
+  mines: {name:'Minesweeper', desc:'mind the bombs',         ic:'mines', ac:'--amber', w:440,h:460, build:buildStub},
+  doom:  {name:'Doom',        desc:'rip and tear',           ic:'doom',  ac:'--red',   w:540,h:400, build:buildStub},
+};
+const ORDER = ['term','files','edit','calc','tis','prefs','help','snake','mines','doom'];
+const FAVS  = ['term','files','tis','edit','calc'];
+
+/* ============================================================
+   WINDOW MANAGER
+   ============================================================ */
+let zTop=100; const open={};
+function focusWin(id){const o=open[id]; if(!o)return;
+  zTop++; o.el.style.zIndex=zTop;
+  document.querySelectorAll('.win').forEach(w=>w.classList.remove('focused'));
+  o.el.classList.add('focused');
+  document.querySelectorAll('.task').forEach(t=>t.classList.remove('act'));
+  o.taskEl.classList.add('act'); syncRun();}
+function syncRun(){document.querySelectorAll('.favbtn').forEach(d=>d.classList.toggle('run',!!open[d.dataset.app]));}
+function launch(appId){closeMenu();
+  if(open[appId]){const o=open[appId];o.el.classList.remove('min');focusWin(appId);return;}
+  const app=APPS[appId], desk=document.getElementById('desktop');
+  const el=document.createElement('div'); el.className='win';
+  el.style.setProperty('--ac',`var(${app.ac})`);
+  const off=Object.keys(open).length*28;
+  el.style.width=app.w+'px'; el.style.height=app.h+'px';
+  el.style.left=Math.min(150+off, innerWidth-app.w-30)+'px';
+  el.style.top=Math.min(50+off, innerHeight-app.h-90)+'px';
+  el.style.zIndex=++zTop;
+  el.innerHTML=`
+    <div class="win-bar">
+      <div class="win-title"><span class="tw-ic">${I[app.ic]}</span>${app.name}</div>
+      <div class="win-ctl">
+        <button class="wc min" title="minimize">&#8211;</button>
+        <button class="wc max" title="maximize">&#9633;</button>
+        <button class="wc close" title="close">&#10005;</button>
+      </div>
+    </div>
+    <div class="win-body"></div>
+    <div class="rsz"></div>`;
+  desk.appendChild(el);
+  app.build(el.querySelector('.win-body'), el);
+  el.querySelector('.wc.close').onclick=e=>{e.stopPropagation();closeWin(appId)};
+  el.querySelector('.wc.min').onclick=e=>{e.stopPropagation();el.classList.add('min');};
+  el.querySelector('.wc.max').onclick=e=>{e.stopPropagation();zoomWin(el)};
+  el.addEventListener('mousedown',()=>focusWin(appId));
+  dragify(el,el.querySelector('.win-bar'));
+  resizify(el,el.querySelector('.rsz'));
+
+  const t=document.createElement('button'); t.className='task'; t.style.setProperty('--ac',`var(${app.ac})`);
+  t.innerHTML=`<span class="ti">${I[app.ic]}</span>${app.name}`;
+  t.onclick=()=>{if(el.classList.contains('min')){el.classList.remove('min');focusWin(appId)} else if(el.classList.contains('focused')){el.classList.add('min')} else focusWin(appId);};
+  document.getElementById('tasks').appendChild(t);
+
+  open[appId]={el,taskEl:t};
+  document.getElementById('hero').style.opacity=.18;
+  focusWin(appId);
+}
+function closeWin(id){const o=open[id]; if(!o)return;
+  o.el.style.transition='opacity .15s, transform .15s'; o.el.style.opacity=0; o.el.style.transform='scale(.97)';
+  setTimeout(()=>o.el.remove(),150);
+  o.taskEl.remove(); delete open[id]; syncRun();
+  if(!Object.keys(open).length) document.getElementById('hero').style.opacity=1;}
+function zoomWin(el){
+  if(el.dataset.z){el.style.left=el.dataset.l;el.style.top=el.dataset.t;el.style.width=el.dataset.w;el.style.height=el.dataset.h;el.dataset.z='';}
+  else{el.dataset.l=el.style.left;el.dataset.t=el.style.top;el.dataset.w=el.style.width;el.dataset.h=el.style.height;el.dataset.z='1';
+    el.style.left='14px';el.style.top='14px';el.style.width=(innerWidth-28)+'px';el.style.height=(innerHeight-92)+'px';}
+}
+function dragify(el,h){let sx,sy,ox,oy,d=false;
+  h.addEventListener('mousedown',e=>{if(e.target.closest('.wc'))return;d=true;sx=e.clientX;sy=e.clientY;ox=el.offsetLeft;oy=el.offsetTop;e.preventDefault()});
+  window.addEventListener('mousemove',e=>{if(!d)return;el.style.left=Math.max(0,Math.min(innerWidth-80,ox+e.clientX-sx))+'px';el.style.top=Math.max(0,Math.min(innerHeight-80,oy+e.clientY-sy))+'px'});
+  window.addEventListener('mouseup',()=>d=false);}
+function resizify(el,g){let sx,sy,ow,oh,r=false;
+  g.addEventListener('mousedown',e=>{r=true;sx=e.clientX;sy=e.clientY;ow=el.offsetWidth;oh=el.offsetHeight;e.preventDefault();e.stopPropagation()});
+  window.addEventListener('mousemove',e=>{if(!r)return;el.style.width=Math.max(300,ow+e.clientX-sx)+'px';el.style.height=Math.max(180,oh+e.clientY-sy)+'px'});
+  window.addEventListener('mouseup',()=>r=false);}
+
+/* ============================================================
+   APP BUILDERS
+   ============================================================ */
+function buildTerm(body){
+  body.innerHTML=`<div class="term" id="termout">
+    <div class="out dim">Rusty Penguin OS v2.0.0 (bare-metal rust) — trit kernel 6.2.0-rp</div>
+    <div class="out">Hi <span class="ok">simeon</span> — TIS bus is online. Type <span class="ok">help</span> to explore.</div>
+  </div>`;
+  const out=body.querySelector('#termout');
+  function line(h){const d=document.createElement('div');d.className='out';d.innerHTML=h;out.appendChild(d);out.scrollTop=out.scrollHeight;}
+  function prompt(){const w=document.createElement('div');w.className='term-line';
+    w.innerHTML=`<span class="pl"><span class="h">simeon@skybase</span>:<span class="p">~</span>$</span><input autofocus spellcheck="false">`;
+    out.appendChild(w);out.scrollTop=out.scrollHeight;
+    const inp=w.querySelector('input');inp.focus();
+    inp.addEventListener('keydown',e=>{if(e.key==='Enter'){const v=inp.value;inp.disabled=true;run(v);prompt();}});}
+  function run(cmd){const c=cmd.trim().toLowerCase();if(!c)return;
+    if(c==='help')line(`<span class="ok">try</span>  neofetch · tis · ai · ternary · dingir · ls · ps · whoami · uptime · clear`);
+    else if(c==='clear'){out.innerHTML='';return;}
+    else if(c==='whoami')line(`simeon — CEO &amp; Head of Research, RFI-IRFOS`);
+    else if(c==='uptime')line(`up 9 days, 4:21 · load 0.31 0.28 0.30 · heap 49%`);
+    else if(c==='ls')line(`<span class="b">albert/</span>  <span class="b">ternlang/</span>  <span class="b">stack/</span>  sprind_pitch.html  BENCHMARKS.md  loss_history.csv`);
+    else if(c==='ps')line(`<span class="dim">PID  NAME            STATE  TRIT</span>
+  1  trit-kernel     run     <span class="ok">+1</span>
+ 42  albert.train    run     <span class="ok">+1</span>
+ 87  mycelium        run      <span class="dim">0</span>
+ 91  wald            sleep   <span class="err">-1</span>
+113  tis-bus         run     <span class="ok">+1</span>`);
+    else if(c==='ternary')line(`ternary logic — <span class="err">-1</span> refrain · <span class="dim">0</span> hold/tend · <span class="ok">+1</span> affirm. the death of the bit.`);
+    else if(c==='dingir')line(`<span class="gold">𒀭 dingir</span> · Sumerian determinative for sky, heaven, god. eight wedges meeting at a point. the brand mark of this OS.`);
+    else if(c==='ai'||c==='albert')line(`<span class="v">albert.</span> v3.0 · 20 layers · 134M params · ATL 8.8540 · ep<span class="ok">3437</span> — cross-lingual broadcast. €265 total compute.`);
+    else if(c==='tis')line(`Ternary Intelligence Stack: ternlang &#8594; BET-ISA &#8594; BET VM &#8594; cuTern &#8594; Albert CLI &#8594; albert. · 5 crates green · 138 CI tests pass.`);
+    else if(c==='neofetch')line(
+`<span class="gold">      ✦      </span>  <span class="v">simeon@skybase</span>
+<span class="gold">    ✦ ✦ ✦    </span>  ─────────────
+<span class="gold">  ✦   ✦   ✦  </span>  <span class="b">OS</span>     Rusty Penguin v2.0.0
+<span class="gold">    ✦ ✦ ✦    </span>  <span class="b">Kernel</span> trit-6.2.0-rp
+<span class="gold">      ✦      </span>  <span class="b">Shell</span>  ternsh 1.4
+                <span class="b">CPU</span>    REBEL-6 ternary · 41&deg;
+                <span class="b">AI</span>     albert. v3.0 · ep3437
+                <span class="b">Stack</span>  TIS // zero binary
+                <span class="ru">mark</span>   𒀭 dingir (sky/heaven)`);
+    else line(`<span class="err">ternsh: ${cmd}: not found</span> — try <span class="ok">help</span>`);}
+  prompt();
+  body.addEventListener('mousedown',()=>{const i=out.querySelectorAll('input:not([disabled])');if(i.length)i[i.length-1].focus();});
+}
+
+const FS={
+  Home:{ic:'home',items:[['albert','folder','','--rust'],['ternlang','folder','','--sky'],['stack','folder','','--green'],['sprind_pitch.html','doc','41 KB','--rust'],['loss_history.csv','doc','2.1 MB','--sky'],['BENCHMARKS.md','doc','88 KB','--green'],['skybase.png','img','3.4 MB','--violet']]},
+  'albert.':{ic:'rust',items:[['model.safetensors','rust','512 MB','--rust'],['train_bible.rs','rust','34 KB','--rust'],['config.json','doc','1 KB','--sky'],['ep3437.ckpt','rust','512 MB','--rust']]},
+  Projects:{ic:'folder',items:[['ternary-intelligence-stack','folder','','--green'],['invisible-layer','folder','','--sky'],['moe-13','folder','','--amber']]},
+  Trash:{ic:'trash',items:[]},
+};
+function buildFiles(body){let cur='Home';
+  body.innerHTML=`<div class="files"><div class="fside" id="fside"></div><div class="fmain" id="fmain"></div></div>`;
+  const side=body.querySelector('#fside'),main=body.querySelector('#fmain');
+  function paint(){
+    side.innerHTML=`<div class="ti">Places</div>`+Object.keys(FS).map(k=>`<div class="fs ${k===cur?'act':''}" data-k="${k}">${I[FS[k].ic]}${k}</div>`).join('');
+    side.querySelectorAll('.fs').forEach(f=>f.onclick=()=>{cur=f.dataset.k;paint();});
+    const it=FS[cur].items;
+    main.innerHTML=it.length?it.map(([n,ic,sz,ac])=>{const a=ac||'--green';return `<div class="fitem"><span class="fi" style="background:color-mix(in srgb, var(${a}) 16%, transparent);color:var(${a})">${I[ic]}</span><span class="fn">${n}</span><span class="fz">${sz}</span></div>`;}).join(''):`<div style="grid-column:1/-1;color:var(--txt-faint);text-align:center;padding:48px;font-weight:600">This folder is empty</div>`;}
+  paint();
+}
+
+function buildEditor(body){
+  body.innerHTML=`<textarea class="editor" spellcheck="false">// sparseskip.rs — physically skip 0-weights at inference time
+// Patent Pending A50296/2026  ·  RFI-IRFOS
+
+pub fn ternary_matmul(w: &TritTensor, x: &[f32]) -> Vec<f32> {
+    let mut out = vec![0.0; w.cols];
+    for (i, &trit) in w.weights.iter().enumerate() {
+        match trit {
+            -1 => out[w.idx[i]] -= x[i],   //  refrain
+             0 => continue,                //  hold  -> SKIPPED, never executed
+             1 => out[w.idx[i]] += x[i],   //  affirm
+             _ => unreachable!(),
+        }
+    }
+    out  // 3.97x MLP speedup @ 75% skip, divergence < 1e-4
+}
+</textarea>`;
+}
+
+function buildCalc(body){
+  body.innerHTML=`<div class="calc"><div class="calc-sub" id="csub"></div><div class="calc-disp" id="cdisp">0</div><div class="calc-grid" id="cgrid"></div></div>`;
+  const disp=body.querySelector('#cdisp'),sub=body.querySelector('#csub');
+  let acc='',cur='0',op=null,fresh=true;
+  const keys=[['C','fn'],['&#177;','fn'],['%','fn'],['&#247;','op'],['7'],['8'],['9'],['&#215;','op'],['4'],['5'],['6'],['&#8722;','op'],['1'],['2'],['3'],['+','op'],['0'],['.'],['&#9003;','fn'],['=','eq']];
+  body.querySelector('#cgrid').innerHTML=keys.map(([k,c])=>`<button class="${c||''}" data-k="${k}">${k}</button>`).join('');
+  const map={'&#177;':'pm','&#247;':'/','&#215;':'*','&#8722;':'-','&#9003;':'bs'};
+  function show(){disp.textContent=cur.length>10?(+cur).toPrecision(8):cur;sub.textContent=op?`${acc} ${op}`:'';}
+  function press(raw){let k=map[raw]||raw;
+    if('0123456789'.includes(k)){cur=fresh?k:(cur==='0'?k:cur+k);fresh=false;}
+    else if(k==='.'){if(!cur.includes('.'))cur+='.';fresh=false;}
+    else if(k==='C'){acc='';cur='0';op=null;fresh=true;}
+    else if(k==='bs'){cur=cur.length>1?cur.slice(0,-1):'0';}
+    else if(k==='pm'){cur=String(-parseFloat(cur));}
+    else if(k==='%'){cur=String(parseFloat(cur)/100);}
+    else if(['+','-','*','/'].includes(k)){if(op&&!fresh)calc();acc=cur;op=k;fresh=true;}
+    else if(k==='='){calc();op=null;}
+    show();}
+  function calc(){if(!op)return;const a=+acc,b=+cur;let r=a;if(op==='+')r=a+b;if(op==='-')r=a-b;if(op==='*')r=a*b;if(op==='/')r=b?a/b:0;cur=String(Math.round(r*1e8)/1e8);acc='';fresh=true;}
+  body.querySelectorAll('#cgrid button').forEach(b=>b.onclick=()=>press(b.dataset.k));
+  show();
+}
+
+function buildHelp(body){
+  body.innerHTML=`<div class="doc">
+    <h2>Welcome to Rusty Penguin</h2>
+    <div class="sub">A friendly desktop on a bare-metal Rust kernel — with ternary AI built in.</div>
+    <p>Everything you see runs on the <b>Ternary Intelligence Stack</b>. There's no binary layer underneath: every weight is <code>-1</code>, <code>0</code>, or <code>+1</code>. The zeros are physically skipped, so the machine does less work to think.</p>
+    <h4>Getting around</h4>
+    <ul>
+      <li>Open apps from the <b>Menu</b> (bottom-left) or the favourites next to it.</li>
+      <li>Drag a window by its title bar; resize from the bottom-right corner.</li>
+      <li>Window buttons are top-right: <b style="color:var(--amber)">&#8211; minimize</b>, <b style="color:var(--green)">&#9633; maximize</b>, <b style="color:var(--red)">&#10005; close</b>.</li>
+    </ul>
+    <h4>About the mark</h4>
+    <p>That eight-wedge star is <b class="gold">dingir</b> (𒀭) — the Sumerian sign for <i>sky / heaven / god</i>. Eight uniform wedges meeting at one point. Fitting for a system that lives up at Skybase.</p>
+    <h4>The TIS Console</h4>
+    <p>Open it to watch <code>albert.</code> train live — epoch, ATL, the loss curve, all 12 cognitive experts, and the layer heatmap.</p>
+    <h4>Make it yours</h4>
+    <p>Head to <b>Settings</b> for accent colours and a few other touches.</p>
+    <p style="color:var(--txt-faint);margin-top:24px;font-size:12px">RFI-IRFOS · Graz, Austria · OSF DOI 10.17605/OSF.IO/TZ7DC</p>
+  </div>`;
+}
+
+function buildSettings(body){
+  body.innerHTML=`<div class="sett">
+    <h3>Appearance</h3>
+    <div class="set-card">
+      <div class="set-row"><span>Accent colour</span><div class="swatches" id="sw"></div></div>
+      <div class="set-row"><span>Window glass / blur</span><div class="toggle on" id="tgBlur"><i></i></div></div>
+      <div class="set-row"><span>TIS ternary bus animation</span><div class="toggle on" id="tgTern"><i></i></div></div>
+      <div class="set-row"><span>Reduce motion</span><div class="toggle" id="tgMotion"><i></i></div></div>
+    </div>
+    <h3>Lock screen</h3>
+    <div class="set-card">
+      <div class="set-row"><span>Lock now</span><button onclick="lockNow()" style="padding:6px 14px;border-radius:99px;background:var(--green-soft);color:var(--green);font-weight:700;font-size:12px">Lock</button></div>
+    </div>
+    <h3>About this system</h3>
+    <div class="set-card">
+      <div class="set-row"><span>OS build</span><span class="sv"><b>Rusty Penguin 2.0.0-bm</b></span></div>
+      <div class="set-row"><span>Kernel</span><span class="sv">trit-6.2.0-rp</span></div>
+      <div class="set-row"><span>Processor</span><span class="sv">REBEL-6 ternary</span></div>
+      <div class="set-row"><span>AI substrate</span><span class="sv">albert. v3.0 (TIS)</span></div>
+      <div class="set-row"><span>Telemetry</span><span class="sv"><b>none — fully local</b></span></div>
+    </div>
+    <p class="set-note">This is a v2.0 vision mockup. The shipping OS swaps this browser layer for a native Rust compositor — colours, chrome and feel are real design intent; the rendering underneath is not.</p>
+  </div>`;
+  const accents=[['#6fe18b'],['#ef8b5c'],['#8cc6e5'],['#f5c451'],['#bd9cef']];
+  const sw=body.querySelector('#sw');
+  sw.innerHTML=accents.map(([h],i)=>`<div class="sw ${i===0?'on':''}" style="background:${h}" data-h="${h}"></div>`).join('');
+  sw.querySelectorAll('.sw').forEach(s=>s.onclick=()=>{
+    sw.querySelectorAll('.sw').forEach(x=>x.classList.remove('on'));s.classList.add('on');
+    const h=s.dataset.h;
+    document.documentElement.style.setProperty('--green',h);
+    document.documentElement.style.setProperty('--green-soft',h+'29');
+    document.documentElement.style.setProperty('--pos',h);
+  });
+  const tg=(id,fn)=>{const t=body.querySelector(id);t.onclick=()=>{t.classList.toggle('on');fn(t.classList.contains('on'))}};
+  tg('#tgBlur',on=>document.querySelectorAll('.win,#panel,#menu,.lock-card').forEach(w=>w.style.backdropFilter=on?'blur(26px) saturate(1.3)':'none'));
+  tg('#tgTern',on=>{ternOn=on});
+  tg('#tgMotion',on=>{window._reduce=on;});
+}
+
+/* ---- TIS console ---- */
+const EXPERTS=[['ABS',62],['PLN',69],['CMP',100],['INT',74],['LNG',55],['LOG',38],['GEN',31],['MEM',28],['INF',22],['SEM',12],['CTX',4],['SYN',2]];
+let tisRefs=null;
+function buildTIS(body){
+  body.innerHTML=`<div class="tis">
+    <div class="tis-head">
+      <span class="tis-badge">albert. v3.0</span>
+      <span class="chip live">epoch <b id="tisEp">3437</b></span>
+      <span class="chip">20 layers</span>
+      <span class="chip">ATL <b id="tisAtl">8.8540</b></span>
+      <span class="chip">134M params · 33M active</span>
+      <span class="chip live">cross-lingual broadcast</span>
+      <span class="chip" style="margin-left:auto">€265 compute</span>
+    </div>
+    <div class="tis-grid">
+      <div>
+        <div class="card">
+          <h4>Loss curve <span id="tisLoss">0.0341</span></h4>
+          <svg class="spark" id="tisSpark" viewBox="0 0 300 70" preserveAspectRatio="none"></svg>
+        </div>
+        <div class="card" style="margin-top:14px">
+          <h4>Plateau gate (binding) <span id="tisGate">0.018 / 0.020</span></h4>
+          <div class="bar"><i id="gatebar" style="width:90%"></i></div>
+          <div class="metric-row"><span>WALD entropy</span><b>2.41</b></div>
+          <div class="metric-row"><span>MYCELIUM stable</span><b>145</b></div>
+          <div class="metric-row"><span>dead experts</span><b style="color:var(--green)">0</b></div>
+          <div class="metric-row"><span>blooming experts</span><b>4</b></div>
+          <div class="metric-row"><span>tok/s (CPU, sparseskip)</span><b style="color:var(--green)">83</b></div>
+          <div class="metric-row"><span>next surgery</span><b style="color:var(--rust)">21L</b></div>
+        </div>
+      </div>
+      <div>
+        <div class="card">
+          <h4>Cognitive experts · TELE energy <span>12</span></h4>
+          <div id="tisExp"></div>
+        </div>
+        <div class="card" style="margin-top:14px">
+          <h4>MYCELIUM layer heat <span>L10 hot · L7 cold</span></h4>
+          <div class="layerheat" id="tisHeat"></div>
+        </div>
+      </div>
+    </div>
+  </div>`;
+  body.querySelector('#tisExp').innerHTML=EXPERTS.map(([n,p])=>`<div class="expert-row"><span class="nm">${n}</span><div class="ebar"><i style="width:${p}%"></i></div><span class="pc">${p}%</span></div>`).join('');
+  const heats=[2,18,30,45,58,40,5,72,55,98,80,67,50,44,33,60,71,84,69,62];
+  body.querySelector('#tisHeat').innerHTML=heats.map((h,i)=>{const c=h>70?'var(--green)':h>40?'var(--amber)':h>15?'var(--rust)':'rgba(255,255,255,.07)';return `<div class="lcell" style="background:${c};opacity:${h>15?.92:.5}"><b>${i}</b></div>`;}).join('');
+  tisRefs={ep:body.querySelector('#tisEp'),atl:body.querySelector('#tisAtl'),loss:body.querySelector('#tisLoss'),spark:body.querySelector('#tisSpark'),gate:body.querySelector('#gatebar'),gateT:body.querySelector('#tisGate')};
+  drawSpark();
+}
+let lossSeries=(()=>{let a=[],v=0.42;for(let i=0;i<60;i++){v=v*0.965+(Math.random()-0.5)*0.004;a.push(Math.max(0.03,v));}return a;})();
+function drawSpark(){if(!tisRefs)return;
+  const mx=Math.max(...lossSeries),mn=Math.min(...lossSeries),W=300,H=70;
+  const pts=lossSeries.map((v,i)=>`${(i/(lossSeries.length-1))*W},${H-((v-mn)/(mx-mn||1))*(H-10)-5}`).join(' ');
+  tisRefs.spark.innerHTML=`<defs><linearGradient id="lg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--green)" stop-opacity=".38"/><stop offset="1" stop-color="var(--green)" stop-opacity="0"/></linearGradient></defs><polyline points="0,${H} ${pts} ${W},${H}" fill="url(#lg)" stroke="none"/><polyline points="${pts}" fill="none" stroke="var(--green)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+}
+
+function buildSnake(body){
+  body.innerHTML=`<div style="height:100%;display:flex;flex-direction:column;background:rgba(22,28,25,.5);padding:14px;gap:10px">
+    <div style="display:flex;justify-content:space-between;font-size:13px;color:var(--txt-dim);font-weight:700">Score <span id="ssc" style="color:var(--green)">0</span><span style="font-weight:600">arrows / WASD</span></div>
+    <canvas id="snk" width="340" height="300" style="flex:1;background:rgba(15,20,18,.6);border-radius:11px;image-rendering:pixelated;width:100%"></canvas>
+    <div style="font-size:12px;color:var(--txt-faint);text-align:center;font-weight:600" id="smsg">click the board, then move</div>
+  </div>`;
+  const cv=body.querySelector('#snk'),ctx=cv.getContext('2d'),G=20,COLS=17,ROWS=15;
+  let snake=[{x:8,y:7}],dir={x:1,y:0},food={x:12,y:7},score=0,loop=null,dead=false;
+  cv.tabIndex=0;
+  const css=v=>getComputedStyle(document.documentElement).getPropertyValue(v)||'#6fe18b';
+  function place(){food={x:(Math.random()*COLS)|0,y:(Math.random()*ROWS)|0}}
+  function rr(x,y,w,h,r){ctx.beginPath();ctx.roundRect(x,y,w,h,r);ctx.fill();}
+  function step(){const h={x:(snake[0].x+dir.x+COLS)%COLS,y:(snake[0].y+dir.y+ROWS)%ROWS};
+    if(snake.some(s=>s.x===h.x&&s.y===h.y)){dead=true;clearInterval(loop);loop=null;body.querySelector('#smsg').textContent='game over — click to restart';return;}
+    snake.unshift(h);if(h.x===food.x&&h.y===food.y){score++;body.querySelector('#ssc').textContent=score;place();}else snake.pop();draw();}
+  function draw(){ctx.clearRect(0,0,cv.width,cv.height);
+    ctx.fillStyle=css('--rust');rr(food.x*G+3,food.y*G+3,G-6,G-6,5);
+    snake.forEach((s,i)=>{ctx.fillStyle=i===0?css('--green'):'#3fa063';rr(s.x*G+1.5,s.y*G+1.5,G-3,G-3,5);});}
+  function start(){if(loop)return;if(dead){snake=[{x:8,y:7}];dir={x:1,y:0};score=0;dead=false;body.querySelector('#ssc').textContent=0;body.querySelector('#smsg').textContent='go!';}loop=setInterval(step,110);}
+  cv.addEventListener('keydown',e=>{const k=e.key.toLowerCase();
+    if((k==='arrowup'||k==='w')&&dir.y===0)dir={x:0,y:-1};else if((k==='arrowdown'||k==='s')&&dir.y===0)dir={x:0,y:1};
+    else if((k==='arrowleft'||k==='a')&&dir.x===0)dir={x:-1,y:0};else if((k==='arrowright'||k==='d')&&dir.x===0)dir={x:1,y:0};e.preventDefault();});
+  cv.addEventListener('click',()=>{cv.focus();start();});
+  draw();
+}
+
+function buildStub(body,el){const nm=el.querySelector('.win-title').textContent.trim();const ac=el.style.getPropertyValue('--ac')||'var(--green)';
+  body.innerHTML=`<div style="height:100%;display:grid;place-items:center;text-align:center;background:rgba(22,28,25,.5)">
+    <div><div style="font-family:var(--disp);font-weight:700;font-size:18px;color:${ac};margin-bottom:12px">${nm}</div>
+    <div style="color:var(--txt-dim);font-size:13px;line-height:1.7;font-weight:600">module compiled &amp; ready to wire up<br><span style="color:var(--txt-faint);font-weight:600">placeholder in this vision build</span></div></div>
+  </div>`;
+}
+
+/* ============================================================
+   FAVOURITES + MENU
+   ============================================================ */
+const fav=document.getElementById('fav');
+FAVS.forEach(id=>{const a=APPS[id];const b=document.createElement('button');b.className='favbtn';b.dataset.app=id;b.style.setProperty('--ac',`var(${a.ac})`);b.title=a.name;
+  b.innerHTML=`<span class="fi" style="background:color-mix(in srgb, var(${a.ac}) 16%, transparent);color:var(${a.ac})">${I[a.ic]}</span>`;
+  b.onclick=()=>launch(id);fav.appendChild(b);});
+
+const menulist=document.getElementById('menulist');
+function paintMenu(filter=''){const f=filter.toLowerCase();
+  menulist.innerHTML=ORDER.filter(id=>APPS[id].name.toLowerCase().includes(f)||APPS[id].desc.toLowerCase().includes(f)).map(id=>{const a=APPS[id];
+    return `<div class="menu-it" data-app="${id}"><span class="mi" style="background:color-mix(in srgb, var(${a.ac}) 16%, transparent);color:var(${a.ac})">${I[a.ic]}</span><div><div class="mt">${a.name}</div><div class="md">${a.desc}</div></div></div>`;}).join('');
+  menulist.querySelectorAll('.menu-it').forEach(m=>m.onclick=()=>launch(m.dataset.app));}
+paintMenu();
+document.getElementById('menusearch').addEventListener('input',e=>paintMenu(e.target.value));
+function toggleMenu(){const m=document.getElementById('menu'),b=document.getElementById('menubtn');const o=m.classList.toggle('open');b.classList.toggle('on',o);if(o){paintMenu();document.getElementById('menusearch').value='';setTimeout(()=>document.getElementById('menusearch').focus(),50);}}
+function closeMenu(){document.getElementById('menu').classList.remove('open');document.getElementById('menubtn').classList.remove('on');}
+document.addEventListener('mousedown',e=>{if(!e.target.closest('#menu')&&!e.target.closest('#menubtn')&&!e.target.closest('#lock'))closeMenu();});
+
+/* inject dingir glyphs */
+document.getElementById('bstar').innerHTML=dingir(92);
+document.getElementById('herostar').innerHTML=dingir(56);
+document.getElementById('menuav').innerHTML=dingir(22);
+document.getElementById('menubtnstar').innerHTML=dingir(20);
+document.getElementById('lockav').innerHTML=dingir(42);
+
+/* wallpaper: warm glows + faint dingir constellation */
+(function wallpaper(){const d=document.getElementById('desktop');
+  const glows=[['8%','12%','340px','#6fe18b','.16'],['80%','20%','300px','#8cc6e5','.12'],['55%','82%','360px','#ef8b5c','.11']];
+  glows.forEach(([l,t,s,c,o])=>{const g=document.createElement('div');g.className='wall-glow';g.style.cssText=`left:${l};top:${t};width:${s};height:${s};background:${c};opacity:${o}`;d.appendChild(g);});
+  const spots=[['10%','28%',38,.045],['86%','62%',56,.04],['68%','15%',26,.045],['28%','72%',32,.038],['48%','42%',20,.03]];
+  spots.forEach(([l,t,sz,o])=>{const s=document.createElement('div');s.className='wall-star';s.style.cssText=`left:${l};top:${t};opacity:${o}`;s.innerHTML=dingir(sz);d.appendChild(s);});
+})();
+
+/* lock screen wallpaper stars */
+(function lockstars(){const c=document.getElementById('lockstars');
+  const spots=[['12%','22%',32,.06],['82%','30%',46,.05],['18%','78%',26,.05],['78%','82%',36,.05],['50%','15%',20,.04]];
+  spots.forEach(([l,t,sz,o])=>{const s=document.createElement('div');s.style.cssText=`position:absolute;left:${l};top:${t};opacity:${o};color:var(--cream)`;s.innerHTML=dingir(sz);c.appendChild(s);});
+})();
+
+/* ============================================================
+   LIVE SIM
+   ============================================================ */
+let ternOn=true,ep=3437,atl=8.8540;
+const tcells=[...Array(5)].map((_,i)=>document.getElementById('t'+i));
+const MONTHS=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const DAYS=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+function tick(){const n=new Date();const hh=String(n.getHours()).padStart(2,'0'),mm=String(n.getMinutes()).padStart(2,'0');
+  document.getElementById('trayclock').innerHTML=`${hh}:${mm}<span>${MONTHS[n.getMonth()]} ${n.getDate()}</span>`;
+  const lt=document.getElementById('locktime'); if(lt) lt.textContent=`${hh}:${mm}`;
+  const ld=document.getElementById('lockdate'); if(ld) ld.textContent=`${DAYS[n.getDay()]}, ${MONTHS[n.getMonth()]} ${n.getDate()}`;}
+function ternPulse(){if(!ternOn)return;const st=['n','z','p'];tcells.forEach(c=>{if(Math.random()<0.5)c.className='tern-cell '+st[(Math.random()*3)|0];});}
+function trainTick(){ep++;const last=lossSeries[lossSeries.length-1];const nl=Math.max(0.028,last*0.998+(Math.random()-0.5)*0.003);
+  lossSeries.push(nl);if(lossSeries.length>60)lossSeries.shift();atl+=(Math.random()-0.45)*0.0008;
+  document.getElementById('trayep').textContent=ep;
+  if(tisRefs){tisRefs.ep.textContent=ep;tisRefs.atl.textContent=atl.toFixed(4);tisRefs.loss.textContent=nl.toFixed(4);
+    const d=Math.abs(lossSeries[0]-nl);tisRefs.gateT.textContent=`${d.toFixed(3)} / 0.020`;tisRefs.gate.style.width=Math.min(99,d/0.020*100)+'%';drawSpark();}}
+setInterval(tick,1000);tick();
+setInterval(ternPulse,650);
+setInterval(trainTick,2400);
+
+/* ============================================================
+   LOCK SCREEN LOGIC
+   ============================================================ */
+const lock=document.getElementById('lock'),lockpw=document.getElementById('lockpw'),lockgo=document.getElementById('lockgo'),lockhint=document.getElementById('lockhint');
+let firstUnlock=true;
+function showLock(){lock.classList.remove('gone');lock.classList.add('show');setTimeout(()=>lockpw.focus(),200);}
+function unlock(){
+  lock.classList.remove('show');lock.classList.add('gone');
+  lockpw.value='';lockhint.textContent='type anything · press Enter to unlock';
+  if(firstUnlock){firstUnlock=false;setTimeout(()=>launch('tis'),650);}
+}
+function lockNow(){closeMenu();showLock();}
+lockgo.addEventListener('click',unlock);
+lockpw.addEventListener('keydown',e=>{if(e.key==='Enter'){unlock();}});
+// click outside the card to also unlock (friendly demo behaviour)
+lock.addEventListener('click',e=>{if(e.target===lock){unlock();}});
+
+/* ============================================================
+   BOOT  →  LOCK  →  DESKTOP
+   ============================================================ */
+const steps=['waking up…','mounting trit-fs (zero binary)…','starting the TIS bus…','loading albert. v3.0 · ep3437…','MYCELIUM: 0 dead, 4 blooming…','starting compositor…','ready.'];
+let bi=0;const bf=document.getElementById('bootfill'),bl=document.getElementById('bootlog');
+const bt=setInterval(()=>{bi++;bf.style.width=Math.min(100,bi/steps.length*100)+'%';bl.textContent=steps[Math.min(bi,steps.length-1)];
+  if(bi>=steps.length){clearInterval(bt);
+    setTimeout(()=>{document.getElementById('boot').classList.add('gone');showLock();},650);
+  }},440);
+</script>
+</body>
+</html>
