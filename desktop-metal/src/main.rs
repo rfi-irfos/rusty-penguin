@@ -361,11 +361,15 @@ fn draw_scene_static(fb: &mut Framebuffer) {
         fb.draw_str(w.saturating_sub(tag.len() as u32 * 8) / 2, tag_y as u32, tag, DIM, BG);
     }
 
-    // ── Bottom panel — a single floating warm-stone dock (the mockup form) ──
+    // ── Bottom panel — frosted-glass dock via the ternary CSS engine.
+    // Using css::paint_panel gives the dock the same Aero glass + shadow language
+    // as the hero card and windows — a single Style governs the whole desktop.
     let px = PANEL_MARGIN; let pw = w as i32 - 2 * PANEL_MARGIN;
-    fb.fill_rounded_rect(px - 1, ptop + 3, pw + 2, PANEL_H, PANEL_R + 2, 0x0C110E); // shadow
-    fb.fill_rounded_rect(px, ptop, pw, PANEL_H, PANEL_R, PANEL_SOLID);              // body
-    fb.fill_rect_s(px + PANEL_R, ptop + 1, pw - 2 * PANEL_R, 1, PANEL_EDGE);        // top sheen
+    let dock_style = css::Style {
+        bg: PANEL_SOLID, fg: WHITE, border: PANEL_EDGE, border_w: 1,
+        accent: GREEN, radius: PANEL_R as u32, pad_x: 8, pad_y: 7, shadow: true,
+    };
+    css::paint_panel(fb, px, ptop, pw, PANEL_H, &dock_style, crate::trit::Trit::Zero);
 
     // Menu button (dingir + "Menu")
     let (mbx, mby, mbw, _mbh) = menu_btn_rect(h);

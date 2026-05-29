@@ -134,6 +134,63 @@ pub fn panel_css(fb: &mut Framebuffer, x: i32, y: i32, w: i32, h: i32,
     paint_panel(fb, x, y, w, h, &style, state)
 }
 
+// ── Ternary Node — component-level invalidation ───────────────────────────
+// Each UI component is a Node.  The `dirty` Trit controls the render path:
+//   +1 (Pos)  — needs repaint (initial or state-changed)
+//    0 (Zero) — clean; paint() is a no-op (the sparse skip)
+//   -1 (Neg)  — gone/hidden; paint() is a no-op
+//
+// This is the CSS-layer embodiment of the ternary sparse-rendering thesis:
+// only non-zero nodes perform any work in the layout/paint path.
+pub struct Node {
+    pub x: i32, pub y: i32, pub w: i32, pub h: i32,
+    pub style:  Style,
+    pub visual: Trit,  // appearance: +1 active / 0 normal / -1 disabled
+    pub dirty:  Trit,  // invalidation: +1 repaint / 0 clean / -1 gone
+}
+
+impl Node {
+    pub const fn new(x: i32, y: i32, w: i32, h: i32, style: Style) -> Self {
+        Node { x, y, w, h, style, visual: Trit::Zero, dirty: Trit::Pos }
+    }
+
+    /// Paint this node if dirty (+1), then mark it clean.
+    /// Returns true when a paint actually occurred (caller can union damage rect).
+    pub fn paint(&mut self, fb: &mut Framebuffer) -> bool {
+        match self.dirty {
+            Trit::Pos => {
+                paint_panel(fb, self.x, self.y, self.w, self.h, &self.style, self.visual);
+                self.dirty = Trit::Zero;
+                true
+            }
+            Trit::Zero | Trit::Neg => false,
+        }
+    }
+
+    /// Force a repaint next frame (idempotent; does not resurrect a Neg node).
+    pub fn mark_dirty(&mut self) {
+        if self.dirty != Trit::Neg { self.dirty = Trit::Pos; }
+    }
+
+    /// Change visual state; auto-dirty if changed.
+    pub fn set_visual(&mut self, v: Trit) {
+        if self.visual != v { self.visual = v; self.mark_dirty(); }
+    }
+
+    /// Move to a new position; auto-dirty if changed.
+    pub fn move_to(&mut self, x: i32, y: i32) {
+        if self.x != x || self.y != y { self.x = x; self.y = y; self.mark_dirty(); }
+    }
+
+    /// Resize; auto-dirty if changed.
+    pub fn resize(&mut self, w: i32, h: i32) {
+        if self.w != w || self.h != h { self.w = w; self.h = h; self.mark_dirty(); }
+    }
+
+    /// Remove from the scene (paint is a no-op until mark_dirty re-activates).
+    pub fn hide(&mut self) { self.dirty = Trit::Neg; }
+}
+
 /// A parsed stylesheet: selector → Style rules. Supports the CSS subset
 /// `.selector { decl; decl; } .other { … }`. Selectors are simple names
 /// (class-like); cascading/specificity comes in a later brick.
