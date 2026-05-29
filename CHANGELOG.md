@@ -4,6 +4,38 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+### Added — Google Chrome renders real web content (2026-05-29)
+
+- **A real, full Google Chrome (142) runs on Rusty Penguin's Linux track** —
+  the "firefox and chrome gotta work" milestone. Full browser chrome (tabs,
+  omnibox, menu) + a CSS/flexbox HTML page render correctly via the proven
+  Xorg + modesetting + Mesa-swrast stack, painted by Chrome's software
+  compositor (`--disable-gpu`, CPU raster → X). Proof:
+  `docs/chrome-on-rusty-penguin.png`.
+- `iso/build-web-rootfs.sh` gains an opt-in Chrome bundle (`RP_WEB_CHROME=1`,
+  off by default so the lean rp.web stays xterm-only): copies the 374 MB
+  `/opt/google/chrome` tree + its ldd closure + the NSS crypto stack
+  (dlopen'd, ldd-invisible), and launches it on the X server.
+- `iso/build-web-test.sh` (new): fast iteration path — builds *only* init + the
+  web initrd and boots it directly via QEMU `-kernel`/`-initrd` (no bare-metal
+  kernel, no grub-mkrescue, no ISO), with QMP screenshot capture.
+- init mounts **`/dev/shm`** (tmpfs) — Chrome and many GUI apps require POSIX
+  shared memory.
+- Three Chrome-specific fixes: (1) **do not bundle `dri_gbm.so`** without its
+  `libgallium`/`libLLVM` backend — a present-but-broken GBM loader makes Xorg
+  modesetting fail hard ("couldn't get display device") instead of falling back
+  to the shadow framebuffer; (2) **strip Chrome's `libqt{5,6}_shim.so`** — their
+  closure drags in Qt6 core, but the Qt `xcb` *platform plugin* isn't shipped,
+  so Qt `qFatal()`-aborted the browser; without the shims Chrome uses its
+  built-in Views toolkit; (3) **gate client launch on X readiness** (poll the
+  Xorg log for the DRISWRAST marker) — on a loaded host X init can take ~45 s,
+  and clients launched earlier can't connect.
+- HONEST SCOPE: this is Chrome in the **initramfs** (522 MB rootfs resident in
+  RAM, 241 MB initrd) — a verified proof, not the production layout. Production
+  belongs on the **install-to-disk RPDATA root** (too big for initramfs). Also:
+  `--no-sandbox` (no user namespaces in the minimal initramfs) and software
+  rendering only. Firefox is the same X stack, next.
+
 ### Added — X11 display server: real GUI apps render (2026-05-29)
 
 - **Rusty Penguin runs a real X server and renders third-party Linux GUI apps.**

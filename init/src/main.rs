@@ -145,6 +145,8 @@ fn mount_pseudo_filesystems() {
         // devpts provides pseudo-terminals (/dev/pts/N) — without it, terminal
         // emulators like xterm fail with "Error 32, errno 2" (no PTY).
         ("devpts",   "/dev/pts", "devpts"),
+        // /dev/shm — POSIX shared memory; Chrome and many GUI apps require it.
+        ("tmpfs",    "/dev/shm", "tmpfs"),
     ];
     for (src, target, fstype) in mounts {
         let _ = fs::create_dir_all(target);
