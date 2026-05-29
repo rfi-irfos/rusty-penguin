@@ -1142,10 +1142,10 @@ pub extern "C" fn _start() -> ! {
     let mut ctx_menu: Option<(i32, i32)> = None;
     let mut hover_icon: Option<usize> = None;
 
-    if let Some(tw) = open_term(w, h, 0, &LAUNCHERS[0]) {
-        wins.push(tw);
-        scene_dirty = true;
-    }
+    // Boot to a clean desktop — the Apple-style welcome card + dock + gradient
+    // are the first impression, not a terminal covering them. Open apps from
+    // the dock or the Menu.
+    scene_dirty = true;
 
     let mut last_loop_tick: u64 = sys_ticks();
 
