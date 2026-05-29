@@ -28,6 +28,10 @@ echo "[web-rootfs] bundling binaries + closures..."
 for b in /usr/lib/xorg/Xorg xterm xkbcomp fc-cache dbus-daemon dbus-launch sh; do
     bundle_bin "$b"
 done
+# Xorg runs xkbcomp via popen()/system() → it needs /bin/sh. The initramfs ships
+# busybox but no /bin/sh, so the keymap compile silently no-op'd. Point sh at it.
+mkdir -p "$STAGE/bin"
+ln -sf /bin/busybox "$STAGE/bin/sh"
 
 echo "[web-rootfs] dlopen extras (ldd-invisible)..."
 # Xorg server modules (drivers, input, extensions, glx) — whole tree.
@@ -46,13 +50,23 @@ mkdir -p "$STAGE/usr/share/fonts/truetype/dejavu"
 cp -aL /usr/share/fonts/truetype/dejavu/DejaVuSans*.ttf "$STAGE/usr/share/fonts/truetype/dejavu/" 2>/dev/null
 cp -aL /etc/fonts "$STAGE/etc/" 2>/dev/null
 
-# DIAGNOSTIC: wrap xkbcomp to capture the source Xorg pipes + xkbcomp's stderr.
+# xkbcomp shim: Xorg's invocation (source on stdin + -em1/-emp/-eml error-format
+# flags) fails to produce the .xkm when Xorg forks it in this minimal
+# environment — yet the equivalent FILE-input form compiles fine. So capture the
+# keymap source Xorg pipes in and recompile it the working way, writing to the
+# output path Xorg asked for (its last argument).
 if [ -f "$STAGE/usr/bin/xkbcomp" ]; then
     mv "$STAGE/usr/bin/xkbcomp" "$STAGE/usr/bin/xkbcomp.real"
     cat > "$STAGE/usr/bin/xkbcomp" <<'WRAP'
 #!/bin/busybox sh
 /bin/busybox cat > /tmp/xkb-src.txt
-/usr/bin/xkbcomp.real "$@" < /tmp/xkb-src.txt 2>/tmp/xkb-err.txt
+out=""
+for a in "$@"; do out="$a"; done   # Xorg passes the .xkm output path last
+echo "shim called: out=[$out] args=[$*]" >> /tmp/shim.log
+/usr/bin/xkbcomp.real -w 1 -R/usr/share/X11/xkb -xkm /tmp/xkb-src.txt "$out" >> /tmp/shim.log 2>&1
+rc=$?
+echo "shim rc=$rc wrote=[$(/bin/busybox ls -l "$out" 2>&1)]" >> /tmp/shim.log
+exit $rc
 WRAP
     chmod +x "$STAGE/usr/bin/xkbcomp"
 fi
@@ -67,7 +81,8 @@ EndSection
 Section "Device"
     Identifier "fb"
     Driver     "fbdev"
-    Option     "fbdev" "/dev/fb0"
+    Option     "fbdev"    "/dev/fb0"
+    Option     "ShadowFB"  "true"
 EndSection
 Section "Screen"
     Identifier "scr"
@@ -96,11 +111,14 @@ echo 'xkb_keymap { xkb_keycodes { include "evdev+aliases(qwerty)" }; xkb_types {
   && echo "[start-x] xkbcomp self-test: OK" || echo "[start-x] xkbcomp self-test: FAILED"
 /usr/lib/xorg/Xorg :0 -config /etc/X11/xorg.conf -logfile /tmp/Xorg.0.log -noreset &
 sleep 3
-DISPLAY=:0 /usr/bin/xterm -fa DejaVuSans -fs 14 -e /bin/busybox sh &
+# White bg / black fg, positioned, with a visible banner — a black-on-black
+# xterm on a black X root would otherwise be invisible.
+DISPLAY=:0 /usr/bin/xterm -geometry 90x30+80+80 -bg white -fg black -fa DejaVuSans -fs 16 \
+    -e /bin/busybox sh -c 'echo "  RUSTY PENGUIN -- X11 + real GUI apps"; echo; /bin/busybox uname -a; echo; exec /bin/busybox sh' &
 sleep 1
 # Surface the XKB-related Xorg log lines so failures are visible headlessly.
-echo "=== xkbcomp source Xorg generated (head) ==="; /bin/busybox head -n 20 /tmp/xkb-src.txt 2>/dev/null
-echo "=== xkbcomp stderr ==="; /bin/busybox cat /tmp/xkb-err.txt 2>/dev/null | tail -20
+echo "=== /var/lib/xkb contents (did xkbcomp write server-0.xkm?) ==="; /bin/busybox ls -la /var/lib/xkb/ 2>/dev/null
+echo "=== shim.log (what Xorg's xkbcomp calls actually did) ==="; /bin/busybox cat /tmp/shim.log 2>/dev/null | /bin/busybox tail -12
 wait
 XSH
 chmod +x "$STAGE/start-x.sh"
