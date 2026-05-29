@@ -11,6 +11,7 @@ mod css;
 mod editor;
 mod fb;
 mod font;
+mod font_aa;
 mod input;
 mod term;
 mod trit;
@@ -437,17 +438,18 @@ fn draw_scene_static_v(fb: &mut Framebuffer, variant: u8) {
     // "Rusty Penguin" with Penguin in green, then two tagline lines.
     let cx = w as i32 / 2;
     let hero_cy = ptop.max(0) / 2;
-    fb.draw_star8(cx, hero_cy - 56, 26, ACCENT_CREAM);
-    // Title: 3× glyphs (24px). "Rusty " white + "Penguin" green, kerned together.
-    let title_w = (6 + 7) as i32 * 8 * 3; // "Rusty " + "Penguin" at scale 3
-    let tx = (cx - title_w / 2) as u32;
-    let ty = (hero_cy - 18) as u32;
-    fb.draw_str_scaled_t(tx, ty, "Rusty ", WHITE, 3);
-    fb.draw_str_scaled_t(tx + 6 * 8 * 3, ty, "Penguin", GREEN, 3);
-    let tag1 = "Bare-metal Rust OS . Sparse ternary inference . Zero binary";
-    let tag2 = "RFI-IRFOS . Ternary Intelligence Stack";
-    fb.draw_str_t((cx - tag1.len() as i32 * 4) as u32, (hero_cy + 30) as u32, tag1, DIM);
-    fb.draw_str_t((cx - tag2.len() as i32 * 4) as u32, (hero_cy + 48) as u32, tag2, TRIT_ZERO);
+    fb.draw_star8(cx, hero_cy - 64, 28, ACCENT_CREAM);
+    // Title in the smooth AA display font. "Rusty " white + "Penguin" green.
+    let w1 = Framebuffer::aa_w("Rusty ", true);
+    let w2 = Framebuffer::aa_w("Penguin", true);
+    let tx = cx - (w1 + w2) / 2;
+    let ty = hero_cy - 24;
+    fb.draw_aa(tx, ty, "Rusty ", WHITE, true);
+    fb.draw_aa(tx + w1, ty, "Penguin", GREEN, true);
+    let tag1 = "Bare-metal Rust OS  .  Sparse ternary inference  .  Zero binary";
+    let tag2 = "RFI-IRFOS  .  Ternary Intelligence Stack";
+    fb.draw_aa_centered(0, w as i32, hero_cy + 24, tag1, DIM, false);
+    fb.draw_aa_centered(0, w as i32, hero_cy + 24 + 20, tag2, TRIT_ZERO, false);
 
     // ── Bottom panel — frosted-glass floating dock.
     // Drawn as translucent glass over the wallpaper (the warm glows show
@@ -469,7 +471,7 @@ fn draw_scene_static_v(fb: &mut Framebuffer, variant: u8) {
     fb.fill_rounded_rect(mbx, mby, mbw, 40, 10, 0x323C37);
     fb.fill_rect_s(mbx + 8, mby, mbw - 16, 2, GREEN);  // green top accent
     fb.draw_star8(mbx + 15, mby + 20, 9, ACCENT_CREAM);
-    fb.draw_str(mbx as u32 + 30, mby as u32 + 16, "Menu", GREEN, 0x323C37);
+    fb.draw_aa(mbx + 30, mby + 11, "Menu", GREEN, false);
     // separator
     fb.fill_rect_s(mbx + mbw + 7, ptop + 14, 1, PANEL_H - 28, PANEL_EDGE);
 
@@ -752,11 +754,11 @@ fn draw_menu_item(fb: &mut Framebuffer, x: i32, y: i32, w: i32, item: &MenuItem,
     // Icon: first letter of label as a simple 8x8 glyph, centered
     let first = item.label.as_bytes().first().copied().unwrap_or(b' ');
     fb.draw_char((icon_x + 10) as u32, (icon_y + 10) as u32, first as char, item.color, ic_bg);
-    // Name (bold appearance: two slightly offset draws)
-    let tx = (x + 46) as u32; let ty = (y + 6) as u32;
-    fb.draw_str(tx, ty, item.label, WHITE, bg);
-    // Description
-    fb.draw_str(tx, ty + 10, item.desc, 0x909A92, bg);
+    // Name (smooth AA) + description (small, transparent)
+    let tx = x + 46;
+    fb.draw_aa(tx, y + 3, item.label, WHITE, false);
+    fb.draw_str_t(tx as u32, (y + 22) as u32, item.desc, 0x939D95);
+    let _ = bg;
 }
 
 fn draw_start_menu(fb: &mut Framebuffer) {
@@ -774,8 +776,8 @@ fn draw_start_menu(fb: &mut Framebuffer) {
     fb.fill_circle(av_x + 18, av_y + 18, 18, 0x3A4A3E);
     fb.fill_circle(av_x + 18, av_y + 18, 16, 0x2A3830);
     fb.draw_star8(av_x + 18, av_y + 18, 10, ACCENT_CREAM);
-    fb.draw_str((av_x + 40) as u32, (av_y + 5) as u32, "Rusty Penguin", WHITE, bg);
-    fb.draw_str((av_x + 40) as u32, (av_y + 17) as u32, "OS v2.0.0  Ternary", 0x6FE18B, bg);
+    fb.draw_aa(av_x + 40, av_y + 1, "Rusty Penguin", WHITE, false);
+    fb.draw_str_t((av_x + 40) as u32, (av_y + 22) as u32, "OS v2.0.0  .  Ternary", 0x6FE18B);
 
     // Hairline below header
     fb.fill_rect_s(x + 8, y + MENU_HDR_H - 1, w - 16, 1, 0x3C4641);
@@ -806,10 +808,10 @@ fn draw_start_menu(fb: &mut Framebuffer) {
     let btn_bg = 0x252E2Au32;
     // Settings button (left)
     fb.fill_rounded_rect(x + 10, foot_y + 6, (w / 2) - 14, 24, 8, btn_bg);
-    fb.draw_str((x + 20) as u32, (foot_y + 13) as u32, "Settings", 0x909A92, btn_bg);
+    fb.draw_aa(x + 22, foot_y + 7, "Settings", 0xB8C0B6, false);
     // Shut Down button (right)
     fb.fill_rounded_rect(x + w / 2 + 4, foot_y + 6, (w / 2) - 14, 24, 8, btn_bg);
-    fb.draw_str((x + w / 2 + 10) as u32, (foot_y + 13) as u32, "Shut Down", TRIT_NEG, btn_bg);
+    fb.draw_aa(x + w / 2 + 14, foot_y + 7, "Shut Down", TRIT_NEG, false);
 }
 
 fn start_menu_hit(fh: u32, mx: i32, my: i32) -> Option<usize> {

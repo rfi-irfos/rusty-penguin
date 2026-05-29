@@ -269,6 +269,70 @@ impl Framebuffer {
         }
     }
 
+    // ── Anti-aliased proportional text ─────────────────────────────────────────
+    // Smooth Ubuntu-Sans glyphs (grayscale coverage atlas in font_aa.rs),
+    // alpha-blended over whatever is on screen. This is what lifts the desktop
+    // out of the "Minecraft" 8x8-bitmap look toward the smooth mockup type.
+    // `big` selects the display size (hero/headings) vs the body size.
+    // Coordinates: (x, top) is the top-left of the text box; we add the ascent
+    // internally to land on the baseline.
+    pub fn aa_w(s: &str, big: bool) -> i32 {
+        let glyphs: &[crate::font_aa::Glyph] = if big { &crate::font_aa::GLYPHS_L } else { &crate::font_aa::GLYPHS_S };
+        let mut w = 0i32;
+        for ch in s.chars() {
+            let c = ch as u32;
+            if (0x20..=0x7E).contains(&c) { w += glyphs[(c - 0x20) as usize].adv as i32; }
+        }
+        w
+    }
+
+    pub fn aa_line(big: bool) -> i32 {
+        if big { crate::font_aa::LINE_L } else { crate::font_aa::LINE_S }
+    }
+
+    pub fn draw_aa(&mut self, x: i32, top: i32, s: &str, fg: u32, big: bool) -> i32 {
+        let (glyphs, cov, ascent): (&[crate::font_aa::Glyph], &[u8], i32) = if big {
+            (&crate::font_aa::GLYPHS_L, &crate::font_aa::COV_L, crate::font_aa::ASCENT_L)
+        } else {
+            (&crate::font_aa::GLYPHS_S, &crate::font_aa::COV_S, crate::font_aa::ASCENT_S)
+        };
+        let baseline = top + ascent;
+        let fr = (fg >> 16) & 0xFF; let fgc = (fg >> 8) & 0xFF; let fb_ = fg & 0xFF;
+        let mut pen = x;
+        for ch in s.chars() {
+            let c = ch as u32;
+            if !(0x20..=0x7E).contains(&c) { continue; }
+            let g = &glyphs[(c - 0x20) as usize];
+            let gx = pen + g.bx as i32;
+            let gy = baseline - g.top as i32;
+            let gw = g.w as i32; let gh = g.h as i32; let off = g.off as usize;
+            for row in 0..gh {
+                let py = gy + row;
+                if py < 0 || py as u32 >= self.height { continue; }
+                for col in 0..gw {
+                    let a = cov[off + (row * gw + col) as usize] as u32;
+                    if a == 0 { continue; }
+                    let px = gx + col;
+                    if px < 0 || px as u32 >= self.width { continue; }
+                    let d = self.get_pixel(px as u32, py as u32);
+                    let ia = 255 - a;
+                    let or = (fr * a + ((d >> 16) & 0xFF) * ia) / 255;
+                    let og = (fgc * a + ((d >> 8) & 0xFF) * ia) / 255;
+                    let ob = (fb_ * a + (d & 0xFF) * ia) / 255;
+                    self.set_pixel(px as u32, py as u32, (or << 16) | (og << 8) | ob);
+                }
+            }
+            pen += g.adv as i32;
+        }
+        pen - x
+    }
+
+    // Centered AA text within [x, x+w).
+    pub fn draw_aa_centered(&mut self, x: i32, w: i32, top: i32, s: &str, fg: u32, big: bool) {
+        let tw = Self::aa_w(s, big);
+        self.draw_aa(x + (w - tw).max(0) / 2, top, s, fg, big);
+    }
+
     // ── Soft radial glow ──────────────────────────────────────────────────────
     // Additive-feel light pool: blends `color` toward the wallpaper with a
     // quadratic falloff from the center. `max_alpha` (0..=255) is the opacity at

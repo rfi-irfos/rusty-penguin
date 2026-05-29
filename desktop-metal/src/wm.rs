@@ -219,8 +219,7 @@ pub fn draw_window(fb: &mut Framebuffer, win: &Window, focused: bool) {
     let n_bytes = max_chars.min(win.title.len());
     let title = &win.title[..n_bytes];
     let txt_col = if focused { TXT_ACT } else { TXT_DIM };
-    let txt_dy  = TITLEBAR_H / 2 - 4;
-    fb.draw_str_t(title_x as u32, (y + 1 + txt_dy) as u32, title, txt_col);
+    fb.draw_aa(title_x, y + 9, title, txt_col, false);
 
     // ── Traffic-light buttons — dim when unfocused (Aero z-hierarchy convention).
     let bcy = btn_cy(win);

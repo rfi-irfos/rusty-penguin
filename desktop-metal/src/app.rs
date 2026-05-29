@@ -1194,7 +1194,7 @@ fn br_page(i: usize) -> BrPage {
 }
 
 fn br_line_advance(kind: u8) -> i32 {
-    match kind { K_H1 => 30, K_H2 => 22, K_P => 16, K_LINK => 20, K_NOTE => 16, _ => 10 }
+    match kind { K_H1 => 38, K_H2 => 26, K_P => 19, K_LINK => 24, K_NOTE => 19, _ => 11 }
 }
 
 pub struct Browser {
@@ -1231,26 +1231,26 @@ impl App for Browser {
         fb.fill_rounded_rect(ax as i32, by as i32, aw as i32, 22, 8, 0x1A211C);
         // small lock dot + url text
         fb.fill_circle((ax + 12) as i32, (by + 11) as i32, 3, 0x6FE18B);
-        fb.draw_str(ax + 22, by + 7, page.url, 0xCFE6D6, 0x1A211C);
+        fb.draw_aa((ax + 22) as i32, (by + 3) as i32, page.url, 0xCFE6D6, false);
 
         // ── Page area (light "web" surface) ────────────────────────────────────
         let py0 = y + BR_TOOLBAR_H + 1;
         let ph  = h.saturating_sub(BR_TOOLBAR_H + 1);
         fb.fill_rect(x, py0, w, ph, 0xF2F0E8);
 
-        let mut cy = py0 as i32 + 16;
-        let lx = x + 24;
+        let mut cy = py0 as i32 + 14;
+        let lx = (x + 24) as i32;
         for ln in page.lines {
-            if (cy as u32) + 24 > py0 + ph { break; }
+            if (cy as u32) + 30 > py0 + ph { break; }
             match ln.kind {
-                K_H1   => fb.draw_str_scaled_t(lx, cy as u32, ln.text, 0x1B6B3A, 2),
-                K_H2   => fb.draw_str(lx, cy as u32, ln.text, 0xB4502A, 0xF2F0E8),
-                K_P    => fb.draw_str(lx, cy as u32, ln.text, 0x3A3A36, 0xF2F0E8),
-                K_NOTE => fb.draw_str(lx, cy as u32, ln.text, 0x8A8A82, 0xF2F0E8),
+                K_H1   => { fb.draw_aa(lx, cy, ln.text, 0x1B6B3A, true); }
+                K_H2   => { fb.draw_aa(lx, cy, ln.text, 0xB4502A, false); }
+                K_P    => { fb.draw_aa(lx, cy, ln.text, 0x3A3A36, false); }
+                K_NOTE => { fb.draw_aa(lx, cy, ln.text, 0x8A8A82, false); }
                 K_LINK => {
-                    let lw = ln.text.len() as u32 * 8;
-                    fb.draw_str(lx, cy as u32, ln.text, 0x2A6FB0, 0xF2F0E8);
-                    fb.fill_rect(lx, cy as u32 + 9, lw, 1, 0x2A6FB0); // underline
+                    let lw = Framebuffer::aa_w(ln.text, false);
+                    fb.draw_aa(lx, cy, ln.text, 0x2A6FB0, false);
+                    fb.fill_rect(lx as u32, cy as u32 + 17, lw as u32, 1, 0x2A6FB0);
                 }
                 _ => {}
             }
@@ -1268,11 +1268,11 @@ impl App for Browser {
         }
         // Link hit-testing in the page area — re-walk the same layout.
         let page = br_page(self.page);
-        let mut cy = BR_TOOLBAR_H as i32 + 1 + 16;
+        let mut cy = BR_TOOLBAR_H as i32 + 1 + 14;
         for ln in page.lines {
             let adv = br_line_advance(ln.kind);
             if ln.kind == K_LINK && ln.link >= 0 {
-                let lw = ln.text.len() as i32 * 8;
+                let lw = Framebuffer::aa_w(ln.text, false);
                 if mx >= 24 && mx < 24 + lw && my >= cy && my < cy + adv {
                     self.page = ln.link as usize;
                     self.dirty = true;
