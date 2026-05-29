@@ -51,6 +51,13 @@ core::arch::global_asm!(
     ".section .data",
     ".align 8",
     "_user_rsp: .quad 0",
+    // Linux ABI args 4–6 (r10/r8/r9) stashed for the current syscall.
+    ".global _lx_a4",
+    ".global _lx_a5",
+    ".global _lx_a6",
+    "_lx_a4: .quad 0",
+    "_lx_a5: .quad 0",
+    "_lx_a6: .quad 0",
 
     ".section .text",
     ".global syscall_entry",
@@ -59,6 +66,12 @@ core::arch::global_asm!(
     // 1. Save user RSP, switch to kernel stack
     "mov qword ptr [rip + _user_rsp], rsp",
     "lea rsp, [rip + _syscall_kstack_top]",
+
+    // 1b. Stash Linux args 4–6 (r10/r8/r9) before the Rust call clobbers them.
+    //     Harmless for native syscalls (which ignore these globals).
+    "mov qword ptr [rip + _lx_a4], r10",
+    "mov qword ptr [rip + _lx_a5], r8",
+    "mov qword ptr [rip + _lx_a6], r9",
 
     // 2. Save non-scratch regs (rcx/r11 hold user rip/rflags from SYSCALL)
     "push r11",          // user RFLAGS
@@ -97,6 +110,11 @@ core::arch::global_asm!(
 // ── Rust syscall dispatcher ──────────────────────────────────────────────────
 #[no_mangle]
 pub extern "C" fn syscall_handler(nr: u64, arg1: u64, arg2: u64, arg3: u64) -> u64 {
+    // Linux-ABI processes use a different syscall table (Linux numbers collide
+    // with the native ones, e.g. 9=mmap vs native sys_ps). Route them out.
+    if crate::linux::is_linux() {
+        return crate::linux::syscall(nr, arg1, arg2, arg3);
+    }
     match nr {
         0 => {
             // sys_read(fd, buf, len)

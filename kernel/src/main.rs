@@ -24,6 +24,7 @@ mod input;
 mod ps2mouse;
 mod ramfs;
 mod vfs;
+mod linux;
 
 use ternary_core::{Trit, Tryte};
 use mathematics::{mul_tryte, consensus, scale};
@@ -35,6 +36,12 @@ extern "C" { static kernel_end: u8; }
 
 // user-psh ELF — built by iso/build.sh, embedded at compile time
 static USER_PSH_ELF: &[u8] = include_bytes!("../user-psh.elf");
+
+// Linux-ABI brick 1: a freestanding, unmodified static Linux x86-64 ELF
+// (raw write/exit_group). Booting with `linuxtest` on the kernel cmdline runs
+// THIS through the Linux ABI layer instead of the desktop — proof the bare-metal
+// kernel can execute real Linux binaries. Built by kernel/linux-abi-test/.
+static LINUX_HELLO_ELF: &[u8] = include_bytes!("../linux-abi-test/linux-hello");
 
 /// Walk the Multiboot2 info structure looking for the first module tag (type=3).
 /// Returns (mod_start, mod_end) if found.
@@ -86,6 +93,36 @@ unsafe fn parse_mb2_framebuffer(mb2: u32) -> Option<(u64, u32, u32, u32, u8)> {
         off += (tsize + 7) & !7;
     }
     None
+}
+
+/// Walk the Multiboot2 info for the boot command line (tag type=1) and test
+/// whether it contains `needle`.
+unsafe fn mb2_cmdline_contains(mb2: u32, needle: &[u8]) -> bool {
+    if mb2 == 0 || needle.is_empty() { return false; }
+    let total = *(mb2 as *const u32);
+    let mut off: u32 = 8;
+    while off < total {
+        let tag_ptr = (mb2 + off) as *const u32;
+        let ttype = *tag_ptr;
+        let tsize = *tag_ptr.add(1);
+        if ttype == 0 { break; }
+        if ttype == 1 && tsize > 8 {
+            let s = (mb2 + off + 8) as *const u8;
+            let slen = (tsize - 8) as usize;
+            // naive substring search
+            if slen >= needle.len() {
+                for i in 0..=(slen - needle.len()) {
+                    let mut hit = true;
+                    for j in 0..needle.len() {
+                        if *s.add(i + j) != needle[j] { hit = false; break; }
+                    }
+                    if hit { return true; }
+                }
+            }
+        }
+        off += (tsize + 7) & !7;
+    }
+    false
 }
 
 #[no_mangle]
@@ -228,6 +265,17 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
     vga::write_str("]  ", vga::Color::White);
     vga::write_i32(pct as i32);
     vga::write_str("% dormancy\n\n", vga::Color::White);
+
+    // ── Linux-ABI brick 1 ─────────────────────────────────────────────────────
+    // Boot with `linuxtest` on the cmdline to run an unmodified static Linux
+    // x86-64 ELF through the Linux ABI layer instead of the desktop.
+    if unsafe { mb2_cmdline_contains(mb2, b"linuxtest") } {
+        vga::write_str("\n  [LINUX-ABI] brick 1: executing an unmodified Linux ELF\n", vga::Color::Amber);
+        serial::write_str("\n  [LINUX-ABI] brick 1: executing an unmodified Linux ELF\n");
+        vga::clear();
+        if fb::is_live() { fb::fill(0, 0, fb::width(), fb::height(), 0x000000); }
+        linux::enter(LINUX_HELLO_ELF);
+    }
 
     // ── Ring-3 launch ────────────────────────────────────────────────────────
     vga::write_str("  [ring-3 launch]\n", vga::Color::Cyan);

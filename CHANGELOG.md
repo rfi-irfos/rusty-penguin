@@ -4,6 +4,35 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+### Added — Linux ABI layer brick 1: the bare-metal Rust kernel runs a real Linux binary (2026-05-29)
+
+- **The from-scratch pure-Rust Rusty Penguin kernel executes an *unmodified*
+  static Linux x86-64 ELF.** This is the first brick of the Linux ABI
+  compatibility layer — the bridge that makes "the bare-metal OS is the total
+  Ubuntu replacement" technically reachable: real third-party software runs
+  *natively on our own kernel*, not a Linux kernel. Proof:
+  `docs/linux-abi-brick1-serial.txt` (the ELF prints via Linux `write(2)` and
+  ends via `exit_group(2)`).
+- New `kernel/src/linux.rs`: a **per-process ABI mode** (Native vs Linux —
+  needed because Linux syscall numbers collide with the native table, e.g.
+  Linux `9=mmap` vs native `sys_ps`), the **SysV AMD64 initial stack**
+  (argc/argv/envp/**auxv** with AT_PAGESZ/AT_RANDOM/AT_ENTRY), and a Linux
+  syscall dispatcher (`write`, `writev`, `brk`, `mmap`, `arch_prctl`/TLS,
+  `set_tid_address`, `rt_sig*`, `ioctl`, `clock_gettime`, `getrandom`,
+  `exit`/`exit_group`; the rest log ENOSYS on serial for the next brick).
+  Syscall outcome modelled as a ternary `Trit` (+1 ok / 0 EAGAIN / -1 errno).
+- `kernel/src/syscall.rs`: the asm trampoline now stashes Linux args 4–6
+  (`r10/r8/r9`) and `syscall_handler` routes Linux-mode processes to
+  `linux::syscall`. Native apps are unaffected.
+- `kernel/src/main.rs`: booting a bare-metal entry with `linuxtest` on the
+  multiboot2 cmdline diverts to the Linux loader instead of the desktop.
+- `kernel/linux-abi-test/linux-hello.c` (freestanding, `-nostdlib -static`) +
+  `iso/build-linux-abi-test.sh` (build kernel + 1-entry GRUB ISO + headless
+  serial capture). Roadmap + brick table: `docs/LINUX_ABI.md`.
+- HONEST SCOPE: brick 1 of ~9+. Running glibc/threads/dynamic-linked GUI apps
+  (let alone a browser) natively on our kernel is a multi-year road — see the
+  doc. This proves the foundation, not the destination.
+
 ### Added — Mozilla Firefox renders too: "firefox and chrome gotta work" MET (2026-05-29)
 
 - **A real Mozilla Firefox renders on Rusty Penguin's Linux track**, completing
