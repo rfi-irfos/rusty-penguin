@@ -118,7 +118,7 @@ const DIMMER:   u32 = 0x2A332F;  // Match border
 const WHITE:    u32 = 0xECEDE5;  // Warm off-white (--txt)
 const AMBER:    u32 = 0xF5C451;  // Warm amber accent
 const BLUE:     u32 = 0x8CC6E5;  // Warm sky (--sky)
-const CURSOR:   u32 = 0xF5F5F7;  // Match white
+const CURSOR:   u32 = 0x14171A;  // arrow fill — near-black (white halo via outline)
 const TEAL:     u32 = 0x00D4AA;  // More vibrant teal
 const ACCENT_CREAM: u32 = 0xECDAA7;  // dingir gold (--cream)
 const TRIT_NEG:  u32 = 0xEF7575;  // ternary -1
@@ -265,7 +265,9 @@ fn cursor_mask(col: i32, row: i32) -> bool {
 }
 
 fn draw_cursor(fb: &mut Framebuffer, x: i32, y: i32) {
-    let outline = 0x000000u32;
+    // Black arrow with a light halo (matches the classic pointer Simeon wants);
+    // the white outline keeps it legible on the dark wallpaper.
+    let outline = 0xF2F0E8u32;
     let put = |fb: &mut Framebuffer, px: i32, py: i32, c: u32| {
         if px >= 0 && py >= 0 && (px as u32) < fb.width && (py as u32) < fb.height {
             fb.set_pixel(px as u32, py as u32, c);
