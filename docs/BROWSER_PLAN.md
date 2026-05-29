@@ -56,3 +56,43 @@ Multi-session. ISO grows to ~600 MB–1 GB. The hard parts are the runtime
 dlopen dependencies (not shown by `ldd`) and getting Xorg input + config right.
 Tooling on host to assemble from: Xorg, Xwayland, Mesa (swrast/llvmpipe),
 libwayland, google-chrome, firefox(snap). DRM modules: virtio-gpu, bochs.
+
+## Execution runbook (start here next session)
+
+Critical path = **Xorg(fbdev) + Chrome + swrast**, no GPU, no DRM swap (so the
+existing efifb desktop is untouched). Chrome-on-software-X is a universally
+proven config (every CI runs it), so the risk is *assembly*, not viability.
+
+**Stage A — rootfs target.** The stack is too big for the initramfs; it lives on
+the install-to-disk RPDATA root. Build a `web-rootfs` at image-build time into
+`/opt/rp-web/` (later: a squashfs on the ISO, overlay-mounted). Reproducible,
+generated — not committed to git.
+
+**Stage B — dependency closure bundler.** For each binary collect `ldd` output
+(full transitive closure) + the binary + `ld-linux`. Then add the **dlopen
+extras `ldd` does NOT show** (this is where these efforts fail):
+- Xorg: `/usr/lib/xorg/modules/**` (fbdev_drv.so, libinput_drv.so, glx, extensions), `/usr/share/X11/xkb/**` + `xkbcomp`, `/usr/bin/Xorg`.
+- Mesa: `/usr/lib/x86_64-linux-gnu/dri/swrast_dri.so` + `kms_swrast_dri.so`, `libgallium*.so`, `libGLX_mesa`, set `LIBGL_ALWAYS_SOFTWARE=1`, `GALLIUM_DRIVER=llvmpipe`.
+- fontconfig: `/etc/fonts/**`, `/usr/share/fonts/**` (≥1 font), `fc-cache` run once.
+- Chrome: copy the whole `/opt/google/chrome/` tree (374 MB, it bundles its own libs/swiftshader) + run with `--no-sandbox --disable-gpu` (or `--use-gl=angle --use-angle=swiftshader`) `--ozone-platform=x11`.
+- dbus: `/usr/bin/dbus-daemon` + a session bus, or `--disable-dbus` paths.
+- Misc: `/usr/share/X11/xorg.conf.d/`, NSS (`libnss3` + `libsoftokn3`/`libfreebl3` dlopened).
+
+**Stage C — Xorg-fbdev config.** `xorg.conf`: `Device` driver `fbdev` on
+`/dev/fb0`; `ServerFlags` `DontVTSwitch`/`AutoAddDevices`; input via libinput.
+Verify Xorg starts: `Xorg :0 -config xorg.conf` → check `/var/log` for "screen
+0 added", no fatal.
+
+**Stage D — session.** New boot mode `rp.web` (kernel arg) → init starts
+`dbus`, `Xorg :0`, then `DISPLAY=:0 chrome --ozone-platform=x11 …`. Branded as
+Rusty Penguin. Default boot still = the Rust desktop (untouched).
+
+**Stage E — verify.** QEMU/UEFI boot `rp.web` → `screendump` → confirm Chrome
+renders a page. Start with a trivial client (`xterm`/`xclock`) to prove X first,
+then layer Chrome.
+
+**Stage F — later.** Firefox (de-snap / .tar build), Wayland (cage/wlroots),
+virtio-gpu DRM for GPU accel, the native ternary CSS engine as the long-term
+in-house renderer.
+
+*Status: planned. Not started — the deliberate frontier, best run interactively.*
