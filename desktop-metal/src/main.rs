@@ -12,6 +12,7 @@ mod editor;
 mod fb;
 mod font;
 mod font_aa;
+mod icons;
 mod input;
 mod term;
 mod trit;
@@ -552,23 +553,23 @@ const LAUNCHERS: &[Launcher] = &[
 
 struct DesktopIcon {
     label: &'static str,
-    bitmap: &'static [u8; 8],
+    icon: usize,      // index into the HD icon atlas (icons.rs)
     color: u32,
     launcher_idx: usize,
 }
 
 const DESKTOP_ICONS: &[DesktopIcon] = &[
-    DesktopIcon { label: "Term",  bitmap: &ICON_TERM,  color: GREEN,    launcher_idx: 0 },
-    DesktopIcon { label: "Files", bitmap: &ICON_FILES, color: BLUE,     launcher_idx: 1 },
-    DesktopIcon { label: "Edit",  bitmap: &ICON_AI,    color: AMBER,    launcher_idx: 2 },
-    DesktopIcon { label: "Calc",  bitmap: &ICON_PROC,  color: 0xFFD700, launcher_idx: 7 },
-    DesktopIcon { label: "Help",  bitmap: &ICON_FILES, color: 0x90EE90, launcher_idx: 9 },
-    DesktopIcon { label: "Prefs", bitmap: &ICON_PROC,  color: 0x9CA3AF, launcher_idx: 5 },
-    DesktopIcon { label: "TIS",   bitmap: &ICON_TRIT,  color: 0x4A9EFF, launcher_idx: 6 },
-    DesktopIcon { label: "Snake", bitmap: &ICON_SNAKE, color: 0x4ADE80, launcher_idx: 10 },
-    DesktopIcon { label: "Mines", bitmap: &ICON_MINE,  color: 0xFCD34D, launcher_idx: 11 },
-    DesktopIcon { label: "Doom",  bitmap: &ICON_DOOM,  color: 0xEF4444, launcher_idx: 12 },
-    DesktopIcon { label: "Web",   bitmap: &ICON_WEB,   color: 0x8CC6E5, launcher_idx: 13 }, // index 10
+    DesktopIcon { label: "Terminal",    icon: icons::IC_TERM,     color: GREEN,    launcher_idx: 0 },
+    DesktopIcon { label: "Files",       icon: icons::IC_FILES,    color: BLUE,     launcher_idx: 1 },
+    DesktopIcon { label: "Text Editor", icon: icons::IC_EDIT,     color: AMBER,    launcher_idx: 2 },
+    DesktopIcon { label: "Calculator",  icon: icons::IC_CALC,     color: 0xFFD700, launcher_idx: 7 },
+    DesktopIcon { label: "Help",        icon: icons::IC_FILES,    color: 0x90EE90, launcher_idx: 9 },
+    DesktopIcon { label: "Settings",    icon: icons::IC_SETTINGS, color: 0x9CA3AF, launcher_idx: 5 },
+    DesktopIcon { label: "TIS Console", icon: icons::IC_TIS,      color: 0x4A9EFF, launcher_idx: 6 },
+    DesktopIcon { label: "Snake",       icon: icons::IC_SNAKE,    color: 0x4ADE80, launcher_idx: 10 },
+    DesktopIcon { label: "Minesweeper", icon: icons::IC_MINES,    color: 0xFCD34D, launcher_idx: 11 },
+    DesktopIcon { label: "Doom",        icon: icons::IC_DOOM,     color: 0xEF4444, launcher_idx: 12 },
+    DesktopIcon { label: "Web",         icon: icons::IC_WEB,      color: 0x8CC6E5, launcher_idx: 13 }, // index 10
 ];
 
 // Favourites are horizontal 40×40 tiles inside the bottom panel (see fav_rect).
@@ -585,9 +586,8 @@ fn draw_desktop_icons(fb: &mut Framebuffer, hover_icon: Option<usize>) {
         let tile = tint(icon.color, if hovered { 64 } else { 34 });
         fb.fill_rounded_rect(x, y, tw, th, 10, tile);
         if hovered { fb.fill_rect_s(x + 10, y + th - 3, tw - 20, 2, icon.color); }
-        let bx = (x + (tw - 16) / 2) as u32;
-        let by = (y + (th - 16) / 2) as u32;
-        fb.draw_bitmap_2x(bx, by, icon.bitmap, icon.color, tile);
+        let isz = icons::ICON_PX as i32;
+        fb.draw_icon(x + (tw - isz) / 2, y + (th - isz) / 2, icon.icon, icon.color);
     }
 }
 
@@ -700,22 +700,23 @@ struct MenuItem {
     label: &'static str,
     desc:  &'static str,
     color: u32,
+    icon:  usize,
     kind:  MenuLaunch,
 }
 
 // Real apps only — no raw shell commands.
 const MENU_ITEMS: &[MenuItem] = &[
-    MenuItem { label: "Web",          desc: "Native browser (local pages)", color: 0x8CC6E5, kind: MenuLaunch::App(9) },
-    MenuItem { label: "Files",        desc: "Browse & manage files",      color: 0x8CC6E5, kind: MenuLaunch::App(0) },
-    MenuItem { label: "Text Editor",  desc: "Write & edit documents",     color: 0xF5C451, kind: MenuLaunch::App(1) },
-    MenuItem { label: "Calculator",   desc: "Ternary arithmetic",         color: 0xFFD700, kind: MenuLaunch::App(2) },
-    MenuItem { label: "Terminal",     desc: "psh — bare-metal shell",     color: 0x6FE18B, kind: MenuLaunch::Term(0) },
-    MenuItem { label: "Settings",     desc: "System preferences",         color: 0x9CA3AF, kind: MenuLaunch::App(4) },
-    MenuItem { label: "TIS Console",  desc: "Sparse ternary AI runtime",  color: 0x4A9EFF, kind: MenuLaunch::App(5) },
+    MenuItem { label: "Web",          desc: "Native browser (local pages)", color: 0x8CC6E5, icon: icons::IC_WEB,      kind: MenuLaunch::App(9) },
+    MenuItem { label: "Files",        desc: "Browse & manage files",      color: 0x8CC6E5, icon: icons::IC_FILES,    kind: MenuLaunch::App(0) },
+    MenuItem { label: "Text Editor",  desc: "Write & edit documents",     color: 0xF5C451, icon: icons::IC_EDIT,     kind: MenuLaunch::App(1) },
+    MenuItem { label: "Calculator",   desc: "Ternary arithmetic",         color: 0xFFD700, icon: icons::IC_CALC,     kind: MenuLaunch::App(2) },
+    MenuItem { label: "Terminal",     desc: "psh — bare-metal shell",     color: 0x6FE18B, icon: icons::IC_TERM,     kind: MenuLaunch::Term(0) },
+    MenuItem { label: "Settings",     desc: "System preferences",         color: 0x9CA3AF, icon: icons::IC_SETTINGS, kind: MenuLaunch::App(4) },
+    MenuItem { label: "TIS Console",  desc: "Sparse ternary AI runtime",  color: 0x4A9EFF, icon: icons::IC_TIS,      kind: MenuLaunch::App(5) },
     // games start at index 7
-    MenuItem { label: "Snake",        desc: "Classic arcade",             color: 0x4ADE80, kind: MenuLaunch::App(6) },
-    MenuItem { label: "Minesweeper",  desc: "Find the mines",             color: 0xFCD34D, kind: MenuLaunch::App(7) },
-    MenuItem { label: "Doom",         desc: "E1M1 — shareware DOOM",      color: 0xEF4444, kind: MenuLaunch::App(8) },
+    MenuItem { label: "Snake",        desc: "Classic arcade",             color: 0x4ADE80, icon: icons::IC_SNAKE,    kind: MenuLaunch::App(6) },
+    MenuItem { label: "Minesweeper",  desc: "Find the mines",             color: 0xFCD34D, icon: icons::IC_MINES,    kind: MenuLaunch::App(7) },
+    MenuItem { label: "Doom",         desc: "E1M1 — shareware DOOM",      color: 0xEF4444, icon: icons::IC_DOOM,     kind: MenuLaunch::App(8) },
 ];
 const MENU_APPS_END: usize = 7;  // items 0..7 = apps, 7..10 = games
 
@@ -751,9 +752,9 @@ fn draw_menu_item(fb: &mut Framebuffer, x: i32, y: i32, w: i32, item: &MenuItem,
         (r << 16) | (g << 8) | b
     };
     fb.fill_rounded_rect(icon_x, icon_y, 28, 28, 6, ic_bg);
-    // Icon: first letter of label as a simple 8x8 glyph, centered
-    let first = item.label.as_bytes().first().copied().unwrap_or(b' ');
-    fb.draw_char((icon_x + 10) as u32, (icon_y + 10) as u32, first as char, item.color, ic_bg);
+    // HD icon, tinted with the app accent, centered in the 28px square.
+    let isz = icons::ICON_PX as i32;
+    fb.draw_icon(icon_x + (28 - isz) / 2, icon_y + (28 - isz) / 2, item.icon, item.color);
     // Name (smooth AA) + description (small, transparent)
     let tx = x + 46;
     fb.draw_aa(tx, y + 2, item.label, WHITE, crate::fb::AA_S);
@@ -1307,6 +1308,26 @@ fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, 
     if start_menu { draw_start_menu(fb); }
     if let Some((cmx, cmy)) = ctx_menu { draw_ctx_menu(fb, cmx, cmy); }
     draw_topbar(fb, up.as_str(), stats, sys_ticks());
+    // Dock hover tooltip (drawn last, as an overlay; the cached bg restore on the
+    // next recomposite wipes it cleanly). Suppressed while a menu is open.
+    if !start_menu && ctx_menu.is_none() {
+        if let Some(hi) = hover_icon { draw_dock_tooltip(fb, hi); }
+    }
+}
+
+// A small floating label above a hovered dock favourite.
+fn draw_dock_tooltip(fb: &mut Framebuffer, hi: usize) {
+    let slot = match FAV_IDX.iter().position(|&x| x == hi) { Some(s) => s, None => return };
+    let (x, y, tw, _) = fav_rect(slot, fb.height);
+    let label = DESKTOP_ICONS[hi].label;
+    let lw = Framebuffer::aa_w(label, crate::fb::AA_S);
+    let pad = 11; let bw = lw + pad * 2; let bh = 28;
+    let bx = x + tw / 2 - bw / 2;
+    let by = y - bh - 8;
+    fb.fill_rounded_rect(bx + 1, by + 2, bw, bh, 8, 0x0C100E);
+    fb.fill_rounded_rect(bx, by, bw, bh, 8, 0x2A332F);
+    draw_round_border(fb, bx, by, bw, bh, 8, PANEL_EDGE);
+    fb.draw_aa(bx + pad, by + 6, label, WHITE, crate::fb::AA_S);
 }
 
 // ── Entry point ──────────────────────────────────────────────────────────────

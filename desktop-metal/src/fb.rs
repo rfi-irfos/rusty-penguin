@@ -343,6 +343,32 @@ impl Framebuffer {
         self.draw_aa(x + (w - tw).max(0) / 2, top, s, fg, sz);
     }
 
+    // ── HD icon blit ────────────────────────────────────────────────────────────
+    // Alpha-blend an anti-aliased coverage icon (icons.rs) tinted with `color`
+    // over the framebuffer — the mockup's crisp line-art look, no SVG runtime.
+    pub fn draw_icon(&mut self, x: i32, y: i32, id: usize, color: u32) {
+        if id >= crate::icons::ICON_OFF.len() { return; }
+        let off = crate::icons::ICON_OFF[id] as usize;
+        let px = crate::icons::ICON_PX as i32;
+        let cr = (color >> 16) & 0xFF; let cg = (color >> 8) & 0xFF; let cb = color & 0xFF;
+        for row in 0..px {
+            let py = y + row;
+            if py < 0 || py as u32 >= self.height { continue; }
+            for col in 0..px {
+                let a = crate::icons::ICON_COV[off + (row * px + col) as usize] as u32;
+                if a == 0 { continue; }
+                let pxn = x + col;
+                if pxn < 0 || pxn as u32 >= self.width { continue; }
+                let d = self.get_pixel(pxn as u32, py as u32);
+                let ia = 255 - a;
+                let or = (cr * a + ((d >> 16) & 0xFF) * ia) / 255;
+                let og = (cg * a + ((d >> 8) & 0xFF) * ia) / 255;
+                let ob = (cb * a + (d & 0xFF) * ia) / 255;
+                self.set_pixel(pxn as u32, py as u32, (or << 16) | (og << 8) | ob);
+            }
+        }
+    }
+
     // ── Soft radial glow ──────────────────────────────────────────────────────
     // Additive-feel light pool: blends `color` toward the wallpaper with a
     // quadratic falloff from the center. `max_alpha` (0..=255) is the opacity at
