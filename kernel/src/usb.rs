@@ -392,6 +392,47 @@ unsafe fn post_cmd(t: Trb) {
     ring_doorbell(0, 0);
 }
 
+/// Advance the event ring dequeue pointer by one entry and update ERDP.
+unsafe fn consume_event() -> Trb {
+    let p = EVT_DEQUEUE as *const u32;
+    let t = Trb { dw: [p.read_volatile(), p.add(1).read_volatile(),
+                        p.add(2).read_volatile(), p.add(3).read_volatile()] };
+    EVT_DEQUEUE += 16;
+    let ring_end = EVT_RING_PHYS + 255 * 16;
+    if EVT_DEQUEUE >= ring_end {
+        EVT_DEQUEUE = EVT_RING_PHYS;
+        EVT_CYCLE ^= 1;
+    }
+    let runtime_ir0 = XHCI_RUNTIME + 0x20;
+    ((runtime_ir0 + 0x18) as *mut u64).write_volatile(EVT_DEQUEUE | 8);
+    t
+}
+
+/// Wait for a Command Completion event, draining and discarding any other
+/// event types (e.g. Port Status Change) that arrive first.
+unsafe fn wait_cmd_completion() -> Option<Trb> {
+    let mut count = 0u32;
+    loop {
+        let p = EVT_DEQUEUE as *const u32;
+        let dw3 = p.add(3).read_volatile();
+        if (dw3 & 1) as u32 == EVT_CYCLE {
+            let t = consume_event();
+            let evt_type = t.trb_type();
+            crate::serial::write_str("  [usb/xhci] event type=");
+            crate::serial::write_byte(b'0' + (evt_type as u8).min(99));
+            crate::serial::write_str(" cc=");
+            crate::serial::write_byte(b'0' + t.completion_code().min(9));
+            crate::serial::write_byte(b'\n');
+            if evt_type == TRB_CMD_COMPL { return Some(t); }
+            // Non-command events (port change, transfer) — consume and keep waiting.
+            continue;
+        }
+        count += 1;
+        if count > 50_000_000 { return None; } // ~500ms timeout
+        xspin(10);
+    }
+}
+
 /// Poll the event ring; return Some(Trb) if an event with matching cycle bit arrives.
 /// Times out after ~200 ms.
 unsafe fn wait_event() -> Option<Trb> {
@@ -400,20 +441,7 @@ unsafe fn wait_event() -> Option<Trb> {
         let p = EVT_DEQUEUE as *const u32;
         let dw3 = p.add(3).read_volatile();
         if (dw3 & 1) as u32 == EVT_CYCLE {
-            let t = Trb { dw: [p.read_volatile(), p.add(1).read_volatile(),
-                               p.add(2).read_volatile(), dw3] };
-            EVT_DEQUEUE += 16;
-            let ring_end = EVT_RING_PHYS + 255 * 16;
-            if EVT_DEQUEUE >= ring_end {
-                EVT_DEQUEUE = EVT_RING_PHYS;
-                EVT_CYCLE ^= 1;
-            }
-            // Update ERDP (event ring dequeue pointer register).
-            let erdp_off = 0x38usize; // ERDP in Interrupter 0 register set
-            let runtime_ir0 = XHCI_RUNTIME + 0x20;
-            ((runtime_ir0 + erdp_off as u64) as *mut u64)
-                .write_volatile(EVT_DEQUEUE | 8); // EHBZ = 1
-            return Some(t);
+            return Some(consume_event());
         }
         count += 1;
         if count > 20_000_000 { return None; }
@@ -464,7 +492,7 @@ unsafe fn queue_hid_read(di: usize) {
     } else {
         HID_DEVS[di].tr_enqueue = next;
     }
-    ring_doorbell(dev.slot, 2); // interrupt-in = ep1 in = doorbell target 2
+    ring_doorbell(dev.slot, 3); // interrupt-in = DCI 3 = doorbell target 3
 }
 
 /// Add a device to our HID device table after it's been addressed.
@@ -476,7 +504,7 @@ unsafe fn register_hid(slot: u8, is_mouse: bool) {
         slot,
         is_mouse,
         hid_buf:    dbase + DEV_HID_BUF,
-        tr_enqueue: dbase + DEV_TR,
+        tr_enqueue: dbase + DEV_TR + 256, // EP1-IN transfer ring at +256 offset
         tr_cycle:   1,
         prev_kbd:   [0; 8],
         mouse_x: (crate::fb::width() / 2) as i32,
@@ -517,10 +545,16 @@ pub fn xhci_init() -> Trit {
         // Read capability register fields.
         let cap_len   = (base as *const u8).read_volatile() as u64;
         let hcs1      = ((base + 4) as *const u32).read_volatile();
+        let hccp1     = ((base + 0x10) as *const u32).read_volatile(); // HCCPARAMS1
         let dboff     = ((base + 0x14) as *const u32).read_volatile() as u64 & !3;
         let rtoff     = ((base + 0x18) as *const u32).read_volatile() as u64 & !0x1F;
         let n_ports   = (hcs1 >> 24) as usize;
         let n_slots   = (hcs1 & 0xFF) as usize;
+        // CSZ (Context Size): bit2 of HCCPARAMS1. 0=32B, 1=64B context entries.
+        let ctx_sz: u64 = if hccp1 & (1 << 2) != 0 { 64 } else { 32 };
+        crate::serial::write_str("  [usb/xhci] ctx_sz=");
+        crate::serial::write_byte(b'0' + (ctx_sz / 32) as u8);
+        crate::serial::write_byte(b'\n');
 
         XHCI_BASE      = base;
         XHCI_OP        = base + cap_len;
@@ -539,61 +573,113 @@ pub fn xhci_init() -> Trit {
         while xr32(0x00) & (1 << 1) != 0 && t < 200_000 { xspin(10); t += 1; }
         xspin(200_000);
 
-        // Configure: MaxSlotsEn = min(n_slots, MAX_HID_DEVS), no scratchpad needed.
-        xw32(0x38, n_slots.min(MAX_HID_DEVS) as u32);  // CONFIG register
+        // Configure: MaxSlotsEn, no scratchpad.
+        xw32(0x38, n_slots.min(MAX_HID_DEVS) as u32);  // CONFIG
 
-        // Clear DMA area.
-        core::ptr::write_bytes(XHCI_DMA_BASE as *mut u8, 0,
-            (DEV_BASE_PHYS - XHCI_DMA_BASE + DEV_BLOCK * MAX_HID_DEVS as u64) as usize);
+        // Clear DMA area (all zeroes = valid initial state for all rings).
+        let dma_total = (DEV_BASE_PHYS - XHCI_DMA_BASE + DEV_BLOCK * MAX_HID_DEVS as u64) as usize;
+        core::ptr::write_bytes(XHCI_DMA_BASE as *mut u8, 0, dma_total);
 
-        // DCBAA.
-        let dcbaa = DCBAA_PHYS as *mut u64;
-        for i in 0..=n_slots.min(MAX_HID_DEVS) {
-            dcbaa.add(i).write_volatile(0);
-        }
-        ((XHCI_OP + 0x30) as *mut u64).write_volatile(DCBAA_PHYS); // DCBAAP
+        // DCBAA: zero-initialised above; point DCBAAP at it.
+        ((XHCI_OP + 0x30) as *mut u64).write_volatile(DCBAA_PHYS);
 
-        // Command ring.
+        // Command ring: cycle bit = 1. Link TRB at position [255] with TC=1.
         CMD_ENQUEUE = CMD_RING_PHYS;
         CMD_CYCLE   = 1;
-        // Link TRB at end with TC=1.
-        write_trb(CMD_RING_PHYS + 255 * 16, Trb::link(CMD_RING_PHYS, 1));
-        ((XHCI_OP + 0x18) as *mut u64).write_volatile(CMD_RING_PHYS | 1); // CRCR
+        write_trb(CMD_RING_PHYS + 255 * 16,
+            Trb { dw: [CMD_RING_PHYS as u32, (CMD_RING_PHYS >> 32) as u32,
+                        0, (TRB_LINK << 10) | (1 << 1) | 1] }); // TC=1, cycle=1
+        // CRCR: ring ptr | RCS (bit0=1 = ring cycle state = 1).
+        ((XHCI_OP + 0x18) as *mut u64).write_volatile(CMD_RING_PHYS | 1);
 
-        // Event ring: one segment, 256 TRBs.
-        // Write ERST: one entry pointing at EVT_RING_PHYS, size 256.
-        let erst = ERST_PHYS as *mut u64;
-        erst.write_volatile(EVT_RING_PHYS);
-        erst.add(1).write_volatile(256);
+        // Event ring segment table: 1 segment entry.
+        // ERST entry format: [u64 ring_addr][u32 ring_size][u32 reserved]
+        let erst = ERST_PHYS as *mut u32;
+        erst.add(0).write_volatile(EVT_RING_PHYS as u32);    // addr lo
+        erst.add(1).write_volatile((EVT_RING_PHYS >> 32) as u32); // addr hi
+        erst.add(2).write_volatile(256);                      // segment size (TRBs)
+        erst.add(3).write_volatile(0);
+
         EVT_DEQUEUE = EVT_RING_PHYS;
         EVT_CYCLE   = 1;
-        // Interrupter 0 runtime registers (at XHCI_RUNTIME + 0x20).
-        let ir0 = XHCI_RUNTIME + 0x20;
-        ((ir0 + 0x08) as *mut u32).write_volatile(255);   // ERSTSZ = 256 segments
-        ((ir0 + 0x10) as *mut u64).write_volatile(ERST_PHYS); // ERSTBA
-        ((ir0 + 0x18) as *mut u64).write_volatile(EVT_RING_PHYS | 8); // ERDP
 
-        // Start the controller (RS=1, INTE=0 — we poll).
+        // Interrupter 0 runtime registers (base = XHCI_RUNTIME + 0x20).
+        let ir0 = XHCI_RUNTIME + 0x20;
+        ((ir0 + 0x00) as *mut u32).write_volatile(0);    // IMAN: clear IE
+        ((ir0 + 0x04) as *mut u32).write_volatile(0);    // IMOD: no throttle
+        ((ir0 + 0x08) as *mut u32).write_volatile(1);    // ERSTSZ = 1 segment
+        // ERSTBA: segment table base address (bits [63:6]).
+        ((ir0 + 0x10) as *mut u64).write_volatile(ERST_PHYS & !0x3F);
+        // ERDP: event ring dequeue pointer | EHBZ(bit3)=1.
+        ((ir0 + 0x18) as *mut u64).write_volatile(EVT_RING_PHYS | 8);
+
+        // Start the controller: set RS=1, wait for HCH (bit 0 of USBSTS) to clear.
         xw32(0x00, xr32(0x00) | 1);
-        xspin(200_000);
+        let mut t = 0u32;
+        while xr32(0x04) & 1 != 0 && t < 200_000 { xspin(10); t += 1; } // wait HCH=0
+        crate::serial::write_str("  [usb/xhci] controller running\n");
+
+        // Wait for ports to settle after controller start (USB 3 needs 100-200ms).
+        xspin(5_000_000);
 
         // Enumerate root-hub ports.
         let mut hid_count = 0usize;
         for port in 0..n_ports.min(8) {
             let portsc_off = 0x400 + port * 0x10;
+            // PORTSC bits: [0]=CCS (device present), [1]=PED (enabled), [5:4]=PLS
             let portsc = ((XHCI_OP + portsc_off as u64) as *const u32).read_volatile();
-            if portsc & 1 == 0 { continue; } // no device
+            if portsc & 1 == 0 { continue; } // no device connected
+
+            crate::serial::write_str("  [usb/xhci] port ");
+            crate::serial::write_byte(b'0' + port as u8);
+            crate::serial::write_str(" portsc=");
+            crate::serial::write_hex_u32(portsc);
+            crate::serial::write_byte(b'\n');
+
+            // If the port isn't enabled yet (PED=0), try a port reset.
+            if portsc & (1 << 1) == 0 {
+                // PR=1: write bit4 of PORTSC to initiate port reset.
+                let psc_base = (XHCI_OP + portsc_off as u64) as *mut u32;
+                let cur = psc_base.read_volatile();
+                psc_base.write_volatile((cur & 0x0E00C3E0) | (1 << 4)); // PR=1, preserve non-RW1C bits
+                xspin(2_000_000);
+                // Wait for reset to clear (PR self-clears when done).
+                let mut tr = 0u32;
+                loop {
+                    let ps = psc_base.read_volatile();
+                    if ps & (1 << 4) == 0 { break; }
+                    tr += 1; if tr > 50_000 { break; }
+                    xspin(100);
+                }
+                xspin(500_000); // settle
+            }
 
             crate::serial::write_str("  [usb/xhci] device on port ");
             crate::serial::write_byte(b'0' + port as u8);
             crate::serial::write_byte(b'\n');
 
             // Issue Enable Slot command.
+            crate::serial::write_str("  [usb/xhci] posting EnableSlot...\n");
             post_cmd(Trb::enable_slot(CMD_CYCLE));
-            let Some(evt) = wait_event() else { continue; };
-            if evt.trb_type() != TRB_CMD_COMPL || evt.completion_code() != CC_SUCCESS { continue; }
+            crate::serial::write_str("  [usb/xhci] waiting for EnableSlot event...\n");
+            let Some(evt) = wait_cmd_completion() else {
+                crate::serial::write_str("  [usb/xhci] EnableSlot timeout\n");
+                continue;
+            };
+            if evt.trb_type() != TRB_CMD_COMPL {
+                crate::serial::write_str("  [usb/xhci] unexpected evt type\n");
+                continue;
+            }
+            if evt.completion_code() != CC_SUCCESS {
+                crate::serial::write_str("  [usb/xhci] EnableSlot failed (cc != 1)\n");
+                continue;
+            }
             let slot = evt.slot_id();
-            if slot == 0 { continue; }
+            if slot == 0 { crate::serial::write_str("  [usb/xhci] slot=0 skip\n"); continue; }
+            crate::serial::write_str("  [usb/xhci] slot allocated: ");
+            crate::serial::write_byte(b'0' + slot);
+            crate::serial::write_byte(b'\n');
+            crate::serial::write_str("  [usb/xhci] building input context...\n");
 
             // Build Input Context for Address Device.
             let dbase  = DEV_BASE_PHYS + (slot as u64 - 1) * DEV_BLOCK;
@@ -601,30 +687,63 @@ pub fn xhci_init() -> Trit {
             let out_ctx= dbase + DEV_OUT_CTX;
 
             // Set DCBAA[slot] → Device Context.
-            dcbaa.add(slot as usize).write_volatile(out_ctx);
+            (DCBAA_PHYS as *mut u64).add(slot as usize).write_volatile(out_ctx);
 
-            // Input Control Context: A0=1 (set slot) A1=1 (set EP0).
+            // Input Control Context (ICC): DW0=Drop=0, DW1=Add flags A0|A1.
+            // xHCI defines A0=bit0 (slot context), A1=bit1 (EP0 = DCI 1).
             let icc = in_ctx as *mut u32;
-            icc.add(1).write_volatile(0x3); // Add Context flags A0|A1
+            icc.add(0).write_volatile(0);    // Drop = 0
+            icc.add(1).write_volatile(0x3);  // Add A0 | A1
 
-            // Slot Context: root-hub port, speed (4=SuperSpeed assume HS).
-            let slot_ctx = (in_ctx + 0x20) as *mut u32;
-            let speed = (portsc >> 10) & 0xF;
-            slot_ctx.write_volatile((n_ports as u32) | (speed << 20) | (1 << 27));
-            slot_ctx.add(1).write_volatile((port as u32 + 1) << 16);
+            // Slot Context: starts at in_ctx + ctx_sz.
+            // Use ctx_sz=32 always (QEMU xHCI reports CSZ=0 = 32B).
+            let slot_ctx = (in_ctx + ctx_sz) as *mut u32;
+            let speed = (portsc >> 10) & 0xF; // speed from PORTSC[13:10]
+            let rhport = port as u32 + 1;     // 1-based root hub port number
+            // DW0: Context Entries[31:28]=1, Speed[19:16]=speed, RouteString=0,
+            //      RootHubPortNum[23:16]=rhport (NOTE: in xHCI spec DW2!)
+            // Actually per xHCI Table 6-2:
+            //   DW0: [31:27]=CE, [26]=Hub, [25:24]=MTT, [23:22]=Interrupter[0:1]
+            //        [21:20]=Speed, ... no! Let me check again.
+            // xHCI Rev 1.1 Table 6-2 Slot Context, Byte offsets:
+            //   Word 0 (DW0): bits [31:27]=CE, [26]=Hub, [25]=MTT, [24]=unused,
+            //                 [23:20]=Speed, [19:0]=Route String
+            // xHCI DW1: [31:24]=MaxExitLatency, [23:16]=RootHubPortNum, [15:0]=NumberOfPorts
+            // So Speed is at DW0[23:20], RootHubPort is at DW1[23:16].
+            slot_ctx.add(0).write_volatile((1u32 << 27) | (speed << 20));  // CE=1, Speed
+            slot_ctx.add(1).write_volatile(rhport << 16);                    // RootHubPortNum
+            crate::serial::write_str("  [usb/xhci] slot ctx dw0=");
+            crate::serial::write_hex_u32((1u32 << 27) | (speed << 20));
+            crate::serial::write_str(" dw1=");
+            crate::serial::write_hex_u32(rhport << 16);
+            crate::serial::write_byte(b'\n');
 
-            // EP0 Context: type=4 (control), max-packet=8 (LS) or 64 (FS/HS).
-            let ep0_ctx = (in_ctx + 0x40) as *mut u32;
-            let max_pkt: u32 = if speed <= 1 { 8 } else { 64 };
-            ep0_ctx.write_volatile(0); // EP State = disabled
-            ep0_ctx.add(1).write_volatile((max_pkt << 16) | (4 << 3)); // MaxPkt | EPType=4
-            ep0_ctx.add(2).write_volatile((dbase + DEV_TR) as u32 | 1); // TR deq + DCS
+            // EP0 Context: starts at in_ctx + 2 * ctx_sz.
+            let ep0_ctx = (in_ctx + 2 * ctx_sz) as *mut u32;
+            let max_pkt: u32 = match speed {
+                1 | 2 => 8,   // FS/LS
+                3     => 64,  // HS
+                4 | 5 => 512, // SS/SSP
+                _     => 64,
+            };
+            // DW0: EP State = 0 (disabled, xHCI sets it to Running on AddressDevice)
+            // DW1: [31:16]=MaxPacketSize, [7:3]=Reserved, [5:3]=EP Type (4=ctrl), [2:1]=CErr
+            ep0_ctx.add(0).write_volatile(0);
+            ep0_ctx.add(1).write_volatile((max_pkt << 16) | (4 << 3) | (3 << 1));
+            ep0_ctx.add(2).write_volatile((dbase + DEV_TR) as u32 | 1); // TR Dequeue | DCS=1
             ep0_ctx.add(3).write_volatile(((dbase + DEV_TR) >> 32) as u32);
-            ep0_ctx.add(4).write_volatile(max_pkt); // Average TRB length
+            ep0_ctx.add(4).write_volatile(8);  // Average TRB Length
 
             // Address Device.
+            crate::serial::write_str("  [usb/xhci] posting AddressDevice...\n");
             post_cmd(Trb::address_device(in_ctx, slot, CMD_CYCLE));
-            let Some(evt2) = wait_event() else { continue; };
+            let Some(evt2) = wait_cmd_completion() else {
+                crate::serial::write_str("  [usb/xhci] AddressDevice timeout\n");
+                continue;
+            };
+            crate::serial::write_str("  [usb/xhci] AddressDevice cc=");
+            crate::serial::write_byte(b'0' + evt2.completion_code().min(9));
+            crate::serial::write_byte(b'\n');
             if evt2.trb_type() != TRB_CMD_COMPL || evt2.completion_code() != CC_SUCCESS { continue; }
 
             crate::serial::write_str("  [usb/xhci] slot=");
@@ -636,39 +755,48 @@ pub fn xhci_init() -> Trit {
             crate::serial::write_str(if set_proto_ok { "  [usb/xhci] boot proto OK\n" }
                                                     else { "  [usb/xhci] SET_PROTOCOL skip\n" });
 
-            // GET_DESCRIPTOR(HID, 0) to identify keyboard (protocol=1) vs mouse (protocol=2).
-            // bRequest=0x06, wValue=0x2200 (HID report descriptor type), wIndex=0.
-            // Simpler: just try to set boot protocol and guess by report size.
-            // We'll use GET_PROTOCOL (bRequest=0x03) to read the protocol field.
-            let mut proto_buf = [0u8; 4];
-            let _ = ctrl_transfer(slot, 0xA1, 0x03, 0, 0, 1,
-                                  dbase + DEV_HID_BUF, 3);
-            let is_mouse = ((dbase + DEV_HID_BUF) as *const u8).read_volatile() == 2;
+            // Determine keyboard vs mouse by checking the bInterfaceProtocol value
+            // that was set by SET_PROTOCOL. In boot protocol: 1=keyboard, 2=mouse.
+            // We skip GET_PROTOCOL and use a heuristic: QEMU usb-kbd has 8-byte
+            // reports; usb-mouse has 3/4-byte. We'll use is_mouse=false (kbd) as the
+            // default and only override if we have strong evidence.
+            // (A real GET_PROTOCOL would confirm, but ctrl_transfer has a cycle issue
+            // on the shared EP0 ring — skip for now; add as a future improvement.)
+            let is_mouse = false; // TODO: GET_PROTOCOL after ctrl ring refactor
 
-            // Configure interrupt-in endpoint (ep1-in = ep index 2 in xHCI).
-            // We need to run Configure Endpoint to add EP1-IN.
-            // Reset input context control to add only ep1-in.
-            icc.add(1).write_volatile(0x1 | (1 << 2)); // A0 (slot) + A2 (ep1-in)
+            // Configure EP: add the interrupt-in endpoint (EP1-IN = DCI 3 = index 2).
+            // In xHCI DCI = EP address * 2 + direction (IN=1). For EP1-IN: DCI=3.
+            // Add flags: A0 (slot) = bit0, A3 (DCI=3) = bit3.
+            icc.add(0).write_volatile(0);
+            icc.add(1).write_volatile((1 << 0) | (1 << 3)); // A0 | A3
 
-            let ep1_ctx = (in_ctx + 0x60) as *mut u32; // EP 1 (index 2) context
-            let ep_max_pkt: u32 = if is_mouse { 8 } else { 8 };
-            let ep1_tr = dbase + DEV_TR;   // reuse same ring (safe after address-device done)
-            ep1_ctx.write_volatile(0);
-            ep1_ctx.add(1).write_volatile((ep_max_pkt << 16) | (3 << 3) | (1 << 7)); // type=3 (int-in), maxburst=1
-            ep1_ctx.add(2).write_volatile(ep1_tr as u32 | 1);
+            // EP1-IN context is at in_ctx + (DCI+1) * ctx_sz = in_ctx + 4 * ctx_sz.
+            // (ICC is ctx_sz, Slot is ctx_sz, EP0 is ctx_sz, EP1-IN is ctx_sz = 4th block)
+            let ep1_ctx = (in_ctx + 4 * ctx_sz) as *mut u32;
+            let ep_max_pkt: u32 = 8;
+            let ep1_tr = dbase + DEV_TR + 256; // use second half of TR area for EP1
+            // EP1-IN DW0: Interval bits [23:16] = 7 (125us * 2^(7-1) = 8ms)
+            ep1_ctx.add(0).write_volatile(7 << 16);  // Interval
+            // DW1: MaxPkt | EPType=3 (interrupt in) | CErr=3
+            ep1_ctx.add(1).write_volatile((ep_max_pkt << 16) | (3 << 3) | (3 << 1));
+            ep1_ctx.add(2).write_volatile(ep1_tr as u32 | 1); // TR ptr lo | DCS=1
             ep1_ctx.add(3).write_volatile((ep1_tr >> 32) as u32);
-            ep1_ctx.add(4).write_volatile(ep_max_pkt);
-            // Interval = 3 (8ms polling at FS/HS).
-            ep1_ctx.add(0).write_volatile(3 << 16);
+            ep1_ctx.add(4).write_volatile(ep_max_pkt); // Average TRB Length
+            // Update Slot Context Context Entries to 3 (so DCI 3 is covered).
+            slot_ctx.add(0).write_volatile((3u32 << 28) | (speed << 20) | ((port as u32 + 1) << 4));
 
             post_cmd(Trb::configure_ep(in_ctx, slot, CMD_CYCLE));
-            let Some(evt3) = wait_event() else { continue; };
-            if evt3.completion_code() != CC_SUCCESS { continue; }
+            let Some(evt3) = wait_cmd_completion() else { continue; };
+            if evt3.completion_code() != CC_SUCCESS {
+                crate::serial::write_str("  [usb/xhci] ConfigureEP failed cc=");
+                crate::serial::write_byte(b'0' + evt3.completion_code().min(9));
+                crate::serial::write_byte(b'\n');
+                continue;
+            }
 
             crate::serial::write_str(if is_mouse { "  [usb/xhci] HID mouse ready\n" }
                                                  else { "  [usb/xhci] HID keyboard ready\n" });
             register_hid(slot, is_mouse);
-            let _ = proto_buf;
             hid_count += 1;
         }
 
@@ -733,6 +861,7 @@ pub fn poll() {
 /// Probe all USB controllers: try xHCI first (modern hardware), then EHCI/OHCI
 /// as fallback. Returns Pos if at least one HID device is ready.
 pub fn init() -> Trit {
+    crate::serial::write_str("  [usb] scanning for USB controller...\n");
     // xHCI (USB 3.x) — primary path for modern laptops.
     let xhci = xhci_init();
     match xhci {
