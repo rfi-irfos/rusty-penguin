@@ -134,6 +134,11 @@ unsafe fn fill_stat(sb: *mut u8, is_reg: bool, size: u64, ino: u64) {
     (sb.add(56) as *mut u64).write_unaligned(4096);     // st_blksize
 }
 
+/// Write a byte string into a fixed-size field at `base+off` (for utsname etc.).
+unsafe fn wstr(base: *mut u8, off: usize, s: &[u8]) {
+    for (i, &c) in s.iter().enumerate() { *base.add(off + i) = c; }
+}
+
 // ── The Linux syscall dispatcher ─────────────────────────────────────────────
 /// Returns the Linux ABI value for rax (>=0 success, <0 negated errno).
 /// Per-syscall serial trace toggle (debugging the ABI layer brick by brick).
@@ -296,6 +301,39 @@ pub fn syscall(nr: u64, a1: u64, a2: u64, a3: u64) -> u64 {
             }
             0
         }
+        // ── common identity / time / info syscalls real programs expect ──
+        39 | 110 | 186 => 1,                 // getpid / getppid / gettid
+        102 | 104 | 107 | 108 => 0,          // getuid / getgid / geteuid / getegid (root)
+        // uname(utsname): 6 × 65-byte fields.
+        63 => unsafe {
+            let b = a1 as *mut u8;
+            if !b.is_null() {
+                core::ptr::write_bytes(b, 0, 6 * 65);
+                wstr(b, 0,   b"Linux");
+                wstr(b, 65,  b"rusty-penguin");
+                wstr(b, 130, b"6.0.0-rustypenguin");
+                wstr(b, 195, b"#1 Rusty Penguin bare-metal ternary");
+                wstr(b, 260, b"x86_64");
+                wstr(b, 325, b"(none)");
+            }
+            0
+        }
+        // getcwd(buf, size) → "/" (returns length incl. NUL).
+        79 => unsafe {
+            let buf = a1 as *mut u8;
+            if !buf.is_null() && a2 >= 2 { *buf = b'/'; *buf.add(1) = 0; }
+            2
+        }
+        // gettimeofday(tv, tz) from the 100 Hz tick counter.
+        96 => unsafe {
+            let tv = a1 as *mut u64;
+            if !tv.is_null() { let t = crate::idt::ticks(); *tv = t / 100; *tv.add(1) = (t % 100) * 10_000; }
+            0
+        }
+        // nanosleep / clock_nanosleep → no-op success (no fine timer yet).
+        35 | 230 => 0,
+        // sched_getaffinity(pid, size, mask) → single CPU.
+        204 => unsafe { let m = a3 as *mut u8; if !m.is_null() && a2 >= 1 { *m = 1; } 8 }
         // prlimit64(pid, res, new, old): report no limits (RLIM_INFINITY).
         302 => {
             let old = a4 as *mut u64;

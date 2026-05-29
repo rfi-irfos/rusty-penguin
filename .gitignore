@@ -16,3 +16,4 @@ kernel/linux-abi-test/brick25-atexit
 kernel/linux-abi-test/brick2-robust
 kernel/linux-abi-test/brick3-fileio
 kernel/linux-abi-test/brick4-dyn
+kernel/linux-abi-test/brick4-info
