@@ -1786,6 +1786,240 @@ impl Browser {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Sound — audio mixer/player. Uses sys_audio_write (#17) and sys_audio_vol (#18)
+// to control the Intel HDA DMA stream. Generates tones via ternary-encoded
+// sine tables and lets the user play scales, set volume, and see a live bar meter.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const AUDIO_BYTES: usize = 0x0002_0000; // 128 KiB ring buffer (matches kernel)
+const AUDIO_SR:    usize = 44_100;      // samples/sec
+const AUDIO_CH:    usize = 2;           // stereo
+const FRAME_SZ:    usize = 4;           // 16-bit stereo = 4 bytes/frame
+
+unsafe fn sys_audio_write(pcm: &[u8], offset: usize) -> usize {
+    let n: u64;
+    core::arch::asm!(
+        "syscall",
+        inout("rax") 17u64 => n,
+        in("rdi") pcm.as_ptr(),
+        in("rsi") pcm.len() as u64,
+        in("rdx") offset as u64,
+        out("rcx") _, out("r11") _,
+        options(nostack),
+    );
+    n as usize
+}
+unsafe fn sys_audio_vol(vol: u8) {
+    core::arch::asm!(
+        "syscall",
+        in("rax") 18u64,
+        in("rdi") vol as u64,
+        out("rcx") _, out("r11") _,
+        options(nostack),
+    );
+}
+
+// Quarter-sine table (25 entries, 0..π/2 at amplitude 32767).
+const QSINE: [i16; 26] = [0,2057,4106,6140,8149,10126,12062,13951,
+    15785,17557,19260,20886,22430,23886,25247,26509,27666,28714,29648,
+    30465,31160,31730,32168,32473,32642,32767];
+
+fn sine_sample(phase: usize, period: usize) -> i16 {
+    let p = phase % period;
+    let idx = p * 100 / period;
+    let rem = ((idx % 25) * 25 / 25).min(25);
+    if idx < 25      { QSINE[rem] }
+    else if idx < 50 { QSINE[25 - (idx - 25).min(25)] }
+    else if idx < 75 { -(QSINE[(idx - 50).min(25)]) }
+    else             { -(QSINE[25 - (idx - 75).min(25)]) }
+}
+
+// 12-tone equal-tempered scale starting at A4=440 Hz. Period in samples @ 44100.
+const SCALE_NAMES: [&str; 13] = ["A4","A#4","B4","C5","C#5","D5","D#5","E5","F5","F#5","G5","G#5","A5"];
+const SCALE_HZ: [u32; 13] = [440,466,494,523,554,587,622,659,698,740,784,831,880];
+
+pub struct Sound {
+    vol:         u8,           // 0–127
+    playing:     bool,
+    note_idx:    usize,        // index into SCALE_NAMES
+    phase:       usize,        // DMA write phase (frame count)
+    pub dirty:   bool,
+    pub wants_close: bool,
+    ansi:        crate::ansi::AnsiParser,
+}
+
+impl Sound {
+    pub fn new() -> Self {
+        Sound { vol: 64, playing: false, note_idx: 0, phase: 0,
+                dirty: true, wants_close: false, ansi: crate::ansi::AnsiParser::new() }
+    }
+
+    fn write_tone(&mut self) {
+        // Fill the DMA buffer with one period of the current note.
+        let hz = SCALE_HZ[self.note_idx] as usize;
+        let period = AUDIO_SR / hz;
+        let n_frames = AUDIO_BYTES / FRAME_SZ;
+        let mut pcm = alloc::vec![0u8; AUDIO_BYTES];
+        for i in 0..n_frames {
+            let s = sine_sample(i, period);
+            let lo = (s & 0xFF) as u8;
+            let hi = (s >> 8) as u8;
+            // Stereo: L then R
+            pcm[i * 4]     = lo; pcm[i * 4 + 1] = hi;  // L
+            pcm[i * 4 + 2] = lo; pcm[i * 4 + 3] = hi;  // R
+        }
+        unsafe { sys_audio_write(&pcm, 0); }
+    }
+
+    fn set_vol(&mut self, v: u8) {
+        self.vol = v;
+        unsafe { sys_audio_vol(v); }
+        self.dirty = true;
+    }
+}
+
+impl App for Sound {
+    fn render(&mut self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, h: u32) {
+        fb.fill_rect(x, y, w, h, 0x1A1A24);
+
+        // Title
+        fb.fill_rect(x, y, w, 28, 0x2C2C38);
+        fb.draw_str(x + 12, y + 9, "Sound", 0xF5F5F7, 0x2C2C38);
+        fb.draw_str(x + 80, y + 9, "Intel HDA  44.1 kHz  stereo  16-bit", 0x6B756D, 0x2C2C38);
+
+        let cx = x as i32;
+        let mut oy = y as i32 + 40;
+
+        // Waveform preview bar (visualize current note as a simple sine curve).
+        let bar_w = w.saturating_sub(48) as i32;
+        let bar_h = 48i32;
+        fb.fill_rect(x + 24, oy as u32, bar_w as u32, bar_h as u32, 0x111118);
+        if self.playing {
+            let hz = SCALE_HZ[self.note_idx] as usize;
+            let period = (AUDIO_SR / hz).max(1);
+            let n = bar_w as usize;
+            for xi in 0..n.saturating_sub(1) {
+                let s0 = sine_sample(xi * period / n, period);
+                let s1 = sine_sample((xi + 1) * period / n, period);
+                let y0 = oy + bar_h / 2 - (s0 as i32 * (bar_h / 2 - 4) / 32767);
+                let y1 = oy + bar_h / 2 - (s1 as i32 * (bar_h / 2 - 4) / 32767);
+                let x0 = x as i32 + 24 + xi as i32;
+                // draw a vertical line between y0 and y1 (1px wide waveform)
+                let (ya, yb) = if y0 <= y1 { (y0, y1) } else { (y1, y0) };
+                for py in ya..=yb {
+                    if py >= oy && py < oy + bar_h {
+                        fb.fill_rect(x0 as u32, py as u32, 1, 1, 0x4A9EFF);
+                    }
+                }
+            }
+        } else {
+            fb.draw_str(x + 24 + (bar_w as u32 / 2).saturating_sub(24),
+                         (oy + bar_h / 2 - 4) as u32, "STOPPED", 0x3A3A48, 0x111118);
+        }
+        oy += bar_h + 14;
+
+        // Note selector row
+        fb.draw_str(cx as u32 + 12, oy as u32, "Note:", 0xB8B8B8, 0x1A1A24);
+        let nx = cx + 60;
+        for (i, name) in SCALE_NAMES.iter().enumerate() {
+            let bx = nx + i as i32 * 34;
+            let sel = i == self.note_idx;
+            let bg = if sel { 0x2E7D4F } else { 0x2C2C38 };
+            let fg = if sel { 0xF5F5F7 } else { 0x9CA3AF };
+            fb.fill_rect(bx as u32, oy as u32, 30, 22, bg);
+            fb.draw_str(bx as u32 + 3, oy as u32 + 7, name, fg, bg);
+        }
+        oy += 30;
+
+        // Volume slider
+        fb.draw_str(cx as u32 + 12, oy as u32 + 4, "Vol:", 0xB8B8B8, 0x1A1A24);
+        let vx = cx + 55;
+        let vw = 200i32;
+        fb.fill_rect(vx as u32, oy as u32 + 8, vw as u32, 8, 0x2C2C38);
+        let filled = (self.vol as i32 * vw / 127).max(0).min(vw) as u32;
+        fb.fill_rect(vx as u32, oy as u32 + 8, filled, 8, 0x4A9EFF);
+        let mut vbuf = [0u8; 24];
+        let vs = u64_into(&mut vbuf, self.vol as u64);
+        fb.draw_str(vx as u32 + vw as u32 + 8, oy as u32 + 4, vs, 0xB8B8B8, 0x1A1A24);
+        // Vol –/+ buttons
+        fb.fill_rect(vx as u32 + vw as u32 + 36, oy as u32, 22, 22, 0x2C2C38);
+        fb.draw_str(vx as u32 + vw as u32 + 43, oy as u32 + 7, "-", 0xF5C451, 0x2C2C38);
+        fb.fill_rect(vx as u32 + vw as u32 + 62, oy as u32, 22, 22, 0x2C2C38);
+        fb.draw_str(vx as u32 + vw as u32 + 69, oy as u32 + 7, "+", 0x6FE18B, 0x2C2C38);
+        oy += 36;
+
+        // Play/Stop button
+        let (btn_label, btn_bg) = if self.playing { ("Stop ", 0x7D2E2E) } else { ("Play ", 0x2E7D4F) };
+        fb.fill_rect(cx as u32 + 12, oy as u32, 80, 30, btn_bg);
+        fb.draw_str(cx as u32 + 24, oy as u32 + 10, btn_label, 0xF5F5F7, btn_bg);
+
+        self.dirty = false;
+    }
+
+    fn on_mouse(&mut self, mx: i32, my: i32, _w: u32, _h: u32, buttons: u8) {
+        if buttons & 1 == 0 { return; }
+        let oy_notes = 40 + 48 + 14;
+        let oy_vol   = oy_notes + 30;
+        let oy_btn   = oy_vol + 36;
+
+        // Note buttons (row at oy_notes)
+        if my >= oy_notes && my < oy_notes + 22 {
+            let xi = (mx - 60) / 34;
+            if xi >= 0 && (xi as usize) < SCALE_NAMES.len() {
+                self.note_idx = xi as usize;
+                if self.playing { self.write_tone(); }
+                self.dirty = true;
+                return;
+            }
+        }
+        // Volume –
+        let vx = 55; let vw = 200i32;
+        if my >= oy_vol && my < oy_vol + 22 {
+            let vbx = vx + vw + 36;
+            if mx >= vbx && mx < vbx + 22 {
+                self.set_vol(self.vol.saturating_sub(8));
+                return;
+            }
+            let pbx = vx + vw + 62;
+            if mx >= pbx && mx < pbx + 22 {
+                self.set_vol((self.vol as u16 + 8).min(127) as u8);
+                return;
+            }
+            // Click on the slider track → set volume proportionally
+            if mx >= vx && mx < vx + vw {
+                let v = ((mx - vx) * 127 / vw) as u8;
+                self.set_vol(v);
+                return;
+            }
+        }
+        // Play/Stop button
+        if my >= oy_btn && my < oy_btn + 30 && mx >= 12 && mx < 92 {
+            self.playing = !self.playing;
+            if self.playing { self.write_tone(); }
+            self.dirty = true;
+        }
+    }
+
+    fn on_key(&mut self, key: u8) {
+        use crate::ansi::Key as AK;
+        match self.ansi.feed(key) {
+            AK::Char(b' ') => {
+                self.playing = !self.playing;
+                if self.playing { self.write_tone(); }
+                self.dirty = true;
+            }
+            AK::Left  => { if self.note_idx > 0 { self.note_idx -= 1; if self.playing { self.write_tone(); } self.dirty = true; } }
+            AK::Right => { if self.note_idx + 1 < SCALE_NAMES.len() { self.note_idx += 1; if self.playing { self.write_tone(); } self.dirty = true; } }
+            AK::Up    => self.set_vol((self.vol as u16 + 8).min(127) as u8),
+            AK::Down  => self.set_vol(self.vol.saturating_sub(8)),
+            _ => {}
+        }
+    }
+
+    fn title(&self) -> &str { "Sound" }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Games — preinstalled on the Rusty Penguin desktop. Pure-Rust, no_std, no heap
 // churn in the render path (numbers via u64_into, no per-frame format!()).
 // ─────────────────────────────────────────────────────────────────────────────

@@ -397,6 +397,23 @@ pub extern "C" fn syscall_handler(nr: u64, arg1: u64, arg2: u64, arg3: u64) -> u
             let out = unsafe { core::slice::from_raw_parts_mut(out_ptr, out_cap) };
             crate::net::http_get(host, out).unwrap_or(0) as u64
         }
+        17 => {
+            // sys_audio_write(pcm_ptr, len, byte_offset) → bytes written
+            // Writes raw 44.1 kHz stereo 16-bit PCM into the DMA ring buffer
+            // at `byte_offset`. Use offset 0 or AUDIO_BYTES/2 to double-buffer.
+            let ptr = arg1 as *const u8;
+            let len = (arg2 as usize).min(0x2_0000);
+            let off = arg3 as usize;
+            if len == 0 || ptr.is_null() { return 0; }
+            let data = unsafe { core::slice::from_raw_parts(ptr, len) };
+            crate::hda::audio_write(data, off) as u64
+        }
+        18 => {
+            // sys_audio_vol(level) → 0
+            // Sets master volume 0–127.
+            crate::hda::set_volume(arg1 as u8);
+            0
+        }
         24 => {
             // sys_yield — cooperative yield (no-op: single process)
             crate::sched::yield_();

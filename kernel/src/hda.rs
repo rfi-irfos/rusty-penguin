@@ -104,6 +104,64 @@ fn gen_sine(buf: *mut i16, n_samples: usize) {
     }
 }
 
+// ── Global state ─────────────────────────────────────────────────────────────
+// Cached after init so userspace writes and volume changes don't need re-init.
+static mut HDA_BASE:    u64  = 0;
+static mut HDA_SD_OUT:  usize = 0;
+static mut HDA_READY:   bool = false;
+static mut HDA_OUT_NID: u8   = 0;
+static mut CORB_WP_PTR: u8   = 0;
+
+/// Write raw stereo 16-bit PCM into the DMA audio buffer starting at `offset`
+/// (byte offset into AUDIO_PHYS). `data` length is clamped to the buffer size.
+/// Callers can double-buffer by writing to offset 0 while the first half plays
+/// (IOC fires at the half-way boundary). Returns bytes written.
+pub fn audio_write(data: &[u8], offset: usize) -> usize {
+    unsafe {
+        if !HDA_READY { return 0; }
+        let max = AUDIO_BYTES as usize;
+        if offset >= max { return 0; }
+        let avail = max - offset;
+        let n = data.len().min(avail);
+        core::ptr::copy_nonoverlapping(
+            data.as_ptr(),
+            (AUDIO_PHYS + offset as u64) as *mut u8,
+            n,
+        );
+        n
+    }
+}
+
+/// Set the master output volume (0–127). Writes the gain verb via ICS.
+pub fn set_volume(vol: u8) {
+    unsafe {
+        if !HDA_READY { return; }
+        let base = HDA_BASE;
+        let nid  = HDA_OUT_NID;
+        let v = vol.min(127) as u32;
+        // Both output amp verbs: left (0x03) and right (0x04), in-amplifier.
+        for gain_verb in [verb20(0, nid, 0x03, v), verb20(0, nid, 0x04, v)] {
+            ics_send(base, gain_verb);
+        }
+    }
+}
+
+// Send one verb via the Immediate Command interface (ICS/IC/IR registers).
+const IC:  usize = 0x60;
+const IR:  usize = 0x64;
+const ICS: usize = 0x68;
+unsafe fn ics_send(base: u64, v: u32) {
+    let mut t = 0u32;
+    while r16(base, ICS) & 0x1 != 0 && t < 100_000 { spin(10); t += 1; }
+    w32(base, IC, v);
+    w16(base, ICS, (r16(base, ICS) & !0x3) | 0x1);
+    t = 0;
+    while t < 200_000 { let ics = r16(base, ICS); if ics & 0x1 == 0 { break; } spin(10); t += 1; }
+}
+
+/// Returns true if HDA is up and DMA is running.
+pub fn is_ready() -> bool { unsafe { HDA_READY } }
+
 // ── Main init function ────────────────────────────────────────────────────────
 /// Initialise Intel HDA, find the first output widget, and begin playback
 /// of a 440 Hz test tone. Returns a ternary Trit indicating the outcome:
@@ -215,14 +273,6 @@ unsafe fn hda_init(base: u64) -> Trit {
     // 6. Send a verb and get a response.
     // Use the Immediate Command Interface (ICS/IR/IRS) instead of CORB/RIRB.
     // The ICH6/ICH9 HDA spec defines at offsets 0x60/0x64/0x68:
-    //   0x60 IC  (Immediate Command, 32-bit): write verb here
-    //   0x64 IR  (Immediate Response, 32-bit): read response from here
-    //   0x68 ICS (Immediate Command Status): bit 0 = busy, bit 1 = valid
-    // This avoids needing working CORB DMA; Linux uses it during initialization.
-    const IC:  usize = 0x60;
-    const IR:  usize = 0x64;
-    const ICS: usize = 0x68;
-
     // Enable immediate command mode in GCTL (bit 1 = FCNTRL, not needed; ICS is always available)
     let dummy_wp = 0u16;
     let send_verb = |_corb_wp: &mut u16, v: u32| {
@@ -365,5 +415,10 @@ unsafe fn hda_init(base: u64) -> Trit {
     let lpib = r32(base, sd_out + SD_LPIB);
     crate::serial::write_str("  [hda] LPIB="); crate::serial::write_hex_u32(lpib); crate::serial::write_byte(b'\n');
     crate::serial::write_str("  [hda] playback started (440 Hz, 44.1 kHz, stereo)\n");
+    // Cache state for runtime audio_write / set_volume calls.
+    HDA_BASE    = base;
+    HDA_SD_OUT  = sd_out;
+    HDA_OUT_NID = out_nid;
+    HDA_READY   = true;
     Trit::Pos
 }
