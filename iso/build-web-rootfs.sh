@@ -118,7 +118,9 @@ DISPLAY=:0 /usr/bin/xterm -geometry 90x30+80+80 -bg white -fg black -fa DejaVuSa
 sleep 1
 # Surface the XKB-related Xorg log lines so failures are visible headlessly.
 echo "=== /var/lib/xkb contents (did xkbcomp write server-0.xkm?) ==="; /bin/busybox ls -la /var/lib/xkb/ 2>/dev/null
-echo "=== shim.log (what Xorg's xkbcomp calls actually did) ==="; /bin/busybox cat /tmp/shim.log 2>/dev/null | /bin/busybox tail -12
+echo "=== FULL Xorg.0.log (for serial capture / diagnosis) ==="
+/bin/busybox cat /tmp/Xorg.0.log 2>/dev/null
+echo "=== X clients / sockets ==="; /bin/busybox ls -la /tmp/.X11-unix/ 2>/dev/null
 wait
 XSH
 chmod +x "$STAGE/start-x.sh"
