@@ -351,7 +351,7 @@ fn draw_scene_static(fb: &mut Framebuffer) {
     let inner_bg = card.bg;
     css::paint_panel(fb, lx, ly, LW as i32, LH as i32, &card, crate::trit::Trit::Zero);
     let lix = lx as u32; let liy = ly as u32;
-    fb.draw_bitmap_3x(lix + (LW - 24) / 2, liy + 16, &DINGIR, ACCENT_CREAM, inner_bg);
+    fb.draw_star8(lx + LW as i32 / 2, ly + 28, 14, ACCENT_CREAM);
     fb.draw_str_2x(lix + (LW - 5 * 16) / 2, liy + 50, "RUSTY",   WHITE, inner_bg);
     fb.draw_str_2x(lix + (LW - 7 * 16) / 2, liy + 72, "PENGUIN", GREEN, inner_bg);
     fb.draw_str(lix + (LW - 10 * 8) / 2, liy + 102, "OS v2.0.0", DIM, inner_bg);
@@ -371,8 +371,8 @@ fn draw_scene_static(fb: &mut Framebuffer) {
     let (mbx, mby, mbw, _mbh) = menu_btn_rect(h);
     fb.fill_rounded_rect(mbx, mby, mbw, 40, 10, 0x323C37);
     fb.fill_rect_s(mbx, mby, mbw, 2, GREEN);  // green top accent
-    fb.draw_bitmap_2x(mbx as u32 + 8, mby as u32 + 12, &DINGIR, GREEN, 0x323C37);
-    fb.draw_str(mbx as u32 + 28, mby as u32 + 16, "Menu", WHITE, 0x323C37);
+    fb.draw_star8(mbx + 15, mby + 20, 9, GREEN);
+    fb.draw_str(mbx as u32 + 30, mby as u32 + 16, "Menu", WHITE, 0x323C37);
     // separator
     fb.fill_rect_s(mbx + mbw + 7, ptop + 12, 1, PANEL_H - 24, PANEL_EDGE);
 
@@ -492,39 +492,45 @@ fn desktop_icon_hit(mx: i32, my: i32, h: u32) -> Option<usize> {
 
 // ---- Taskbar window buttons ─────────────────────────────────────────────────
 
+// Running-window task buttons live INSIDE the bottom dock, in the tasks area
+// after the favourites (and before the right tray), at full panel-row height.
+fn tasks_start_x(fh: u32) -> i32 {
+    let (lx, _, _, _) = fav_rect(DESKTOP_ICONS.len().saturating_sub(1), fh); // last favourite
+    lx + FAV_TILE + 18  // + separator gap
+}
 fn tbwin_rect(_fw: u32, fh: u32, slot: usize) -> (i32, i32, i32, i32) {
-    (160 + slot as i32 * 100, (fh - 22) as i32, 92, 18)
+    (tasks_start_x(fh) + slot as i32 * 116, panel_top(fh) + 7, 108, 40)
 }
 
 fn draw_taskbar_win_btns(fb: &mut Framebuffer, term_wins: &[TermWin]) {
     let fw = fb.width; let fh = fb.height;
+    let ptop = panel_top(fh);
+    let pr = PANEL_MARGIN + (fw as i32 - 2 * PANEL_MARGIN);
+    let tray_left = pr - 346;            // keep clear of the right tray
+    let tx0 = tasks_start_x(fh);
+    // Clear the whole tasks strip each frame (so closed windows leave no ghost).
+    if tray_left > tx0 { fb.fill_rect_s(tx0, ptop + 7, tray_left - tx0, 40, PANEL_SOLID); }
+
     let n = term_wins.len();
     for (slot, tw) in term_wins.iter().enumerate() {
         let (x, y, w, h) = tbwin_rect(fw, fh, slot);
-        if x + w >= fw as i32 { break; }
+        if x + w > tray_left { break; }  // out of room → stop
         let is_focused   = slot == n - 1;
         let is_minimized = tw.win.minimized;
-        // Apple graphite palette — consistent with window chrome + CSS engine.
-        let bg  = if is_minimized { 0x222B27u32 } else { 0x323C37u32 };  // warm stone
-        let txt = if is_minimized { 0xA8B0A6u32 } else { WHITE };
-        let accent = if is_focused { GREEN } else { 0x3C4641u32 };  // spring-green focus
-        // Rounded pill with subtle shadow
-        fb.fill_rounded_rect(x - 1, y - 1, w + 2, h + 2, 5, 0x0A0A14);
-        fb.fill_rounded_rect(x, y, w, h, 5, bg);
-        // Accent indicator (bottom stripe for focused)
-        if is_focused {
-            fb.fill_rect_s(x + 2, y + h - 2, w - 4, 2, accent);
-        } else {
-            fb.fill_rect_s(x + 2, y + h - 1, w - 4, 1, 0x3C3C48);
-        }
-        // App indicator dot
-        fb.fill_circle(x + 6, y + h / 2, 2, accent);
-        // Window title with proper truncation
+        let bg     = if is_minimized { 0x232C28u32 } else { 0x37423Cu32 }; // warm stone tile
+        let txt    = if is_minimized { 0xA8B0A6u32 } else { WHITE };
+        let accent = if is_focused { GREEN } else { TRIT_ZERO };
+        fb.fill_rounded_rect(x, y, w, h, 9, bg);
+        // running/focus dot
+        fb.fill_circle(x + 11, y + h / 2, 3, accent);
+        // window title (truncated)
         let title = tw.win.title.as_str();
         let short = title.find(" - ").map(|i| &title[..i]).unwrap_or(title);
-        let max_chars = ((w - 18) / 8).max(0) as usize;
+        let max_chars = ((w - 28) / 8).max(0) as usize;
         let lbl = &short[..max_chars.min(short.len())];
-        fb.draw_str((x + 14) as u32, (y + 4) as u32, lbl, txt, bg);
+        fb.draw_str((x + 22) as u32, (y + 14) as u32, lbl, txt, bg);
+        // focus underline
+        if is_focused { fb.fill_rect_s(x + 9, y + h - 5, w - 18, 2, GREEN); }
     }
 }
 

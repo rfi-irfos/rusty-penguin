@@ -291,6 +291,43 @@ impl Framebuffer {
         }
     }
 
+    /// Draw the DINGIR 𒀭 8-point star (Simeon's brand mark) at radius `r`,
+    /// scanline-filled from the mockup's 16-point geometry (8 outer @ r, 8 inner
+    /// @ ~0.27r, alternating). Crisp at any size — replaces the bitmap glyph.
+    pub fn draw_star8(&mut self, cx: i32, cy: i32, r: i32, color: u32) {
+        const N: usize = 16;
+        // unit points ×1000, math orientation (y up): outer(k·45°)/inner(k·45°+22.5°)
+        const UX: [i32; N] = [1000,249,707,103,0,-103,-707,-249,-1000,-249,-707,-103,0,103,707,249];
+        const UY: [i32; N] = [0,103,707,249,1000,249,707,103,0,-103,-707,-249,-1000,-249,-707,-103];
+        let mut vx = [0i32; N]; let mut vy = [0i32; N];
+        for i in 0..N { vx[i] = cx + r * UX[i] / 1000; vy[i] = cy - r * UY[i] / 1000; }
+        let mut py = cy - r;
+        while py <= cy + r {
+            let mut xs = [0i32; N]; let mut nx = 0usize;
+            let mut j = N - 1;
+            for i in 0..N {
+                let (yi, yj) = (vy[i], vy[j]);
+                if (yi <= py && yj > py) || (yj <= py && yi > py) {
+                    let x = vx[i] + (py - yi) * (vx[j] - vx[i]) / (yj - yi);
+                    if nx < N { xs[nx] = x; nx += 1; }
+                }
+                j = i;
+            }
+            // sort intersections
+            for a in 0..nx { for b in (a + 1)..nx { if xs[b] < xs[a] { xs.swap(a, b); } } }
+            let mut k = 0;
+            while k + 1 < nx {
+                let mut x = xs[k];
+                while x <= xs[k + 1] {
+                    if x >= 0 && py >= 0 { self.set_pixel(x as u32, py as u32, color); }
+                    x += 1;
+                }
+                k += 2;
+            }
+            py += 1;
+        }
+    }
+
     // Draw a single character at 2× scale (16×16 px per glyph).
     pub fn draw_char_2x(&mut self, x: u32, y: u32, ch: char, fg: u32, bg: u32) {
         let idx = (ch as u32).wrapping_sub(0x20);
