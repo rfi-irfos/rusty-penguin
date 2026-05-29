@@ -2,7 +2,7 @@ use alloc::string::{String, ToString};
 use crate::fb::Framebuffer;
 use crate::term;
 
-pub const TITLEBAR_H: i32 = 22;
+pub const TITLEBAR_H: i32 = 34;
 pub const WINDOW_W:   i32 = term::TERM_PIX_W as i32 + 2;
 pub const WINDOW_H:   i32 = term::TERM_PIX_H as i32 + 2 + TITLEBAR_H;
 
@@ -29,9 +29,9 @@ pub const TRIT_ZERO:    u32 = 0x909A92;  // --zero
 pub const TRIT_POS:     u32 = 0x6FE18B;  // --pos
 
 // Traffic-light buttons on the RIGHT side of the titlebar.
-const BTN_R:      i32 = 5;   // radius in pixels
-const BTN_GAP:    i32 = 14;  // center-to-center spacing
-const BTN_MARGIN: i32 = 12;  // distance from window right edge to close button center
+const BTN_R:      i32 = 6;   // radius in pixels
+const BTN_GAP:    i32 = 17;  // center-to-center spacing
+const BTN_MARGIN: i32 = 16;  // distance from window right edge to close button center
 
 // Minimum window size — can't resize below the default terminal dimensions.
 pub const WIN_MIN_W: i32 = WINDOW_W;
@@ -168,20 +168,26 @@ pub fn draw_window(fb: &mut Framebuffer, win: &Window, focused: bool) {
     let top_light = if focused { 0x7A8A7E } else { 0x3A4540 };
     fb.fill_rect_s(x + 8, y, w - 16, 1, top_light);
 
-    // ── Titlebar — frosted glass (alpha-blend over window content/shadow bg).
-    // Focused windows are slightly more opaque and brighter (depth hierarchy).
-    // Background windows are dimmer/flatter to visually recede.
-    let glass_alpha = if focused { 230u32 } else { 180u32 };
+    // ── Titlebar — frosted glass with a top-to-bottom gradient so it reads as a
+    // lit physical surface, not a flat fill. Top rows are brightened, bottom
+    // rows darkened, blended over the wallpaper showing through.
+    let glass_alpha = if focused { 232u32 } else { 188u32 };
     let tb_col      = if focused { TITLE_ACT } else { TITLE_DIM };
     fb.fill_rounded_rect_glass(x + 1, y + 1, w - 2, TITLEBAR_H, 7, tb_col, glass_alpha);
+    // gradient overlay: lighten the upper third, darken the lower third
+    let lighten = |c: u32, d: u32| {
+        (((c >> 16 & 0xFF).saturating_add(d).min(0xFF)) << 16)
+      | (((c >>  8 & 0xFF).saturating_add(d).min(0xFF)) << 8)
+      |  ((c       & 0xFF).saturating_add(d).min(0xFF))
+    };
+    for row in 0..(TITLEBAR_H / 2) {
+        let d = (10 - row).max(0) as u32 * 2; // fade out over ~10px
+        if d > 0 { fb.fill_rect_s(x + 2, y + 1 + row, w - 4, 1, lighten(tb_col, d)); }
+    }
 
-    // Aero "inner glow" at the top of the titlebar on focused windows:
-    // a faint warm-green luminance line just inside the top edge.
+    // Aero "inner glow" — a faint warm-green luminance line just inside the top.
     if focused {
-        let glow = 0x3A4D40u32; // subtle warm green ambient glow
-        fb.fill_rect_s(x + 8, y + 1, w - 16, 1, glow);
-        fb.fill_rect_s(x + 6, y + 2, w - 12, 1,
-            (((glow >> 16 & 0xFF) / 2) << 16) | (((glow >> 8 & 0xFF) / 2) << 8) | ((glow & 0xFF) / 2));
+        fb.fill_rect_s(x + 8, y + 1, w - 16, 1, 0x4A5D50);
     }
 
     // Bottom edge of titlebar (hairline separator)
@@ -198,19 +204,23 @@ pub fn draw_window(fb: &mut Framebuffer, win: &Window, focused: bool) {
         }
     }
 
-    // ── Title text
-    let right_reserved = BTN_MARGIN + BTN_GAP * 2 + BTN_R + 6;
-    let left_reserved  = 6;
-    let avail_w = (w - right_reserved - left_reserved).max(0);
+    // ── App mark (dingir) on the left + left-aligned title, like the mockup's
+    // window bar (icon + title). The mark is the green brand star; the title
+    // sits just to its right and vertically centered in the taller bar.
+    let mark_cx = x + 16;
+    let mark_cy = y + 1 + TITLEBAR_H / 2;
+    let mark_col = if focused { ACCENT_GREEN } else { TRIT_ZERO };
+    fb.draw_star8(mark_cx, mark_cy, 7, mark_col);
+
+    let title_x = x + 30;
+    let right_reserved = BTN_MARGIN + BTN_GAP * 2 + BTN_R + 8;
+    let avail_w = (x + w - right_reserved - title_x).max(0);
     let max_chars = (avail_w / 8).max(0) as usize;
     let n_bytes = max_chars.min(win.title.len());
     let title = &win.title[..n_bytes];
-    let title_px_w = title.len() as i32 * 8;
-    let title_x = x + left_reserved + (avail_w - title_px_w).max(0) / 2;
     let txt_col = if focused { TXT_ACT } else { TXT_DIM };
-    let txt_dy  = (TITLEBAR_H - 8) / 2;
-    let txt_bg  = if focused { TITLE_ACT } else { TITLE_DIM };
-    fb.draw_str(title_x as u32, (y + 1 + txt_dy) as u32, title, txt_col, txt_bg);
+    let txt_dy  = TITLEBAR_H / 2 - 4;
+    fb.draw_str_t(title_x as u32, (y + 1 + txt_dy) as u32, title, txt_col);
 
     // ── Traffic-light buttons — dim when unfocused (Aero z-hierarchy convention).
     let bcy = btn_cy(win);

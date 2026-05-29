@@ -163,8 +163,8 @@ fn fav_rect(slot: usize, h: u32) -> (i32, i32, i32, i32) {
 }
 
 // Fill area (hot-spot at (0,0)).  Save/restore adds 1px border on all four sides.
-const CURSOR_W:  u32 = 13;
-const CURSOR_H:  u32 = 21;
+const CURSOR_W:  u32 = 12;
+const CURSOR_H:  u32 = 18;
 const CURSOR_BW: u32 = CURSOR_W + 2;   // buffer width
 const CURSOR_BH: u32 = CURSOR_H + 2;   // buffer height
 
@@ -230,10 +230,34 @@ fn restore_cursor_bg(fb: &mut Framebuffer, x: i32, y: i32, buf: &[u32]) {
     }
 }
 
+// Classic left-pointing arrow pointer (hotspot = top-left tip at col0,row0):
+// a slim arrowhead with a diagonal tail, not the old flag-on-a-pole shape.
+// Each row is a 12-bit mask, MSB = leftmost column.
+#[rustfmt::skip]
+const ARROW: [u16; CURSOR_H as usize] = [
+    0b100000000000,
+    0b110000000000,
+    0b111000000000,
+    0b111100000000,
+    0b111110000000,
+    0b111111000000,
+    0b111111100000,
+    0b111111110000,
+    0b111111111000,
+    0b111111111100,
+    0b111111100000,
+    0b111011100000,
+    0b110011100000,
+    0b100001110000,
+    0b000001110000,
+    0b000000111000,
+    0b000000111000,
+    0b000000010000,
+];
+
 fn cursor_mask(col: i32, row: i32) -> bool {
     if row < 0 || col < 0 || row >= CURSOR_H as i32 || col >= CURSOR_W as i32 { return false; }
-    if row <= 10 { col <= row }   // expanding triangle head (11 rows)
-    else         { col <= 1 }     // 2px shaft
+    (ARROW[row as usize] >> (11 - col)) & 1 != 0
 }
 
 fn draw_cursor(fb: &mut Framebuffer, x: i32, y: i32) {
