@@ -5,19 +5,26 @@ pub const TITLEBAR_H: i32 = 22;
 pub const WINDOW_W:   i32 = term::TERM_PIX_W as i32 + 2;
 pub const WINDOW_H:   i32 = term::TERM_PIX_H as i32 + 2 + TITLEBAR_H;
 
-const SHADOW:      u32 = 0x06101E;
-const BORDER_DIM:  u32 = 0x334155;
-const BORDER_ACT:  u32 = 0x60A5FA;
-const TITLE_DIM:   u32 = 0x1A2535;
-const TITLE_ACT:   u32 = 0x1E293B;
-const TITLE_LINE:  u32 = 0x334155;
-const CONTENT_BG:  u32 = 0x0F172A;
-const TXT_DIM:     u32 = 0x64748B;
-const TXT_ACT:     u32 = 0xE2E8F0;
-const BTN_CLOSE:   u32 = 0xEF4444;
-const BTN_MIN:     u32 = 0xF59E0B;
-const BTN_MAX:     u32 = 0x22C55E;
-const BTN_SYM:     u32 = 0x00000000; // rendered as half-brightness of btn color
+// Warm-stone Aero palette — matches the bare-metal desktop v2.
+const SHADOW:      u32 = 0x080B09;
+const BORDER_DIM:  u32 = 0x2A332F;
+const BORDER_ACT:  u32 = 0x5A6A5E;
+const TITLE_DIM:   u32 = 0x252E2A;
+const TITLE_ACT:   u32 = 0x323C37;
+const TITLE_LINE:  u32 = 0x3C4641;
+const CONTENT_BG:  u32 = 0x222B27;
+const TXT_DIM:     u32 = 0xA8B0A6;
+const TXT_ACT:     u32 = 0xECEDE5;
+const BTN_CLOSE:   u32 = 0xEF7575;
+const BTN_MIN:     u32 = 0xF5C451;
+const BTN_MAX:     u32 = 0x6FE18B;
+
+const BTN_R:      i32 = 5;
+const BTN_GAP:    i32 = 14;
+const BTN_MARGIN: i32 = 12;
+
+pub const WIN_MIN_W: i32 = WINDOW_W;
+pub const WIN_MIN_H: i32 = WINDOW_H;
 
 pub struct Window {
     pub x: i32, pub y: i32,
@@ -25,6 +32,9 @@ pub struct Window {
     pub title: String,
     pub dragging: bool,
     pub drag_ox: i32, pub drag_oy: i32,
+    pub resizing: bool,
+    pub resize_mx: i32, pub resize_my: i32,
+    pub resize_ow: i32, pub resize_oh: i32,
     pub minimized: bool,
     pub maximized: bool,
     pub restore_x: i32, pub restore_y: i32,
@@ -37,13 +47,15 @@ impl Window {
             x, y, w: WINDOW_W, h: WINDOW_H,
             title: title.to_string(),
             dragging: false, drag_ox: 0, drag_oy: 0,
+            resizing: false, resize_mx: 0, resize_my: 0,
+            resize_ow: WINDOW_W, resize_oh: WINDOW_H,
             minimized: false, maximized: false,
             restore_x: x, restore_y: y,
             restore_w: WINDOW_W, restore_h: WINDOW_H,
         }
     }
 
-    pub fn toggle_maximize(&mut self, sw: i32, sh: i32, topbar_h: i32) {
+    pub fn toggle_maximize(&mut self, sw: i32, sh: i32) {
         if self.maximized {
             self.x = self.restore_x; self.y = self.restore_y;
             self.w = self.restore_w; self.h = self.restore_h;
@@ -51,25 +63,26 @@ impl Window {
         } else {
             self.restore_x = self.x; self.restore_y = self.y;
             self.restore_w = self.w; self.restore_h = self.h;
-            self.x = 0; self.y = topbar_h;
-            self.w = sw; self.h = sh - 28 - topbar_h;
+            self.x = 0; self.y = 0;
+            self.w = sw; self.h = sh - 66;
             self.maximized = true;
         }
     }
 }
 
-fn btn_y(win: &Window) -> i32 { win.y + (TITLEBAR_H - 10) / 2 }
-fn close_x(win: &Window) -> i32 { win.x + win.w - 14 }
-fn min_x  (win: &Window) -> i32 { win.x + win.w - 26 }
-fn max_x  (win: &Window) -> i32 { win.x + win.w - 38 }
+fn btn_cy(win: &Window) -> i32   { win.y + TITLEBAR_H / 2 }
+fn close_cx(win: &Window) -> i32 { win.x + win.w - BTN_MARGIN }
+fn min_cx  (win: &Window) -> i32 { win.x + win.w - BTN_MARGIN - BTN_GAP }
+fn max_cx  (win: &Window) -> i32 { win.x + win.w - BTN_MARGIN - BTN_GAP * 2 }
 
-fn hit(mx: i32, my: i32, x: i32, y: i32) -> bool {
-    mx >= x && mx < x + 10 && my >= y && my < y + 10
+fn hit_btn(mx: i32, my: i32, cx: i32, cy: i32) -> bool {
+    let dx = mx - cx; let dy = my - cy;
+    dx * dx + dy * dy <= (BTN_R + 1) * (BTN_R + 1)
 }
 
-pub fn close_btn_hit(win: &Window, mx: i32, my: i32) -> bool { hit(mx, my, close_x(win), btn_y(win)) }
-pub fn min_btn_hit  (win: &Window, mx: i32, my: i32) -> bool { hit(mx, my, min_x(win),   btn_y(win)) }
-pub fn max_btn_hit  (win: &Window, mx: i32, my: i32) -> bool { hit(mx, my, max_x(win),   btn_y(win)) }
+pub fn close_btn_hit(win: &Window, mx: i32, my: i32) -> bool { hit_btn(mx, my, close_cx(win), btn_cy(win)) }
+pub fn min_btn_hit  (win: &Window, mx: i32, my: i32) -> bool { hit_btn(mx, my, min_cx(win),   btn_cy(win)) }
+pub fn max_btn_hit  (win: &Window, mx: i32, my: i32) -> bool { hit_btn(mx, my, max_cx(win),   btn_cy(win)) }
 
 pub fn titlebar_hit(win: &Window, mx: i32, my: i32) -> bool {
     mx >= win.x && mx < win.x + win.w
@@ -85,18 +98,34 @@ pub fn window_hit(win: &Window, mx: i32, my: i32) -> bool {
         && my >= win.y && my < win.y + win.h
 }
 
+pub fn resize_corner_hit(win: &Window, mx: i32, my: i32) -> bool {
+    !win.minimized && !win.maximized
+        && mx >= win.x + win.w - 20 && mx < win.x + win.w
+        && my >= win.y + win.h - 20 && my < win.y + win.h
+}
+
 pub fn content_origin(win: &Window) -> (i32, i32) {
     (win.x + 1, win.y + 1 + TITLEBAR_H)
 }
 
-fn draw_btn(fb: &mut Framebuffer, x: i32, y: i32, color: u32, sym: char) {
-    if x < 0 || y < 0 { return; }
-    fb.fill_rect(x as u32, y as u32, 10, 10, color);
-    // symbol in darkened version of button color
-    let dark = (((color >> 16) & 0xFF) / 2) << 16
-             | (((color >> 8)  & 0xFF) / 2) << 8
-             |  ((color        & 0xFF) / 2);
-    fb.draw_char((x + 1) as u32, (y + 1) as u32, sym, dark, color);
+fn darken(c: u32) -> u32 {
+    ((((c >> 16) & 0xFF) * 2 / 3) << 16)
+  | ((((c >>  8) & 0xFF) * 2 / 3) << 8)
+  |   (((c       & 0xFF) * 2 / 3))
+}
+
+fn draw_btn(fb: &mut Framebuffer, cx: i32, cy: i32, color: u32) {
+    if cx < BTN_R + 2 || cy < BTN_R + 2 { return; }
+    fb.fill_circle(cx, cy, BTN_R + 1, darken(color));
+    fb.fill_circle(cx, cy, BTN_R,     color);
+    let hi = (((color >> 16 & 0xFF).saturating_add(0x50).min(0xFF)) << 16)
+           | (((color >>  8 & 0xFF).saturating_add(0x50).min(0xFF)) << 8)
+           |   (color       & 0xFF).saturating_add(0x50).min(0xFF);
+    if cx >= 3 && cy >= 3 {
+        fb.set_pixel((cx as u32) - 2, (cy as u32) - 2, hi);
+        fb.set_pixel((cx as u32) - 1, (cy as u32) - 2, hi);
+        fb.set_pixel((cx as u32) - 2, (cy as u32) - 1, hi);
+    }
 }
 
 pub fn draw_window(fb: &mut Framebuffer, win: &Window, focused: bool) {
@@ -104,38 +133,76 @@ pub fn draw_window(fb: &mut Framebuffer, win: &Window, focused: bool) {
 
     let x = win.x; let y = win.y; let w = win.w; let h = win.h;
 
-    // Drop shadow
-    if x + 5 >= 0 && y + 5 >= 0 {
-        fb.fill_rect((x + 4) as u32, (y + 4) as u32, w as u32, h as u32, SHADOW);
-    }
+    // Aero atmospheric shadow
+    fb.fill_rounded_rect(x + 12, y + 16, w - 4, h, 14, 0x07090A);
+    fb.fill_rounded_rect(x +  8, y + 10, w - 2, h, 12, 0x060808);
+    fb.fill_rounded_rect(x +  4, y +  6, w,     h, 10, 0x0A0F0D);
+    fb.fill_rounded_rect(x +  2, y +  3, w,     h,  9, SHADOW);
 
-    // Outer border (1px) — color signals focus
     let border = if focused { BORDER_ACT } else { BORDER_DIM };
-    fb.fill_rect(x as u32, y as u32, w as u32, h as u32, border);
+    fb.fill_rounded_rect(x, y, w, h, 8, border);
+    let top_light = if focused { 0x7A8A7E } else { 0x3A4540 };
+    fb.fill_rect_s(x + 8, y, w - 16, 1, top_light);
 
-    // Titlebar
-    let tb_col = if focused { TITLE_ACT } else { TITLE_DIM };
-    fb.fill_rect((x + 1) as u32, (y + 1) as u32, (w - 2) as u32, TITLEBAR_H as u32, tb_col);
-    // Bottom edge of titlebar
-    fb.fill_rect((x + 1) as u32, (y + 1 + TITLEBAR_H) as u32, (w - 2) as u32, 1, TITLE_LINE);
+    let glass_alpha = if focused { 230u32 } else { 180u32 };
+    let tb_col      = if focused { TITLE_ACT } else { TITLE_DIM };
+    fb.fill_rounded_rect_glass(x + 1, y + 1, w - 2, TITLEBAR_H, 7, tb_col, glass_alpha);
 
-    // Content area
-    let cy = y + 2 + TITLEBAR_H;
-    let ch = h - 3 - TITLEBAR_H;
-    if ch > 0 {
-        fb.fill_rect((x + 1) as u32, cy as u32, (w - 2) as u32, ch as u32, CONTENT_BG);
+    if focused {
+        let glow = 0x3A4D40u32;
+        fb.fill_rect_s(x + 8, y + 1, w - 16, 1, glow);
+        fb.fill_rect_s(x + 6, y + 2, w - 12, 1,
+            (((glow >> 16 & 0xFF) / 2) << 16) | (((glow >> 8 & 0xFF) / 2) << 8) | ((glow & 0xFF) / 2));
     }
 
-    // Title text
-    let max_chars = ((w - 54) / 8).max(0) as usize;
-    let title: String = win.title.chars().take(max_chars).collect();
-    let txt_col = if focused { TXT_ACT } else { TXT_DIM };
-    let txt_y = y + 1 + (TITLEBAR_H - 8) / 2;
-    fb.draw_str((x + 6) as u32, txt_y as u32, &title, txt_col, tb_col);
+    fb.fill_rect_s(x + 1, y + 1 + TITLEBAR_H, w - 2, 1, TITLE_LINE);
 
-    // Buttons
-    let by = btn_y(win);
-    draw_btn(fb, close_x(win), by, BTN_CLOSE, 'x');
-    draw_btn(fb, min_x(win),   by, BTN_MIN,   '-');
-    draw_btn(fb, max_x(win),   by, BTN_MAX,   '+');
+    let cy2 = y + 2 + TITLEBAR_H;
+    let ch  = h - 3 - TITLEBAR_H;
+    if ch > 0 {
+        if focused {
+            fb.fill_rounded_rect_glass(x + 1, cy2, w - 2, ch, 7, CONTENT_BG, 220);
+        } else {
+            fb.fill_rounded_rect(x + 1, cy2, w - 2, ch, 7, CONTENT_BG);
+        }
+    }
+
+    let right_reserved = BTN_MARGIN + BTN_GAP * 2 + BTN_R + 6;
+    let avail_w = (w - right_reserved - 6).max(0);
+    let max_chars = (avail_w / 8).max(0) as usize;
+    let title: String = win.title.chars().take(max_chars).collect();
+    let title_px_w = title.len() as i32 * 8;
+    let title_x = x + 6 + (avail_w - title_px_w).max(0) / 2;
+    let txt_col = if focused { TXT_ACT } else { TXT_DIM };
+    let txt_bg  = if focused { TITLE_ACT } else { TITLE_DIM };
+    let txt_dy  = (TITLEBAR_H - 8) / 2;
+    fb.draw_str(title_x as u32, (y + 1 + txt_dy) as u32, &title, txt_col, txt_bg);
+
+    let bcy = btn_cy(win);
+    if focused {
+        draw_btn(fb, close_cx(win), bcy, BTN_CLOSE);
+        draw_btn(fb, min_cx(win),   bcy, BTN_MIN);
+        draw_btn(fb, max_cx(win),   bcy, BTN_MAX);
+    } else {
+        draw_btn(fb, close_cx(win), bcy, 0x4A2020);
+        draw_btn(fb, min_cx(win),   bcy, 0x4A3808);
+        draw_btn(fb, max_cx(win),   bcy, 0x0F3A18);
+    }
+}
+
+pub fn draw_resize_grip(fb: &mut Framebuffer, win: &Window, focused: bool) {
+    if win.minimized || win.maximized || win.w < 20 || win.h < 20 { return; }
+    let col = if focused { 0x6B7280 } else { 0x2C2C38 };
+    let bx = win.x + win.w - 2;
+    let by = win.y + win.h - 2;
+    for i in 0..6i32 {
+        let off = i * 3;
+        if (bx - off) <= win.x + 1 || (by - off) <= win.y + TITLEBAR_H + 1 { break; }
+        for k in 0..3i32 {
+            let px = bx - off + k; let py = by - off - k;
+            if px >= 0 && py >= 0 && px < win.x + win.w && py < win.y + win.h {
+                fb.set_pixel(px as u32, py as u32, col);
+            }
+        }
+    }
 }

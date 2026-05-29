@@ -25,19 +25,32 @@ fn unbind_fbcon() {
     }
 }
 
-// ---- Palette ----
-const BG:      u32 = 0x0B1220;
-const TOPBAR:  u32 = 0x080F1C;
-const TASKBAR: u32 = 0x111827;
-const TOPBAR_H: u32 = 16;
-const BORDER:  u32 = 0x1E293B;
-const GREEN:   u32 = 0x4ADE80;
-const DIM:     u32 = 0x334155;
-const DIMMER:  u32 = 0x1E293B;
-const WHITE:   u32 = 0xF8FAFC;
-const AMBER:   u32 = 0xFBBF24;
-const BLUE:    u32 = 0x60A5FA;
-const CURSOR:  u32 = 0xF8FAFC;
+// ---- Palette — warm-stone-green (v2 design) ----
+const BG:           u32 = 0x1B211E;
+const GREEN:        u32 = 0x6FE18B;
+const DIM:          u32 = 0xA8B0A6;
+const WHITE:        u32 = 0xECEDE5;
+const AMBER:        u32 = 0xF5C451;
+const BLUE:         u32 = 0x8CC6E5;
+const ACCENT_CREAM: u32 = 0xECDAA7;
+const TRIT_NEG:     u32 = 0xEF7575;
+const TRIT_ZERO:    u32 = 0x909A92;
+const TRIT_POS:     u32 = 0x6FE18B;
+const PANEL_SOLID:  u32 = 0x2A332F;
+const PANEL_EDGE:   u32 = 0x3C4641;
+const CURSOR_CLR:   u32 = 0xF5F5F7;
+
+// Bottom panel geometry
+const PANEL_MARGIN: i32 = 14;
+const PANEL_BOTTOM: i32 = 12;
+const PANEL_H:      i32 = 54;
+const PANEL_R:      i32 = 14;
+const MENU_BTN_W:   i32 = 72;
+const FAV_TILE:     i32 = 40;
+const FAV_GAP:      i32 = 8;
+
+fn panel_top(h: i32) -> i32 { h - PANEL_BOTTOM - PANEL_H }
+fn fav_x(i: usize) -> i32 { PANEL_MARGIN + 8 + MENU_BTN_W + 16 + i as i32 * (FAV_TILE + FAV_GAP) }
 
 const CURSOR_W: u32 = 12;
 const CURSOR_H: u32 = 20;
@@ -102,128 +115,161 @@ fn restore_cursor_bg(fb: &mut Framebuffer, x: i32, y: i32, buf: &[u32]) {
     }
 }
 
-fn draw_cursor(fb: &mut Framebuffer, x: i32, y: i32) {
+fn draw_cursor_fn(fb: &mut Framebuffer, x: i32, y: i32) {
     for row in 0..CURSOR_H as i32 {
         for col in 0..CURSOR_W as i32 {
             if CURSOR_SHAPE[row as usize][col as usize] {
                 let px = x + col; let py = y + row;
                 if px >= 0 && py >= 0 && (px as u32) < fb.width && (py as u32) < fb.height {
-                    fb.set_pixel(px as u32, py as u32, CURSOR);
+                    fb.set_pixel(px as u32, py as u32, CURSOR_CLR);
                 }
             }
         }
     }
 }
 
-// ---- Static desktop (bg + taskbar) — only called on scene dirty ----
-fn draw_scene_static(fb: &mut Framebuffer) {
-    let w = fb.width; let h = fb.height;
-    let tb_y = h - 28;
-    fb.fill_rect(0, 0, w, h, BG);
-    // Subtle grid (below topbar, above taskbar)
-    let mut gx = 0u32; while gx < w { fb.fill_rect(gx, TOPBAR_H, 1, tb_y.saturating_sub(TOPBAR_H), 0x0D1628); gx += 40; }
-    let mut gy = TOPBAR_H; while gy < tb_y { fb.fill_rect(0, gy, w, 1, 0x0D1628); gy += 40; }
-    // Tux art (centered between topbar and taskbar)
-    let art = [
-        "   .--.   ",
-        "  |o_o |  ",
-        "  |:_/ |  ",
-        " //   \\ \\ ",
-        "(|     | )",
-        " \\'\\_._/'\\",
-        " \\___)=(_/",
-    ];
-    let art_w = 10u32 * 8; let art_h = 7u32 * 8;
-    let art_x = w.saturating_sub(art_w) / 2;
-    let canvas_h = tb_y.saturating_sub(TOPBAR_H);
-    let art_y = TOPBAR_H + canvas_h.saturating_sub(art_h + 80) / 2;
-    for (i, line) in art.iter().enumerate() {
-        fb.draw_str(art_x, art_y + i as u32 * 8, line, AMBER, BG);
-    }
-    let tag = "Binary hardware. Ternary mind.";
-    fb.draw_str(w.saturating_sub(tag.len() as u32 * 8) / 2, art_y + art_h + 8, tag, DIM, BG);
-    // Bottom taskbar
-    fb.fill_rect(0, tb_y, w, 28, TASKBAR);
-    fb.fill_rect(0, tb_y, w, 1, BORDER);
-    fb.draw_bitmap_2x(4, tb_y + 6, &DINGIR, GREEN, TASKBAR);
-    fb.draw_str(28, tb_y + 10, "RUSTY PENGUIN", GREEN, TASKBAR);
-    // Top bar placeholder (will be filled by draw_topbar)
-    fb.fill_rect(0, 0, w, TOPBAR_H, TOPBAR);
-    fb.fill_rect(0, TOPBAR_H - 1, w, 1, 0x1E293B);
+fn draw_cursor(fb: &mut Framebuffer, x: i32, y: i32) {
+    draw_cursor_fn(fb, x, y);
 }
 
-// ---- Launcher buttons ----
+// ---- Dock icon definitions ----
+// label, terminal command (None = browser launch), title, accent color
 struct Launcher { label: &'static str, cmd: Option<&'static str>, title: &'static str, color: u32 }
 const LAUNCHERS: &[Launcher] = &[
-    Launcher { label: " psh ", cmd: None,              title: "psh — Terminal",    color: GREEN },
-    Launcher { label: " ps  ", cmd: Some("ps\n"),      title: "ps — Processes",    color: BLUE  },
-    Launcher { label: " ai  ", cmd: Some("ai 32\n"),   title: "ai — Inference",    color: AMBER },
-    Launcher { label: " trit", cmd: Some("trit 42\n"), title: "trit — Ternary",    color: 0xC084FC },
+    Launcher { label: "Term",    cmd: Some(""),          title: "Terminal",        color: 0x6FE18B },
+    Launcher { label: "Files",   cmd: Some("ls -la\n"),  title: "Files",           color: 0x8CC6E5 },
+    Launcher { label: "Edit",    cmd: Some("nano\n"),    title: "Text Editor",     color: 0xF5C451 },
+    Launcher { label: "Proc",    cmd: Some("ps aux\n"),  title: "Processes",       color: 0x909A92 },
+    Launcher { label: "AI",      cmd: Some("ai 32\n"),   title: "TIS Runtime",     color: 0xECDAA7 },
+    Launcher { label: "Web",     cmd: None,              title: "Browser",         color: 0x60C0FF },
 ];
+const N_ICONS: usize = 6;
 
-fn launcher_rects(fw: u32, fh: u32) -> [(u32, u32, u32, u32); 4] {
-    let bw: u32 = 52; let bh: u32 = 20; let gap: u32 = 8;
-    let total = 4 * bw + 3 * gap;
-    let sx = fw.saturating_sub(total) / 2;
-    let y  = fh - 28 - bh - 10;
-    [
-        (sx,               y, bw, bh),
-        (sx + bw + gap,    y, bw, bh),
-        (sx + 2*(bw+gap),  y, bw, bh),
-        (sx + 3*(bw+gap),  y, bw, bh),
-    ]
-}
+// ---- Static desktop — warm-stone gradient + hero card + bottom dock ----
+fn draw_scene_static(fb: &mut Framebuffer) {
+    let w = fb.width as i32; let h = fb.height as i32;
+    let ptop = panel_top(h);
 
-fn draw_launchers(fb: &mut Framebuffer) {
-    let rects = launcher_rects(fb.width, fb.height);
-    for (l, (x, y, w, h)) in LAUNCHERS.iter().zip(rects.iter()) {
-        fb.fill_rect(*x, *y, *w, *h, DIMMER);
-        fb.fill_rect(*x, *y, *w, 1,  l.color);
-        fb.fill_rect(*x, *y, 1,  *h, l.color);
-        fb.fill_rect(*x + *w - 1, *y, 1, *h, l.color);
-        fb.fill_rect(*x, *y + *h - 1, *w, 1, l.color);
-        fb.draw_str(*x + 2, *y + 6, l.label, l.color, DIMMER);
+    // Wallpaper gradient #252D29 → #1B211E + soft green glow at top
+    for y in 0..h {
+        let t = y as u64 * 256 / h as u64;
+        let mut r = 0x25u64.saturating_sub(0x0Au64 * t / 255);
+        let mut g = 0x2Du64.saturating_sub(0x0Cu64 * t / 255);
+        let b = 0x29u64.saturating_sub(0x0Bu64 * t / 255);
+        if t < 140 { let glow = (140 - t) * 10 / 140; g += glow; r += glow / 3; }
+        fb.fill_rect_s(0, y, w, 1, ((r as u32) << 16) | ((g as u32) << 8) | b as u32);
+    }
+
+    // Hero card (frosted glass)
+    let lw = 260i32; let lh = 152i32;
+    let lx = (w - lw) / 2;
+    let ly = (ptop - lh) / 2;
+    fb.fill_rounded_rect(lx - 1, ly + 7, lw + 2, lh, 17, 0x070A08);
+    fb.fill_rounded_rect(lx,     ly + 3, lw,     lh, 15, 0x0C110E);
+    fb.fill_rounded_rect_glass(lx, ly, lw, lh, 14, 0x222B27, 210);
+    fb.fill_rect_s(lx + 14, ly + 1, lw - 28, 1, 0x4C564F);
+    fb.draw_star8(lx + lw / 2, ly + 28, 14, ACCENT_CREAM);
+    fb.draw_str_2x((lx as u32) + (lw as u32 - 5 * 16) / 2, (ly + 50) as u32, "RUSTY", WHITE, 0x222B27);
+    fb.draw_str_2x((lx as u32) + (lw as u32 - 7 * 16) / 2, (ly + 72) as u32, "PENGUIN", GREEN, 0x222B27);
+    fb.draw_str((lx as u32) + (lw as u32 - 10 * 8) / 2, (ly + 102) as u32, "OS v1.0.0", DIM, 0x222B27);
+    let tag = "Bare-metal Rust · Ternary mind · Linux kernel";
+    let tag_y = ly + lh + 14;
+    if tag_y + 8 < ptop {
+        let tx = (w - tag.len() as i32 * 8) / 2;
+        fb.draw_str(tx.max(0) as u32, tag_y as u32, tag, DIM, BG);
+    }
+
+    // Bottom dock — frosted glass panel
+    let px = PANEL_MARGIN; let pw = w - 2 * PANEL_MARGIN;
+    fb.fill_rounded_rect(px - 1, ptop + 3, pw + 2, PANEL_H, PANEL_R + 2, 0x0C110E);
+    fb.fill_rounded_rect_glass(px, ptop, pw, PANEL_H, PANEL_R, PANEL_SOLID, 210);
+    fb.fill_rect_s(px + PANEL_R, ptop + 1, pw - 2 * PANEL_R, 1, PANEL_EDGE);
+
+    // Menu button (dingir + "Menu")
+    let mbx = PANEL_MARGIN + 8; let mby = ptop + 7;
+    fb.fill_rounded_rect(mbx, mby, MENU_BTN_W, 40, 10, 0x323C37);
+    fb.fill_rect_s(mbx, mby, MENU_BTN_W, 2, GREEN);
+    fb.draw_star8(mbx + 15, mby + 20, 9, GREEN);
+    fb.draw_str((mbx + 30) as u32, (mby + 16) as u32, "Menu", WHITE, 0x323C37);
+    // separator
+    fb.fill_rect_s(mbx + MENU_BTN_W + 7, ptop + 12, 1, PANEL_H - 24, PANEL_EDGE);
+
+    // Dock icons
+    for i in 0..N_ICONS {
+        let ix = fav_x(i); let iy = ptop + 7;
+        let l = &LAUNCHERS[i];
+        fb.fill_rounded_rect(ix, iy, FAV_TILE, FAV_TILE, 8, 0x2E3A34);
+        fb.fill_rect_s(ix, iy, FAV_TILE, 2, l.color);
+        let lx2 = ix as u32 + (FAV_TILE as u32 - l.label.len() as u32 * 8) / 2;
+        fb.draw_str(lx2, (iy + 16) as u32, l.label, l.color, 0x2E3A34);
     }
 }
 
-fn launcher_hit(fw: u32, fh: u32, mx: i32, my: i32) -> Option<usize> {
-    for (i, (x, y, w, h)) in launcher_rects(fw, fh).iter().enumerate() {
-        if mx >= *x as i32 && mx < (*x + *w) as i32 && my >= *y as i32 && my < (*y + *h) as i32 {
+// ---- Taskbar: task buttons inside the dock tasks area ----
+fn tasks_start_x() -> i32 {
+    fav_x(N_ICONS) + FAV_GAP
+}
+
+fn tbwin_rect(fh: i32, slot: usize) -> (i32, i32, i32, i32) {
+    (tasks_start_x() + slot as i32 * 116, panel_top(fh) + 7, 108, 40)
+}
+
+fn draw_taskbar_win_btns(fb: &mut Framebuffer, term_wins: &[TermWin]) {
+    let fh = fb.height as i32;
+    let ptop = panel_top(fh);
+    let pr = PANEL_MARGIN + fb.width as i32 - 2 * PANEL_MARGIN;
+    let n = term_wins.len();
+    for (slot, tw) in term_wins.iter().enumerate() {
+        let (x, y, w, h) = tbwin_rect(fh, slot);
+        if x + w >= pr - 120 { break; }
+        let is_focused = slot == n - 1;
+        let is_min = tw.win.minimized;
+        let bg = if is_focused { 0x3A4A3Eu32 } else { 0x2A352Fu32 };
+        let col = if is_min { DIM } else if is_focused { GREEN } else { WHITE };
+        fb.fill_rounded_rect_glass(x, y, w, h, 6, bg, 200);
+        if is_focused { fb.fill_rect_s(x + 4, y + h - 3, w - 8, 2, GREEN); }
+        let dot = if is_min { "  " } else { "• " };
+        let lbl: String = dot.chars().chain(tw.win.title.chars()).take(((w - 8) / 8) as usize).collect();
+        fb.draw_str((x + 4) as u32, (y + (h - 8) / 2) as u32, &lbl, col, bg);
+    }
+}
+
+fn tbwin_hit(fw: u32, fh: u32, wins: &[TermWin], mx: i32, my: i32) -> Option<usize> {
+    for (slot, _) in wins.iter().enumerate() {
+        let (x, y, w, h) = tbwin_rect(fh as i32, slot);
+        if mx >= x && mx < x + w && my >= y && my < y + h { return Some(slot); }
+    }
+    None
+}
+
+// Dock icon hit test
+fn dock_icon_hit(h: i32, mx: i32, my: i32) -> Option<usize> {
+    let ptop = panel_top(h);
+    for i in 0..N_ICONS {
+        let ix = fav_x(i); let iy = ptop + 7;
+        if mx >= ix && mx < ix + FAV_TILE && my >= iy && my < iy + FAV_TILE {
             return Some(i);
         }
     }
     None
 }
 
-// ---- Taskbar window buttons (all open windows, not just minimized) ----
-fn tbwin_rect(fw: u32, fh: u32, slot: usize) -> (i32, i32, i32, i32) {
-    (160 + slot as i32 * 100, (fh - 22) as i32, 92, 18)
+fn menu_btn_hit(h: i32, mx: i32, my: i32) -> bool {
+    let ptop = panel_top(h);
+    let mbx = PANEL_MARGIN + 8; let mby = ptop + 7;
+    mx >= mbx && mx < mbx + MENU_BTN_W && my >= mby && my < mby + 40
 }
 
-fn draw_taskbar_win_btns(fb: &mut Framebuffer, term_wins: &[TermWin]) {
-    let fw = fb.width; let fh = fb.height;
-    let n = term_wins.len();
-    for (slot, tw) in term_wins.iter().enumerate() {
-        let (x, y, w, h) = tbwin_rect(fw, fh, slot);
-        if x + w >= fw as i32 { break; }
-        let is_focused  = slot == n - 1;
-        let is_minimized = tw.win.minimized;
-        let bg  = if is_minimized { 0x111827u32 } else { 0x1E293Bu32 };
-        let txt = if is_minimized { DIM } else { WHITE };
-        let top = if is_focused { BLUE } else { BORDER };
-        fb.fill_rect(x as u32, y as u32, w as u32, h as u32, bg);
-        fb.fill_rect(x as u32, y as u32, w as u32, 1, top);
-        let lbl: String = tw.win.title.chars().take(((w - 4) / 8) as usize).collect();
-        fb.draw_str((x + 2) as u32, (y + 5) as u32, &lbl, txt, bg);
+// Launch a browser: try firefox, chromium-browser, chromium in order.
+fn launch_browser() {
+    for browser in &["firefox", "chromium-browser", "chromium", "google-chrome"] {
+        if std::process::Command::new(browser).spawn().is_ok() { return; }
     }
-}
-
-fn tbwin_hit(fw: u32, fh: u32, wins: &[TermWin], mx: i32, my: i32) -> Option<usize> {
-    for (slot, _) in wins.iter().enumerate() {
-        let (x, y, w, h) = tbwin_rect(fw, fh, slot);
-        if mx >= x && mx < x + w && my >= y && my < y + h { return Some(slot); }
-    }
-    None
+    // Fallback: open a terminal with a helpful message
+    let _ = std::process::Command::new("/bin/psh")
+        .arg("-c")
+        .arg("echo 'Install Firefox: apt install firefox'; exec /bin/psh")
+        .spawn();
 }
 
 
@@ -326,94 +372,75 @@ impl StatSampler {
     }
 }
 
+// draw_topbar now draws the bottom-panel TRAY (right side) — clock + MEM + ternary bus.
 fn draw_topbar(fb: &mut Framebuffer, time: &str, s: &SysStats) {
-    let fw = fb.width;
-    fb.fill_rect(0, 0, fw, TOPBAR_H, TOPBAR);
-    fb.fill_rect(0, TOPBAR_H - 1, fw, 1, 0x1E293B);
+    let w = fb.width as i32; let h = fb.height as i32;
+    let ptop = panel_top(h);
+    let pr = PANEL_MARGIN + w - 2 * PANEL_MARGIN; // panel right edge
+    let ty = ptop + 7;
+    let tray_w = 360;
+    let trx = (pr - tray_w - 6).max(PANEL_MARGIN + 8);
+    // Clear tray region
+    fb.fill_rounded_rect_glass(trx, ty, pr - trx - 6, 40, 6, PANEL_SOLID, 230);
 
-    // Left: time
-    fb.draw_str(8, 4, time, WHITE, TOPBAR);
-
-    // Right: stats — build a compact string right-aligned
-    // Format: CPU 23%  MEM 74%  SWAP 5%  v0.1kB ^0.1kB
-    let rx_str = if s.net_rx_kb > 999 { format!("{}M", s.net_rx_kb/1024) }
-                 else                 { format!("{}K", s.net_rx_kb) };
-    let tx_str = if s.net_tx_kb > 999 { format!("{}M", s.net_tx_kb/1024) }
-                 else                 { format!("{}K", s.net_tx_kb) };
-
-    // Draw each stat from right to left
-    let mut rx = fw as i32 - 8;
-
-    // net tx (upload arrow up)
-    let up = format!("^{}", tx_str);
-    rx -= up.len() as i32 * 8;
-    fb.draw_str(rx as u32, 4, &up, 0x34D399, TOPBAR);
-    rx -= 8;
-
-    // net rx (download arrow down)
-    let dn = format!("v{}", rx_str);
-    rx -= dn.len() as i32 * 8;
-    fb.draw_str(rx as u32, 4, &dn, 0x60A5FA, TOPBAR);
-    rx -= 16;
-
-    if s.swap_pct > 0 {
-        let sw = format!("SW{}%", s.swap_pct);
-        rx -= sw.len() as i32 * 8;
-        fb.draw_str(rx as u32, 4, &sw, 0xA78BFA, TOPBAR);
-        rx -= 16;
+    // Ternary bus — 5 cycling cells
+    let phase = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) / 1;
+    let mut cx = trx + 6;
+    let cyy = ptop + (PANEL_H - 12) / 2;
+    for i in 0..5i64 {
+        let col = match (phase as i64 + i).rem_euclid(3) { 0 => TRIT_NEG, 1 => TRIT_ZERO, _ => TRIT_POS };
+        fb.fill_rounded_rect(cx, cyy, 11, 12, 3, col);
+        cx += 15;
     }
 
-    let mem = format!("M{}%", s.mem_pct);
-    rx -= mem.len() as i32 * 8;
-    fb.draw_str(rx as u32, 4, &mem, 0x4ADE80, TOPBAR);
-    rx -= 16;
-
-    let cpu = format!("C{}%", s.cpu_pct);
-    rx -= cpu.len() as i32 * 8;
-    fb.draw_str(rx as u32, 4, &cpu, 0xFBBF24, TOPBAR);
+    // MEM %
+    let mem_col = if s.mem_pct > 80 { TRIT_NEG } else if s.mem_pct > 60 { AMBER } else { GREEN };
+    let mem_s = format!("MEM {}%", s.mem_pct);
+    let cpu_s = format!("CPU {}%", s.cpu_pct);
+    let clk_x = (pr - 10 - time.len() as i32 * 8).max(trx + 120);
+    let lbl_x = (clk_x - (mem_s.len() as i32 + cpu_s.len() as i32 + 2) * 8 - 8).max(trx + 90);
+    let row_y = (ty + 14) as u32;
+    fb.draw_str(lbl_x as u32, row_y, &cpu_s, DIM, PANEL_SOLID);
+    fb.draw_str((lbl_x + cpu_s.len() as i32 * 8 + 8) as u32, row_y, &mem_s, mem_col, PANEL_SOLID);
+    fb.draw_str(clk_x as u32, row_y, time, WHITE, PANEL_SOLID);
 }
 
-// ---- Start menu ----
-fn dingir_hit(fh: u32, mx: i32, my: i32) -> bool {
-    let tb_y = fh as i32 - 28;
-    mx >= 4 && mx < 24 && my >= tb_y + 4 && my < tb_y + 24
-}
-
-fn start_menu_bounds(fh: u32) -> (i32, i32, i32, i32) {
-    let h = 14 + LAUNCHERS.len() as i32 * 20 + 4;
-    let w = 160i32;
-    (2, fh as i32 - 28 - h, w, h)
+// ---- Start menu (Aero glass style) ----
+fn start_menu_bounds(fh: i32) -> (i32, i32, i32, i32) {
+    let mh = 10 + LAUNCHERS.len() as i32 * 28 + 8;
+    let mw = 200i32;
+    let ptop = panel_top(fh);
+    (PANEL_MARGIN, ptop - mh - 6, mw, mh)
 }
 
 fn draw_start_menu(fb: &mut Framebuffer) {
-    let (x, y, w, h) = start_menu_bounds(fb.height);
-    fb.fill_rect(x as u32, y as u32, w as u32, h as u32, 0x1A2535);
-    fb.fill_rect(x as u32, y as u32, w as u32, 1, 0x475569);
-    fb.fill_rect(x as u32, y as u32, 1, h as u32, 0x475569);
-    fb.fill_rect((x + w - 1) as u32, y as u32, 1, h as u32, 0x475569);
-    fb.draw_bitmap_2x((x + 2) as u32, (y + 2) as u32, &DINGIR, GREEN, 0x1A2535);
-    fb.draw_str((x + 22) as u32, (y + 4) as u32, "RUSTY PENGUIN", GREEN, 0x1A2535);
-    fb.fill_rect(x as u32, (y + 14) as u32, w as u32, 1, 0x334155);
+    let (x, y, w, h) = start_menu_bounds(fb.height as i32);
+    fb.fill_rounded_rect(x + 2, y + 4, w, h, 10, 0x0A0E0C);
+    fb.fill_rounded_rect_glass(x, y, w, h, 10, 0x1E2620, 230);
+    fb.fill_rect_s(x + 10, y, w - 20, 2, GREEN);
+    fb.draw_star8(x + 14, y + 20, 8, ACCENT_CREAM);
+    fb.draw_str((x + 28) as u32, (y + 14) as u32, "RUSTY PENGUIN", GREEN, 0x1E2620);
+    fb.fill_rect_s(x + 8, y + 28, w - 16, 1, PANEL_EDGE);
     for (i, l) in LAUNCHERS.iter().enumerate() {
-        let iy = y + 16 + i as i32 * 20;
-        fb.fill_rect(x as u32, iy as u32, w as u32, 20, 0x1A2535);
-        fb.draw_str((x + 6) as u32, (iy + 6) as u32, l.label, l.color, 0x1A2535);
-        let desc = l.title.split('—').nth(1).unwrap_or("").trim();
-        fb.draw_str((x + 48) as u32, (iy + 6) as u32, desc, 0x64748B, 0x1A2535);
+        let iy = y + 34 + i as i32 * 28;
+        fb.fill_rect_s(x + 4, iy, w - 8, 26, 0x1E2620);
+        fb.fill_rect_s(x + 6, iy + 9, 3, 8, l.color);
+        fb.draw_str((x + 14) as u32, (iy + 9) as u32, l.title, l.color, 0x1E2620);
     }
 }
 
-fn start_menu_hit(fh: u32, mx: i32, my: i32) -> Option<usize> {
+fn start_menu_hit(fh: i32, mx: i32, my: i32) -> Option<usize> {
     let (x, y, w, _) = start_menu_bounds(fh);
     if mx < x || mx >= x + w { return None; }
     for i in 0..LAUNCHERS.len() {
-        let iy = y + 16 + i as i32 * 20;
-        if my >= iy && my < iy + 20 { return Some(i); }
+        let iy = y + 34 + i as i32 * 28;
+        if my >= iy && my < iy + 28 { return Some(i); }
     }
     None
 }
 
-fn start_menu_bounds_hit(fh: u32, mx: i32, my: i32) -> bool {
+fn start_menu_bounds_hit(fh: i32, mx: i32, my: i32) -> bool {
     let (x, y, w, h) = start_menu_bounds(fh);
     mx >= x && mx < x + w && my >= y && my < y + h
 }
@@ -421,7 +448,6 @@ fn start_menu_bounds_hit(fh: u32, mx: i32, my: i32) -> bool {
 // ---- Full scene recomposite ----
 fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, stats: &SysStats) {
     draw_scene_static(fb);
-    draw_launchers(fb);
     draw_taskbar_win_btns(fb, wins);
     let n = wins.len();
     for (i, tw) in wins.iter_mut().enumerate() {
@@ -433,7 +459,6 @@ fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, 
         tw.win_dirty = false;
     }
     if start_menu { draw_start_menu(fb); }
-    // Topbar always on top
     draw_topbar(fb, &read_rtc(), stats);
 }
 
@@ -445,12 +470,12 @@ fn open_term(w: i32, h: i32, n: usize, l: &Launcher) -> Option<TermWin> {
         Ok(t) => {
             let off = n as i32 * 20;
             let wx = ((w - wm::WINDOW_W) / 2 + off).max(0).min(w - wm::WINDOW_W);
-            let wy = ((h - wm::WINDOW_H - 28) / 2 + off).max(TOPBAR_H as i32).min(h - wm::WINDOW_H - 28);
+            let wy = ((h - wm::WINDOW_H - 66) / 2 + off).max(4).min(h - wm::WINDOW_H - 66);
             slog(&format!("terminal '{}' opened at {}x{}", l.title, wx, wy));
             Some(TermWin {
                 win: wm::Window::new(wx, wy, l.title),
                 term: t, win_dirty: true,
-                initial_cmd: l.cmd.map(|s| s.as_bytes().to_vec()),
+                initial_cmd: l.cmd.map(|s| if s.is_empty() { vec![] } else { s.as_bytes().to_vec() }),
             })
         }
         Err(e) => { slog(&format!("spawn failed: {}", e)); None }
@@ -503,13 +528,12 @@ fn main() {
     thread::spawn(move || keyboard::keyboard_thread(kb_tx));
 
     draw_scene_static(&mut fb);
-    draw_launchers(&mut fb);
     let mut sampler = StatSampler::new();
     sampler.sample();
     draw_topbar(&mut fb, &read_rtc(), &sampler.stats);
 
     let cbl = (CURSOR_W * CURSOR_H) as usize;
-    let mut cbuf = vec![BG; cbl];
+    let mut cbuf: Vec<u32> = vec![BG; cbl];
     let mut cx: i32; let mut cy: i32;
     { let s = mouse.lock().unwrap(); cx = s.x; cy = s.y; }
     save_cursor_bg(&fb, cx, cy, &mut cbuf);
@@ -597,65 +621,64 @@ fn main() {
         let left_edge = left_down && (prev_btn & 0x01) == 0;
 
         if left_edge {
-            // Start menu intercepts all clicks
             if start_menu_open {
-                if let Some(li) = start_menu_hit(fb.height, cx, cy) {
-                    if let Some(tw) = open_term(w, h, wins.len(), &LAUNCHERS[li]) {
+                if let Some(li) = start_menu_hit(h, cx, cy) {
+                    if li < N_ICONS && LAUNCHERS[li].cmd.is_none() {
+                        launch_browser();
+                    } else if let Some(tw) = open_term(w, h, wins.len(), &LAUNCHERS[li.min(N_ICONS-1)]) {
                         wins.push(tw);
                     }
                 }
                 start_menu_open = false;
                 scene_dirty = true;
-            } else if dingir_hit(fb.height, cx, cy) {
-                start_menu_open = true;
-                restore_cursor_bg(&mut fb, cx, cy, &cbuf);
-                draw_start_menu(&mut fb);
-                save_cursor_bg(&fb, cx, cy, &mut cbuf);
-                draw_cursor(&mut fb, cx, cy);
+            } else if menu_btn_hit(h, cx, cy) {
+                start_menu_open = !start_menu_open;
+                scene_dirty = true;
             } else {
-                // Find topmost window under click
-                let hit = wins.iter().enumerate().rev()
-                    .find(|(_, tw)| wm::window_hit(&tw.win, cx, cy))
-                    .map(|(i, _)| i);
-
-                if let Some(hi) = hit {
-                    // Bring to front
-                    if hi != wins.len() - 1 {
-                        let tw = wins.remove(hi); wins.push(tw);
-                        wins.last_mut().unwrap().win_dirty = true;
-                    }
-                    let last = wins.len() - 1;
-                    let tw = &mut wins[last];
-
-                    if wm::close_btn_hit(&tw.win, cx, cy) {
-                        restore_cursor_bg(&mut fb, cx, cy, &cbuf);
-                        wins.remove(last);
-                        recomposite(&mut fb, &mut wins, false, &sampler.stats);
-                        scene_dirty = false;
-                        save_cursor_bg(&fb, cx, cy, &mut cbuf);
-                        draw_cursor(&mut fb, cx, cy);
-                    } else if wm::min_btn_hit(&tw.win, cx, cy) {
-                        tw.win.minimized = true;
+                // Dock icon click
+                if let Some(di) = dock_icon_hit(h, cx, cy) {
+                    if LAUNCHERS[di].cmd.is_none() {
+                        launch_browser();
+                    } else if let Some(tw) = open_term(w, h, wins.len(), &LAUNCHERS[di]) {
+                        wins.push(tw);
                         scene_dirty = true;
-                    } else if wm::max_btn_hit(&tw.win, cx, cy) {
-                        tw.win.toggle_maximize(w, h, TOPBAR_H as i32);
-                        scene_dirty = true;
-                    } else if wm::titlebar_hit(&tw.win, cx, cy) {
-                        tw.win.dragging = true;
-                        tw.win.drag_ox  = cx - tw.win.x;
-                        tw.win.drag_oy  = cy - tw.win.y;
                     }
                 } else {
-                    // Taskbar minimized button?
-                    if let Some(mi) = tbwin_hit(fb.width, fb.height, &wins, cx, cy) {
+                    // Window clicks
+                    let hit = wins.iter().enumerate().rev()
+                        .find(|(_, tw)| wm::window_hit(&tw.win, cx, cy))
+                        .map(|(i, _)| i);
+
+                    if let Some(hi) = hit {
+                        if hi != wins.len() - 1 {
+                            let tw = wins.remove(hi); wins.push(tw);
+                            wins.last_mut().unwrap().win_dirty = true;
+                        }
+                        let last = wins.len() - 1;
+                        let tw = &mut wins[last];
+
+                        if wm::close_btn_hit(&tw.win, cx, cy) {
+                            restore_cursor_bg(&mut fb, cx, cy, &cbuf);
+                            wins.remove(last);
+                            recomposite(&mut fb, &mut wins, false, &sampler.stats);
+                            scene_dirty = false;
+                            save_cursor_bg(&fb, cx, cy, &mut cbuf);
+                            draw_cursor(&mut fb, cx, cy);
+                        } else if wm::min_btn_hit(&tw.win, cx, cy) {
+                            tw.win.minimized = true;
+                            scene_dirty = true;
+                        } else if wm::max_btn_hit(&tw.win, cx, cy) {
+                            tw.win.toggle_maximize(w, h);
+                            scene_dirty = true;
+                        } else if wm::titlebar_hit(&tw.win, cx, cy) {
+                            tw.win.dragging = true;
+                            tw.win.drag_ox  = cx - tw.win.x;
+                            tw.win.drag_oy  = cy - tw.win.y;
+                        }
+                    } else if let Some(mi) = tbwin_hit(fb.width, fb.height, &wins, cx, cy) {
                         wins[mi].win.minimized = false;
                         let tw = wins.remove(mi); wins.push(tw);
                         scene_dirty = true;
-                    } else if let Some(li) = launcher_hit(fb.width, fb.height, cx, cy) {
-                        if let Some(tw) = open_term(w, h, wins.len(), &LAUNCHERS[li]) {
-                            wins.push(tw);
-                            scene_dirty = true;
-                        }
                     }
                 }
             }
@@ -666,7 +689,7 @@ fn main() {
             if let Some(tw) = wins.last_mut() {
                 if tw.win.dragging {
                     let nx2 = (cx - tw.win.drag_ox).max(0).min(w - tw.win.w);
-                    let ny2 = (cy - tw.win.drag_oy).max(TOPBAR_H as i32).min(h - tw.win.h - 28);
+                    let ny2 = (cy - tw.win.drag_oy).max(0).min(h - tw.win.h - 66);
                     if nx2 != tw.win.x || ny2 != tw.win.y {
                         tw.win.x = nx2; tw.win.y = ny2;
                         scene_dirty = true;

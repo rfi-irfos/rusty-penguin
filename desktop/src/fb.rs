@@ -241,6 +241,130 @@ impl Framebuffer {
         }
     }
 
+    pub fn draw_str_2x(&mut self, x: u32, y: u32, s: &str, fg: u32, bg: u32) {
+        for (i, ch) in s.chars().enumerate() {
+            let cx = x + i as u32 * 16;
+            let idx = (ch as u32).wrapping_sub(0x20);
+            if idx >= 95 { continue; }
+            let bmp = &crate::font::FONT[idx as usize];
+            for row in 0..8u32 {
+                let byte = bmp[row as usize];
+                for col in 0..8u32 {
+                    let color = if (byte >> (7 - col)) & 1 != 0 { fg } else { bg };
+                    self.set_pixel(cx + col * 2,     y + row * 2,     color);
+                    self.set_pixel(cx + col * 2 + 1, y + row * 2,     color);
+                    self.set_pixel(cx + col * 2,     y + row * 2 + 1, color);
+                    self.set_pixel(cx + col * 2 + 1, y + row * 2 + 1, color);
+                }
+            }
+        }
+    }
+
+    // Signed-coordinate fill_rect — clips negatives.
+    pub fn fill_rect_s(&mut self, x: i32, y: i32, w: i32, h: i32, color: u32) {
+        if w <= 0 || h <= 0 { return; }
+        let x0 = x.max(0) as u32; let y0 = y.max(0) as u32;
+        let x1 = (x + w).max(0).min(self.width as i32) as u32;
+        let y1 = (y + h).max(0).min(self.height as i32) as u32;
+        if x1 > x0 && y1 > y0 { self.fill_rect(x0, y0, x1 - x0, y1 - y0, color); }
+    }
+
+    pub fn fill_circle(&mut self, cx: i32, cy: i32, r: i32, color: u32) {
+        let r2 = r * r;
+        for dy in -r..=r {
+            for dx in -r..=r {
+                if dx * dx + dy * dy <= r2 {
+                    let px = cx + dx; let py = cy + dy;
+                    if px >= 0 && py >= 0 { self.set_pixel(px as u32, py as u32, color); }
+                }
+            }
+        }
+    }
+
+    pub fn fill_rounded_rect(&mut self, x: i32, y: i32, w: i32, h: i32, r: i32, color: u32) {
+        if w <= 0 || h <= 0 { return; }
+        let r = r.min(w / 2).min(h / 2).max(0);
+        let r2 = r * r;
+        let cxl = x + r; let cxr = x + w - 1 - r;
+        let cyt = y + r; let cyb = y + h - 1 - r;
+        let xa = x.max(0) as u32; let ya = y.max(0) as u32;
+        let xb = (x + w).min(self.width as i32).max(0) as u32;
+        let yb = (y + h).min(self.height as i32).max(0) as u32;
+        for py in ya..yb {
+            for px in xa..xb {
+                let ipx = px as i32; let ipy = py as i32;
+                if r > 0 && (
+                   (ipx < cxl && ipy < cyt && { let dx=ipx-cxl; let dy=ipy-cyt; dx*dx+dy*dy>r2 })
+                || (ipx > cxr && ipy < cyt && { let dx=ipx-cxr; let dy=ipy-cyt; dx*dx+dy*dy>r2 })
+                || (ipx < cxl && ipy > cyb && { let dx=ipx-cxl; let dy=ipy-cyb; dx*dx+dy*dy>r2 })
+                || (ipx > cxr && ipy > cyb && { let dx=ipx-cxr; let dy=ipy-cyb; dx*dx+dy*dy>r2 }))
+                { continue; }
+                self.set_pixel(px, py, color);
+            }
+        }
+    }
+
+    pub fn fill_rounded_rect_glass(&mut self, x: i32, y: i32, w: i32, h: i32, r: i32, color: u32, alpha: u32) {
+        if w <= 0 || h <= 0 { return; }
+        let r = r.min(w / 2).min(h / 2).max(0);
+        let r2 = r * r;
+        let cxl = x + r; let cxr = x + w - 1 - r;
+        let cyt = y + r; let cyb = y + h - 1 - r;
+        let xa = x.max(0) as u32; let ya = y.max(0) as u32;
+        let xb = (x + w).min(self.width as i32).max(0) as u32;
+        let yb = (y + h).min(self.height as i32).max(0) as u32;
+        let a = alpha.min(255); let ia = 255 - a;
+        let sr = (color >> 16) & 0xFF; let sg = (color >> 8) & 0xFF; let sb = color & 0xFF;
+        for py in ya..yb {
+            for px in xa..xb {
+                let ipx = px as i32; let ipy = py as i32;
+                if r > 0 && (
+                   (ipx < cxl && ipy < cyt && { let dx=ipx-cxl; let dy=ipy-cyt; dx*dx+dy*dy>r2 })
+                || (ipx > cxr && ipy < cyt && { let dx=ipx-cxr; let dy=ipy-cyt; dx*dx+dy*dy>r2 })
+                || (ipx < cxl && ipy > cyb && { let dx=ipx-cxl; let dy=ipy-cyb; dx*dx+dy*dy>r2 })
+                || (ipx > cxr && ipy > cyb && { let dx=ipx-cxr; let dy=ipy-cyb; dx*dx+dy*dy>r2 }))
+                { continue; }
+                let d = self.get_pixel(px, py);
+                let dr = (d >> 16) & 0xFF; let dg = (d >> 8) & 0xFF; let db = d & 0xFF;
+                let or_ = (sr * a + dr * ia) / 255;
+                let og  = (sg * a + dg * ia) / 255;
+                let ob  = (sb * a + db * ia) / 255;
+                self.set_pixel(px, py, (or_ << 16) | (og << 8) | ob);
+            }
+        }
+    }
+
+    // 8-point star (dingir) via scanline polygon fill.
+    pub fn draw_star8(&mut self, cx: i32, cy: i32, r: i32, color: u32) {
+        let ir = r / 2;
+        let pts: [(i32, i32); 16] = {
+            let mut p = [(0i32, 0i32); 16];
+            for i in 0..8usize {
+                let a = i as f64 * core::f64::consts::PI / 4.0;
+                let ai = a + core::f64::consts::PI / 8.0;
+                p[i * 2]     = ((cx as f64 + r  as f64 * a.cos())  as i32, (cy as f64 - r  as f64 * a.sin())  as i32);
+                p[i * 2 + 1] = ((cx as f64 + ir as f64 * ai.cos()) as i32, (cy as f64 - ir as f64 * ai.sin()) as i32);
+            }
+            p
+        };
+        let min_y = pts.iter().map(|p| p.1).min().unwrap_or(cy);
+        let max_y = pts.iter().map(|p| p.1).max().unwrap_or(cy);
+        for sy in min_y..=max_y {
+            let mut xs = std::vec::Vec::new();
+            let n = pts.len();
+            for i in 0..n {
+                let (x0, y0) = pts[i]; let (x1, y1) = pts[(i + 1) % n];
+                if (y0 <= sy && y1 > sy) || (y1 <= sy && y0 > sy) {
+                    let ix = x0 + (sy - y0) * (x1 - x0) / (y1 - y0);
+                    xs.push(ix);
+                }
+            }
+            xs.sort_unstable();
+            let mut j = 0;
+            while j + 1 < xs.len() { self.fill_rect_s(xs[j], sy, xs[j+1] - xs[j] + 1, 1, color); j += 2; }
+        }
+    }
+
     #[inline]
     pub fn flush(&self) {}
 }
