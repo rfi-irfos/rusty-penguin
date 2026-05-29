@@ -1231,7 +1231,7 @@ impl App for Browser {
         fb.fill_rounded_rect(ax as i32, by as i32, aw as i32, 22, 8, 0x1A211C);
         // small lock dot + url text
         fb.fill_circle((ax + 12) as i32, (by + 11) as i32, 3, 0x6FE18B);
-        fb.draw_aa((ax + 22) as i32, (by + 3) as i32, page.url, 0xCFE6D6, false);
+        fb.draw_aa((ax + 22) as i32, (by + 4) as i32, page.url, 0xCFE6D6, crate::fb::AA_S);
 
         // ── Page area (light "web" surface) ────────────────────────────────────
         let py0 = y + BR_TOOLBAR_H + 1;
@@ -1243,13 +1243,13 @@ impl App for Browser {
         for ln in page.lines {
             if (cy as u32) + 30 > py0 + ph { break; }
             match ln.kind {
-                K_H1   => { fb.draw_aa(lx, cy, ln.text, 0x1B6B3A, true); }
-                K_H2   => { fb.draw_aa(lx, cy, ln.text, 0xB4502A, false); }
-                K_P    => { fb.draw_aa(lx, cy, ln.text, 0x3A3A36, false); }
-                K_NOTE => { fb.draw_aa(lx, cy, ln.text, 0x8A8A82, false); }
+                K_H1   => { fb.draw_aa(lx, cy, ln.text, 0x1B6B3A, crate::fb::AA_L); }
+                K_H2   => { fb.draw_aa(lx, cy, ln.text, 0xB4502A, crate::fb::AA_S); }
+                K_P    => { fb.draw_aa(lx, cy, ln.text, 0x3A3A36, crate::fb::AA_S); }
+                K_NOTE => { fb.draw_aa(lx, cy, ln.text, 0x8A8A82, crate::fb::AA_T); }
                 K_LINK => {
-                    let lw = Framebuffer::aa_w(ln.text, false);
-                    fb.draw_aa(lx, cy, ln.text, 0x2A6FB0, false);
+                    let lw = Framebuffer::aa_w(ln.text, crate::fb::AA_S);
+                    fb.draw_aa(lx, cy, ln.text, 0x2A6FB0, crate::fb::AA_S);
                     fb.fill_rect(lx as u32, cy as u32 + 17, lw as u32, 1, 0x2A6FB0);
                 }
                 _ => {}
@@ -1272,7 +1272,7 @@ impl App for Browser {
         for ln in page.lines {
             let adv = br_line_advance(ln.kind);
             if ln.kind == K_LINK && ln.link >= 0 {
-                let lw = Framebuffer::aa_w(ln.text, false);
+                let lw = Framebuffer::aa_w(ln.text, crate::fb::AA_S);
                 if mx >= 24 && mx < 24 + lw && my >= cy && my < cy + adv {
                     self.page = ln.link as usize;
                     self.dirty = true;

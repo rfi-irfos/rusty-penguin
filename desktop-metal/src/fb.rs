@@ -6,6 +6,11 @@ extern crate alloc;
 
 use crate::font::FONT;
 
+// AA font size selectors (see draw_aa).
+pub const AA_T: u8 = 0;  // tiny — captions, descriptions, section labels, tray
+pub const AA_S: u8 = 1;  // body — names, titles, menu items
+pub const AA_L: u8 = 2;  // display — hero title, page H1
+
 pub struct Framebuffer {
     pub data:   *mut u8,           // points at the backbuffer when double-buffered
     pub width:  u32,
@@ -276,8 +281,13 @@ impl Framebuffer {
     // `big` selects the display size (hero/headings) vs the body size.
     // Coordinates: (x, top) is the top-left of the text box; we add the ascent
     // internally to land on the baseline.
-    pub fn aa_w(s: &str, big: bool) -> i32 {
-        let glyphs: &[crate::font_aa::Glyph] = if big { &crate::font_aa::GLYPHS_L } else { &crate::font_aa::GLYPHS_S };
+    // Font size selector: AA_T (tiny/secondary), AA_S (body), AA_L (display).
+    pub fn aa_w(s: &str, sz: u8) -> i32 {
+        let glyphs: &[crate::font_aa::Glyph] = match sz {
+            crate::fb::AA_L => &crate::font_aa::GLYPHS_L,
+            crate::fb::AA_T => &crate::font_aa::GLYPHS_T,
+            _ => &crate::font_aa::GLYPHS_S,
+        };
         let mut w = 0i32;
         for ch in s.chars() {
             let c = ch as u32;
@@ -286,15 +296,15 @@ impl Framebuffer {
         w
     }
 
-    pub fn aa_line(big: bool) -> i32 {
-        if big { crate::font_aa::LINE_L } else { crate::font_aa::LINE_S }
+    pub fn aa_line(sz: u8) -> i32 {
+        match sz { crate::fb::AA_L => crate::font_aa::LINE_L, crate::fb::AA_T => crate::font_aa::LINE_T, _ => crate::font_aa::LINE_S }
     }
 
-    pub fn draw_aa(&mut self, x: i32, top: i32, s: &str, fg: u32, big: bool) -> i32 {
-        let (glyphs, cov, ascent): (&[crate::font_aa::Glyph], &[u8], i32) = if big {
-            (&crate::font_aa::GLYPHS_L, &crate::font_aa::COV_L, crate::font_aa::ASCENT_L)
-        } else {
-            (&crate::font_aa::GLYPHS_S, &crate::font_aa::COV_S, crate::font_aa::ASCENT_S)
+    pub fn draw_aa(&mut self, x: i32, top: i32, s: &str, fg: u32, sz: u8) -> i32 {
+        let (glyphs, cov, ascent): (&[crate::font_aa::Glyph], &[u8], i32) = match sz {
+            crate::fb::AA_L => (&crate::font_aa::GLYPHS_L, &crate::font_aa::COV_L, crate::font_aa::ASCENT_L),
+            crate::fb::AA_T => (&crate::font_aa::GLYPHS_T, &crate::font_aa::COV_T, crate::font_aa::ASCENT_T),
+            _ => (&crate::font_aa::GLYPHS_S, &crate::font_aa::COV_S, crate::font_aa::ASCENT_S),
         };
         let baseline = top + ascent;
         let fr = (fg >> 16) & 0xFF; let fgc = (fg >> 8) & 0xFF; let fb_ = fg & 0xFF;
@@ -328,9 +338,9 @@ impl Framebuffer {
     }
 
     // Centered AA text within [x, x+w).
-    pub fn draw_aa_centered(&mut self, x: i32, w: i32, top: i32, s: &str, fg: u32, big: bool) {
-        let tw = Self::aa_w(s, big);
-        self.draw_aa(x + (w - tw).max(0) / 2, top, s, fg, big);
+    pub fn draw_aa_centered(&mut self, x: i32, w: i32, top: i32, s: &str, fg: u32, sz: u8) {
+        let tw = Self::aa_w(s, sz);
+        self.draw_aa(x + (w - tw).max(0) / 2, top, s, fg, sz);
     }
 
     // ── Soft radial glow ──────────────────────────────────────────────────────
