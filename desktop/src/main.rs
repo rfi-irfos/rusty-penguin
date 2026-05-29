@@ -260,16 +260,37 @@ fn menu_btn_hit(h: i32, mx: i32, my: i32) -> bool {
     mx >= mbx && mx < mbx + MENU_BTN_W && my >= mby && my < mby + 40
 }
 
-// Launch a browser: try firefox, chromium-browser, chromium in order.
-fn launch_browser() {
+// Launch a browser.
+// On installed systems (firefox/chromium in PATH): spawn and return immediately.
+// On live ISO with initrd-web.img (X11 available): start an X11 session with
+// the browser. This BLOCKS until the user closes the browser, then the RP
+// desktop redraws. The initrd-web.img bundles Xorg + Firefox + Chrome so
+// /usr/bin/firefox and /usr/bin/startx are available in the live environment.
+fn launch_browser() -> bool {
+    // Fast path: browser already in PATH (installed system)
     for browser in &["firefox", "chromium-browser", "chromium", "google-chrome"] {
-        if std::process::Command::new(browser).spawn().is_ok() { return; }
+        if std::process::Command::new(browser).spawn().is_ok() { return false; }
     }
-    // Fallback: open a terminal with a helpful message
+    // X11 session path (live ISO with initrd-web.img): blocking — desktop
+    // resumes automatically when the user closes the browser.
+    let browsers = &[
+        "/usr/bin/firefox",
+        "/usr/bin/chromium-browser",
+        "/usr/bin/chromium",
+    ];
+    for xb in browsers {
+        if std::path::Path::new(xb).exists() {
+            // startx <browser> — Xorg starts, browser runs, X exits when browser closes
+            let _ = std::process::Command::new("startx").arg(xb).status();
+            return true;  // true = full-screen session ended, redraw needed
+        }
+    }
+    // Last resort: terminal with install instructions
     let _ = std::process::Command::new("/bin/psh")
         .arg("-c")
-        .arg("echo 'Install Firefox: apt install firefox'; exec /bin/psh")
+        .arg("echo 'No browser found. Run: apt install firefox'; exec /bin/psh")
         .spawn();
+    false
 }
 
 
@@ -624,7 +645,7 @@ fn main() {
             if start_menu_open {
                 if let Some(li) = start_menu_hit(h, cx, cy) {
                     if li < N_ICONS && LAUNCHERS[li].cmd.is_none() {
-                        launch_browser();
+                        let _ = launch_browser();
                     } else if let Some(tw) = open_term(w, h, wins.len(), &LAUNCHERS[li.min(N_ICONS-1)]) {
                         wins.push(tw);
                     }
@@ -638,7 +659,9 @@ fn main() {
                 // Dock icon click
                 if let Some(di) = dock_icon_hit(h, cx, cy) {
                     if LAUNCHERS[di].cmd.is_none() {
-                        launch_browser();
+                        // Browser: blocking if X11 session starts; redraw on return.
+                        let needs_redraw = launch_browser();
+                        if needs_redraw { scene_dirty = true; }
                     } else if let Some(tw) = open_term(w, h, wins.len(), &LAUNCHERS[di]) {
                         wins.push(tw);
                         scene_dirty = true;
