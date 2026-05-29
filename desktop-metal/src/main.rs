@@ -144,8 +144,8 @@ fn menu_btn_rect(h: u32) -> (i32, i32, i32, i32) { (PANEL_MARGIN + 8, panel_top(
 // Calculator); everything else lives in the start menu. Values index into
 // DESKTOP_ICONS so the existing click-handler match (keyed on that index) is
 // unchanged. Keeping the dock to 5 also avoids the 10-icon overflow regression.
-const N_FAV: usize = 5;
-const FAV_IDX: [usize; N_FAV] = [0, 1, 6, 2, 3]; // Term, Files, TIS, Edit, Calc
+const N_FAV: usize = 6;
+const FAV_IDX: [usize; N_FAV] = [0, 1, 10, 2, 3, 6]; // Term, Files, Web, Edit, Calc, TIS
 
 // favourites_row: CSS FlexRow for the icon strip inside the dock.
 // Left edge starts after Menu button + separator gap.
@@ -196,6 +196,10 @@ const ICON_MINE:  [u8; 8] = [0x08, 0x2A, 0x1C, 0x3E, 0x7F, 0x7F, 0x3E, 0x1C];
 // Doom icon: a stylized demon/skull face
 #[rustfmt::skip]
 const ICON_DOOM:  [u8; 8] = [0x3C, 0x7E, 0xDB, 0xFF, 0xBD, 0xFF, 0x66, 0x24];
+
+// Web browser icon: globe with meridians
+#[rustfmt::skip]
+const ICON_WEB: [u8; 8] = [0x3C, 0x52, 0x9D, 0xBD, 0xBD, 0x9D, 0x52, 0x3C];
 
 // Dingir — cuneiform divine determinative (8-pointed star with wedges)
 #[rustfmt::skip]
@@ -560,6 +564,7 @@ const DESKTOP_ICONS: &[DesktopIcon] = &[
     DesktopIcon { label: "Snake", bitmap: &ICON_SNAKE, color: 0x4ADE80, launcher_idx: 10 },
     DesktopIcon { label: "Mines", bitmap: &ICON_MINE,  color: 0xFCD34D, launcher_idx: 11 },
     DesktopIcon { label: "Doom",  bitmap: &ICON_DOOM,  color: 0xEF4444, launcher_idx: 12 },
+    DesktopIcon { label: "Web",   bitmap: &ICON_WEB,   color: 0x8CC6E5, launcher_idx: 13 }, // index 10
 ];
 
 // Favourites are horizontal 40×40 tiles inside the bottom panel (see fav_rect).
@@ -696,18 +701,19 @@ struct MenuItem {
 
 // Real apps only — no raw shell commands.
 const MENU_ITEMS: &[MenuItem] = &[
+    MenuItem { label: "Web",          desc: "Native browser (local pages)", color: 0x8CC6E5, kind: MenuLaunch::App(9) },
     MenuItem { label: "Files",        desc: "Browse & manage files",      color: 0x8CC6E5, kind: MenuLaunch::App(0) },
     MenuItem { label: "Text Editor",  desc: "Write & edit documents",     color: 0xF5C451, kind: MenuLaunch::App(1) },
     MenuItem { label: "Calculator",   desc: "Ternary arithmetic",         color: 0xFFD700, kind: MenuLaunch::App(2) },
     MenuItem { label: "Terminal",     desc: "psh — bare-metal shell",     color: 0x6FE18B, kind: MenuLaunch::Term(0) },
     MenuItem { label: "Settings",     desc: "System preferences",         color: 0x9CA3AF, kind: MenuLaunch::App(4) },
     MenuItem { label: "TIS Console",  desc: "Sparse ternary AI runtime",  color: 0x4A9EFF, kind: MenuLaunch::App(5) },
-    // games start at index 6
+    // games start at index 7
     MenuItem { label: "Snake",        desc: "Classic arcade",             color: 0x4ADE80, kind: MenuLaunch::App(6) },
     MenuItem { label: "Minesweeper",  desc: "Find the mines",             color: 0xFCD34D, kind: MenuLaunch::App(7) },
     MenuItem { label: "Doom",         desc: "E1M1 — shareware DOOM",      color: 0xEF4444, kind: MenuLaunch::App(8) },
 ];
-const MENU_APPS_END: usize = 6;  // items 0..6 = apps, 6..9 = games
+const MENU_APPS_END: usize = 7;  // items 0..7 = apps, 7..10 = games
 
 const MENU_W:       i32 = 280;
 const MENU_HDR_H:   i32 = 54;   // dingir avatar + title + subtitle
@@ -1138,6 +1144,35 @@ fn open_system_clock(w: i32, h: i32, n: usize) -> Option<TermWin> {
     }
 }
 
+fn open_browser(w: i32, h: i32, n: usize) -> Option<TermWin> {
+    match term::Terminal::spawn() {
+        Ok(t) => {
+            let br = alloc::boxed::Box::new(app::Browser::new());
+            let off = n as i32 * 20;
+            let left_margin = 75;
+            let wx = ((w - left_margin - wm::WINDOW_W) / 2 + left_margin + off)
+                .max(left_margin)
+                .min(w - wm::WINDOW_W);
+            let wy = ((h - wm::WINDOW_H - 28) / 2 + off).max(TOPBAR_H as i32).min(h - wm::WINDOW_H - 28);
+            let mut win = wm::Window::new(wx, wy, "Web");
+            // Browser wants a roomier page than the default terminal-sized window.
+            let bw = 620.min(w - 90); let bh = 460.min(h - 28 - TOPBAR_H as i32);
+            win.w = bw; win.h = bh;
+            win.restore_w = bw; win.restore_h = bh;
+            win.x = win.x.min(w - bw - 8).max(75);
+            Some(TermWin {
+                win,
+                term: t,
+                editor: None,
+                app: Some(br),
+                win_dirty: true,
+                initial_cmd: None,
+            })
+        }
+        Err(_) => None,
+    }
+}
+
 fn open_help_browser(w: i32, h: i32, n: usize) -> Option<TermWin> {
     match term::Terminal::spawn() {
         Ok(t) => {
@@ -1520,6 +1555,7 @@ pub extern "C" fn _start() -> ! {
                             MenuLaunch::App(6)   => open_snake(w, h, wins.len()),
                             MenuLaunch::App(7)   => open_minesweeper(w, h, wins.len()),
                             MenuLaunch::App(8)   => open_doom(w, h, wins.len()),
+                            MenuLaunch::App(9)   => open_browser(w, h, wins.len()),
                             MenuLaunch::App(_)   => None,
                         };
                         if let Some(tw) = opened { wins.push(tw); }
@@ -1608,6 +1644,7 @@ pub extern "C" fn _start() -> ! {
                             7 => open_snake(w, h, wins.len()),
                             8 => open_minesweeper(w, h, wins.len()),
                             9 => open_doom(w, h, wins.len()),
+                            10 => open_browser(w, h, wins.len()),
                             _ => None,
                         };
                         if let Some(tw) = opened {

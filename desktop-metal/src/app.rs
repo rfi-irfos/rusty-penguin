@@ -1105,6 +1105,192 @@ impl App for HelpBrowser {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Browser — a NATIVE web browser shell rendered by our own engine (no Chromium,
+// no WebKit). Real chrome: back/forward/reload + an address bar, and pages laid
+// out by the desktop's text/CSS primitives. v1 renders built-in local pages
+// offline — live networking is the next kernel brick (NIC + TCP/IP), and a real
+// remote-web engine rides the Linux ABI layer. Honest about that on the page.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const BR_TOOLBAR_H: u32 = 34;
+
+// Line kinds for the tiny built-in page layout engine.
+const K_SPACE: u8 = 0;
+const K_H1:    u8 = 1;
+const K_H2:    u8 = 2;
+const K_P:     u8 = 3;
+const K_LINK:  u8 = 4;
+const K_NOTE:  u8 = 5;
+
+struct BrLine { kind: u8, text: &'static str, link: i32 }
+struct BrPage { url: &'static str, title: &'static str, lines: &'static [BrLine] }
+
+const PAGE_HOME: &[BrLine] = &[
+    BrLine { kind: K_H1,   text: "Rusty Penguin Web",                                  link: -1 },
+    BrLine { kind: K_NOTE, text: "Native browser . rendered by the ternary engine",   link: -1 },
+    BrLine { kind: K_SPACE,text: "",                                                   link: -1 },
+    BrLine { kind: K_P,    text: "No Chromium, no WebKit underneath. This window, its",link: -1 },
+    BrLine { kind: K_P,    text: "chrome and every page are drawn by Rusty Penguin's", link: -1 },
+    BrLine { kind: K_P,    text: "own framebuffer + CSS engine.",                      link: -1 },
+    BrLine { kind: K_SPACE,text: "",                                                   link: -1 },
+    BrLine { kind: K_H2,   text: "Bookmarks",                                          link: -1 },
+    BrLine { kind: K_LINK, text: "About this OS",                                      link: 1 },
+    BrLine { kind: K_LINK, text: "The ternary case",                                   link: 2 },
+    BrLine { kind: K_LINK, text: "When does the live web work?",                       link: 3 },
+];
+
+const PAGE_ABOUT: &[BrLine] = &[
+    BrLine { kind: K_H1,   text: "About Rusty Penguin",                                link: -1 },
+    BrLine { kind: K_NOTE, text: "rustypenguin://about",                               link: -1 },
+    BrLine { kind: K_SPACE,text: "",                                                   link: -1 },
+    BrLine { kind: K_P,    text: "A complete operating system written from scratch in",link: -1 },
+    BrLine { kind: K_P,    text: "pure Rust: its own bootloader, kernel, drivers,",    link: -1 },
+    BrLine { kind: K_P,    text: "window manager and apps. No Linux kernel, no libc.", link: -1 },
+    BrLine { kind: K_SPACE,text: "",                                                   link: -1 },
+    BrLine { kind: K_P,    text: "Ternary logic (-1 / 0 / +1) is a first-class",       link: -1 },
+    BrLine { kind: K_P,    text: "primitive at every layer. Built by RFI-IRFOS.",      link: -1 },
+    BrLine { kind: K_SPACE,text: "",                                                   link: -1 },
+    BrLine { kind: K_LINK, text: "< Back to start",                                    link: 0 },
+];
+
+const PAGE_TERNARY: &[BrLine] = &[
+    BrLine { kind: K_H1,   text: "The ternary case",                                   link: -1 },
+    BrLine { kind: K_NOTE, text: "rustypenguin://ternary",                             link: -1 },
+    BrLine { kind: K_SPACE,text: "",                                                   link: -1 },
+    BrLine { kind: K_P,    text: "Binary has two states. We treat a third as real:",   link: -1 },
+    BrLine { kind: K_P,    text: "dormant. Not running, not stopped - resting.",       link: -1 },
+    BrLine { kind: K_SPACE,text: "",                                                   link: -1 },
+    BrLine { kind: K_P,    text: "Zero-weight work is skipped, not computed. The",     link: -1 },
+    BrLine { kind: K_P,    text: "renderer, scheduler and AI runtime all do this.",    link: -1 },
+    BrLine { kind: K_SPACE,text: "",                                                   link: -1 },
+    BrLine { kind: K_LINK, text: "< Back to start",                                    link: 0 },
+];
+
+const PAGE_WEB: &[BrLine] = &[
+    BrLine { kind: K_H1,   text: "When does the live web work?",                       link: -1 },
+    BrLine { kind: K_NOTE, text: "rustypenguin://roadmap",                             link: -1 },
+    BrLine { kind: K_SPACE,text: "",                                                   link: -1 },
+    BrLine { kind: K_P,    text: "Honestly: not yet. Loading real sites needs two",    link: -1 },
+    BrLine { kind: K_P,    text: "things this OS is still building from scratch:",     link: -1 },
+    BrLine { kind: K_SPACE,text: "",                                                   link: -1 },
+    BrLine { kind: K_P,    text: "1. A network stack - a NIC driver + TCP/IP on the",  link: -1 },
+    BrLine { kind: K_P,    text: "   bare-metal kernel (planned).",                    link: -1 },
+    BrLine { kind: K_P,    text: "2. The Linux ABI layer maturing enough to host a",   link: -1 },
+    BrLine { kind: K_P,    text: "   full web engine (bricks 1-5 done).",              link: -1 },
+    BrLine { kind: K_SPACE,text: "",                                                   link: -1 },
+    BrLine { kind: K_P,    text: "Until then this renders local pages. We don't",      link: -1 },
+    BrLine { kind: K_P,    text: "pretend velocity equals completion.",                link: -1 },
+    BrLine { kind: K_SPACE,text: "",                                                   link: -1 },
+    BrLine { kind: K_LINK, text: "< Back to start",                                    link: 0 },
+];
+
+fn br_page(i: usize) -> BrPage {
+    match i {
+        1 => BrPage { url: "rustypenguin://about",   title: "About Rusty Penguin", lines: PAGE_ABOUT },
+        2 => BrPage { url: "rustypenguin://ternary", title: "The ternary case",    lines: PAGE_TERNARY },
+        3 => BrPage { url: "rustypenguin://roadmap", title: "Live web roadmap",    lines: PAGE_WEB },
+        _ => BrPage { url: "rustypenguin://home",    title: "Start",               lines: PAGE_HOME },
+    }
+}
+
+fn br_line_advance(kind: u8) -> i32 {
+    match kind { K_H1 => 30, K_H2 => 22, K_P => 16, K_LINK => 20, K_NOTE => 16, _ => 10 }
+}
+
+pub struct Browser {
+    page: usize,
+    pub dirty: bool,
+    pub wants_close: bool,
+}
+
+impl Browser {
+    pub fn new() -> Self { Browser { page: 0, dirty: true, wants_close: false } }
+}
+
+impl App for Browser {
+    fn render(&mut self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, h: u32) {
+        let page = br_page(self.page);
+
+        // ── Toolbar (dark chrome) ──────────────────────────────────────────────
+        fb.fill_rect(x, y, w, BR_TOOLBAR_H, 0x2A332F);
+        fb.fill_rect(x, y + BR_TOOLBAR_H, w, 1, 0x55615A);
+        // nav buttons: back / forward / reload
+        let by = y + 5;
+        let labels = ["<", ">", "@"]; // @ stands in for reload glyph
+        for (i, lab) in labels.iter().enumerate() {
+            let bx = x + 6 + i as u32 * 26;
+            let active = i == 0 && self.page != 0; // only Back is ever active here
+            let bg = if active { 0x39443E } else { 0x232C28 };
+            let fg = if active { 0x6FE18B } else { 0x6B756D };
+            fb.fill_rounded_rect(bx as i32, by as i32, 22, 22, 6, bg);
+            fb.draw_str(bx + 8, by + 7, lab, fg, bg);
+        }
+        // address bar pill
+        let ax = x + 6 + 3 * 26 + 6;
+        let aw = (x + w).saturating_sub(ax + 8);
+        fb.fill_rounded_rect(ax as i32, by as i32, aw as i32, 22, 8, 0x1A211C);
+        // small lock dot + url text
+        fb.fill_circle((ax + 12) as i32, (by + 11) as i32, 3, 0x6FE18B);
+        fb.draw_str(ax + 22, by + 7, page.url, 0xCFE6D6, 0x1A211C);
+
+        // ── Page area (light "web" surface) ────────────────────────────────────
+        let py0 = y + BR_TOOLBAR_H + 1;
+        let ph  = h.saturating_sub(BR_TOOLBAR_H + 1);
+        fb.fill_rect(x, py0, w, ph, 0xF2F0E8);
+
+        let mut cy = py0 as i32 + 16;
+        let lx = x + 24;
+        for ln in page.lines {
+            if (cy as u32) + 24 > py0 + ph { break; }
+            match ln.kind {
+                K_H1   => fb.draw_str_scaled_t(lx, cy as u32, ln.text, 0x1B6B3A, 2),
+                K_H2   => fb.draw_str(lx, cy as u32, ln.text, 0xB4502A, 0xF2F0E8),
+                K_P    => fb.draw_str(lx, cy as u32, ln.text, 0x3A3A36, 0xF2F0E8),
+                K_NOTE => fb.draw_str(lx, cy as u32, ln.text, 0x8A8A82, 0xF2F0E8),
+                K_LINK => {
+                    let lw = ln.text.len() as u32 * 8;
+                    fb.draw_str(lx, cy as u32, ln.text, 0x2A6FB0, 0xF2F0E8);
+                    fb.fill_rect(lx, cy as u32 + 9, lw, 1, 0x2A6FB0); // underline
+                }
+                _ => {}
+            }
+            cy += br_line_advance(ln.kind);
+        }
+        self.dirty = false;
+    }
+
+    fn on_mouse(&mut self, mx: i32, my: i32, _w: u32, _h: u32, buttons: u8) {
+        if buttons & 1 == 0 { return; }
+        // Back button hit (top-left of toolbar)
+        if mx >= 6 && mx < 28 && my >= 5 && my < 27 {
+            if self.page != 0 { self.page = 0; self.dirty = true; }
+            return;
+        }
+        // Link hit-testing in the page area — re-walk the same layout.
+        let page = br_page(self.page);
+        let mut cy = BR_TOOLBAR_H as i32 + 1 + 16;
+        for ln in page.lines {
+            let adv = br_line_advance(ln.kind);
+            if ln.kind == K_LINK && ln.link >= 0 {
+                let lw = ln.text.len() as i32 * 8;
+                if mx >= 24 && mx < 24 + lw && my >= cy && my < cy + adv {
+                    self.page = ln.link as usize;
+                    self.dirty = true;
+                    return;
+                }
+            }
+            cy += adv;
+        }
+    }
+
+    fn on_key(&mut self, _key: u8) {}
+
+    fn wants_close(&self) -> bool { self.wants_close }
+
+    fn title(&self) -> &str { "Web" }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Games — preinstalled on the Rusty Penguin desktop. Pure-Rust, no_std, no heap
 // churn in the render path (numbers via u64_into, no per-frame format!()).
 // ─────────────────────────────────────────────────────────────────────────────
