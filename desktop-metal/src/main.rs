@@ -120,6 +120,29 @@ const AMBER:    u32 = 0xF5C451;  // Warm amber accent
 const BLUE:     u32 = 0x8CC6E5;  // Warm sky (--sky)
 const CURSOR:   u32 = 0xF5F5F7;  // Match white
 const TEAL:     u32 = 0x00D4AA;  // More vibrant teal
+const ACCENT_CREAM: u32 = 0xECDAA7;  // dingir gold (--cream)
+const TRIT_NEG:  u32 = 0xEF7575;  // ternary -1
+const TRIT_ZERO: u32 = 0x909A92;  // ternary 0
+const TRIT_POS:  u32 = 0x6FE18B;  // ternary +1
+
+// ── Bottom panel layout (Simeon's v2 mockup form: a single floating bottom dock
+// — Menu · favourites · tasks · tray — and NO top bar). ─────────────────────────
+const PANEL_MARGIN: i32 = 14;   // inset from screen left/right
+const PANEL_BOTTOM: i32 = 12;   // gap below the panel
+const PANEL_H:      i32 = 54;   // panel height
+const MENU_BTN_W:   i32 = 72;   // "Menu" button width
+const FAV_TILE:     i32 = 40;   // favourite icon tile
+const FAV_GAP:      i32 = 8;    // gap between favourites
+const PANEL_SOLID:  u32 = 0x2A332F;  // panel fill (mockup --panel-solid)
+const PANEL_EDGE:   u32 = 0x3C4641;  // panel hairline / top sheen
+const PANEL_R:      i32 = 14;        // panel corner radius
+
+fn panel_top(h: u32) -> i32 { h as i32 - PANEL_BOTTOM - PANEL_H }
+fn menu_btn_rect(h: u32) -> (i32, i32, i32, i32) { (PANEL_MARGIN + 8, panel_top(h) + 7, MENU_BTN_W, 40) }
+fn fav_rect(i: usize, h: u32) -> (i32, i32, i32, i32) {
+    let x = PANEL_MARGIN + 8 + MENU_BTN_W + 16 + i as i32 * (FAV_TILE + FAV_GAP);
+    (x, panel_top(h) + 7, FAV_TILE, FAV_TILE)
+}
 
 // Fill area (hot-spot at (0,0)).  Save/restore adds 1px border on all four sides.
 const CURSOR_W:  u32 = 13;
@@ -302,87 +325,59 @@ fn rtc_str() -> Strbuf {
 
 fn draw_scene_static(fb: &mut Framebuffer) {
     let w = fb.width; let h = fb.height;
-    let tb_y = h - 28;
+    let ptop = panel_top(h);
 
-    // Desktop wallpaper — warm-stone gradient from the v2 mockup: a vertical
-    // lerp #252D29 → #1B211E with a soft green glow lifting the upper third
-    // (approximating the mockup's top-right green radial). Warm, not cool.
-    let total_rows = tb_y.saturating_sub(TOPBAR_H);
-    let mut y = TOPBAR_H;
-    while y < tb_y {
-        let t = (y - TOPBAR_H) as u64 * 256 / total_rows.max(1) as u64; // 0..255
-        // base warm-stone lerp (top → bottom)
+    // Wallpaper — warm-stone gradient over the FULL screen (v2 mockup form: no
+    // top bar). Vertical lerp #252D29 → #1B211E + a soft green glow up top.
+    let mut y = 0u32;
+    while y < h {
+        let t = y as u64 * 256 / h as u64;
         let mut r = 0x25u64 - 0x0A * t / 255;
         let mut g = 0x2Du64 - 0x0C * t / 255;
         let mut b = 0x29u64 - 0x0B * t / 255;
-        // soft green glow near the top (fades out by mid-screen)
-        if t < 140 {
-            let glow = (140 - t) * 10 / 140;     // 0..10
-            g += glow;
-            r += glow / 3;
-        }
-        let col = ((r as u32) << 16) | ((g as u32) << 8) | b as u32;
-        fb.fill_rect(0, y, w, 1, col);
+        if t < 140 { let glow = (140 - t) * 10 / 140; g += glow; r += glow / 3; }
+        fb.fill_rect(0, y, w, 1, ((r as u32) << 16) | ((g as u32) << 8) | b as u32);
         y += 1;
     }
 
-    // Centered logo widget — 240×140px with modern styling
-    const LW: u32 = 240; const LH: u32 = 140;
-    let logo_ix = w.saturating_sub(LW) / 2;
-    let logo_iy = TOPBAR_H + tb_y.saturating_sub(TOPBAR_H).saturating_sub(LH + 28) / 2;
-    let lx = logo_ix as i32; let ly2 = logo_iy as i32;
-    // Center welcome card — rendered through the ternary CSS engine (Apple-like:
-    // soft shadow, rounded corners, hairline edge). Hardcoded fill_rects are
-    // being migrated to declarative styles; this is the first component.
+    // Centered hero card (frosted glass via the ternary CSS engine), in the
+    // space above the bottom panel.
+    const LW: u32 = 260; const LH: u32 = 152;
+    let lx = (w.saturating_sub(LW) / 2) as i32;
+    let ly = ((ptop.max(0) as u32).saturating_sub(LH) / 2) as i32;
     let card = css::parse(
-        "background:#1c1c1e; border:#3a3a3c; radius:16; accent:#0a84ff; \
-         pad-x:18; pad-y:16; shadow:1"
-    );
+        "background:#222b27; border:#3c4641; radius:16; accent:#6fe18b; \
+         pad-x:18; pad-y:16; shadow:1");
     let inner_bg = card.bg;
-    css::paint_panel(fb, lx, ly2, LW as i32, LH as i32, &card, crate::trit::Trit::Zero);
-    // Dingir 3× icon (24×24) centered near top
-    fb.draw_bitmap_3x(logo_ix + (LW - 24) / 2, logo_iy + 16, &DINGIR, GREEN, inner_bg);
-    // "RUSTY" in 2× white with better spacing
-    fb.draw_str_2x(logo_ix + (LW - 5 * 16) / 2, logo_iy + 48, "RUSTY", WHITE, inner_bg);
-    // "PENGUIN" in 2× green
-    fb.draw_str_2x(logo_ix + (LW - 7 * 16) / 2, logo_iy + 70, "PENGUIN", GREEN, inner_bg);
-    // Version — subtle
-    fb.draw_str(logo_ix + (LW - 10 * 8) / 2, logo_iy + 100, "v1.0.0-bm", DIM, inner_bg);
-    // Tagline
+    css::paint_panel(fb, lx, ly, LW as i32, LH as i32, &card, crate::trit::Trit::Zero);
+    let lix = lx as u32; let liy = ly as u32;
+    fb.draw_bitmap_3x(lix + (LW - 24) / 2, liy + 16, &DINGIR, ACCENT_CREAM, inner_bg);
+    fb.draw_str_2x(lix + (LW - 5 * 16) / 2, liy + 50, "RUSTY",   WHITE, inner_bg);
+    fb.draw_str_2x(lix + (LW - 7 * 16) / 2, liy + 72, "PENGUIN", GREEN, inner_bg);
+    fb.draw_str(lix + (LW - 10 * 8) / 2, liy + 102, "OS v2.0.0", DIM, inner_bg);
     let tag = "Bare-metal Rust OS · Sparse ternary inference";
-    let tag_y = logo_iy + LH + 16;
-    if tag_y + 8 < tb_y {
-        fb.draw_str(w.saturating_sub(tag.len() as u32 * 8) / 2, tag_y, tag, DIM, BG);
+    let tag_y = ly + LH as i32 + 14;
+    if tag_y + 8 < ptop {
+        fb.draw_str(w.saturating_sub(tag.len() as u32 * 8) / 2, tag_y as u32, tag, DIM, BG);
     }
 
-    // ── Taskbar — gradient lighter at top, darker at bottom ──
-    fb.fill_rect(0, tb_y, w, 28, TASKBAR);
-    for dy in 0..28u32 {
-        let blend = (7u8).saturating_sub((dy * 7 / 27) as u8);
-        let col = (0x0Bu8.saturating_add(blend) as u32) << 16
-                | (0x14u8.saturating_add(blend) as u32) << 8
-                |  0x1Au8.saturating_add(blend) as u32;
-        fb.fill_rect(0, tb_y + dy, w, 1, col);
-    }
-    // Separator — subtle, clean line
-    fb.fill_rect(0, tb_y, w, 1, 0x2C2C38);
-    // Menu button — refined rounded style
-    fb.fill_rounded_rect(4, tb_y as i32 + 3, 62, 22, 5, 0x2C2C38);
-    fb.fill_rect(4, tb_y + 3, 62, 1, GREEN);  // green top accent
-    fb.draw_bitmap_2x(8, tb_y + 6, &DINGIR, GREEN, 0x2C2C38);
-    fb.draw_str(30, tb_y + 9, "Menu", WHITE, 0x2C2C38);
-    // Left icon dock panel — refined appearance
-    let dock_h = (tb_y - TOPBAR_H).saturating_sub(8);
-    fb.fill_rounded_rect(4, TOPBAR_H as i32 + 4, 62, dock_h as i32, 12, 0x1A1A24);
-    fb.fill_rect(4, TOPBAR_H + 4, 2, dock_h, 0x3C3C48);   // left edge highlight
-    fb.fill_rect(64, TOPBAR_H + 4, 2, dock_h, 0x0F0F17);  // right edge shadow
+    // ── Bottom panel — a single floating warm-stone dock (the mockup form) ──
+    let px = PANEL_MARGIN; let pw = w as i32 - 2 * PANEL_MARGIN;
+    fb.fill_rounded_rect(px - 1, ptop + 3, pw + 2, PANEL_H, PANEL_R + 2, 0x0C110E); // shadow
+    fb.fill_rounded_rect(px, ptop, pw, PANEL_H, PANEL_R, PANEL_SOLID);              // body
+    fb.fill_rect_s(px + PANEL_R, ptop + 1, pw - 2 * PANEL_R, 1, PANEL_EDGE);        // top sheen
 
-    // Separator after menu button
-    fb.fill_rect(70, tb_y + 5, 1, 18, 0x2C2C38);
-    // "Show desktop" strip — far right of taskbar
-    fb.fill_rect(w - 6, tb_y, 6, 28, 0x1A1A24);   // refined backing
-    fb.fill_rect(w - 5, tb_y, 1, 28, GREEN);      // green accent stripe
+    // Menu button (dingir + "Menu")
+    let (mbx, mby, mbw, _mbh) = menu_btn_rect(h);
+    fb.fill_rounded_rect(mbx, mby, mbw, 40, 10, 0x323C37);
+    fb.fill_rect_s(mbx, mby, mbw, 2, GREEN);  // green top accent
+    fb.draw_bitmap_2x(mbx as u32 + 8, mby as u32 + 12, &DINGIR, GREEN, 0x323C37);
+    fb.draw_str(mbx as u32 + 28, mby as u32 + 16, "Menu", WHITE, 0x323C37);
+    // separator
+    fb.fill_rect_s(mbx + mbw + 7, ptop + 12, 1, PANEL_H - 24, PANEL_EDGE);
 
+    // Favourites (horizontal app icons)
+    draw_desktop_icons(fb, None);
 }
 
 fn trit_indicator(ticks: u64) -> [u8; 7] {
@@ -396,82 +391,41 @@ fn trit_indicator(ticks: u64) -> [u8; 7] {
 }
 
 fn draw_topbar(fb: &mut Framebuffer, time: &str, s: &SysStats, ticks: u64) {
-    let fw = fb.width;
-    // Solid topbar with subtle gradient for depth (Ubuntu-like)
-    for dy in 0..TOPBAR_H {
-        let blend = (dy * 6 / TOPBAR_H) as u8;
-        let col = (0x1Au8.saturating_add(blend) as u32) << 16
-                | (0x1Au8.saturating_add(blend) as u32) << 8
-                |  0x24u8.saturating_add(blend) as u32;
-        fb.fill_rect(0, dy, fw, 1, col);
+    // v2 form: this draws the bottom-panel TRAY (right side) each frame over the
+    // solid panel — ternary {-1,0,+1} bus + clock + memory. (Name kept so the
+    // existing per-frame call sites don't change.)
+    let w = fb.width; let h = fb.height;
+    let ptop = panel_top(h);
+    let pr = PANEL_MARGIN + (w as i32 - 2 * PANEL_MARGIN); // panel right edge
+    let ty = ptop + 7;
+    // Clear the tray region with the solid panel color (no cumulative glass).
+    let tray_w = 340;
+    let trx = (pr - tray_w - 6).max(PANEL_MARGIN + 8);
+    fb.fill_rect_s(trx, ty, pr - trx - 6, 40, PANEL_SOLID);
+
+    // Ternary {-1,0,+1} bus — 5 cells cycling neg/zero/pos.
+    let phase = ticks / 24;
+    let mut cx = trx + 6;
+    let cyy = ptop + (PANEL_H - 12) / 2;
+    for i in 0..5i64 {
+        let col = match (phase as i64 + i).rem_euclid(3) { 0 => TRIT_NEG, 1 => TRIT_ZERO, _ => TRIT_POS };
+        fb.fill_rounded_rect(cx, cyy, 11, 12, 3, col);
+        cx += 15;
     }
-    // Bottom border for definition
-    fb.fill_rect(0, TOPBAR_H - 1, fw, 1, 0x3C3C48);
-    // Left accent bar (smaller, more refined)
-    fb.fill_rect(0, 0, 2, TOPBAR_H, GREEN);
-    let ty = (TOPBAR_H / 2).saturating_sub(4);
 
-    // LEFT: brand mark with better spacing
-    fb.draw_bitmap_2x(8, ty.saturating_sub(3), &DINGIR, GREEN, TOPBAR);
-    fb.draw_str(28, ty, "Rusty Penguin", WHITE, TOPBAR);
+    // Clock — right-aligned wall-clock string.
+    let clk_y = (ty + 14) as u32;
+    let clk_x = (pr - 10 - time.len() as i32 * 8).max(trx + 90) as u32;
+    fb.draw_str(clk_x, clk_y, time, WHITE, PANEL_SOLID);
 
-    // CENTER: uptime clock
-    let cx = (fw - time.len() as u32 * 8) / 2;
-    fb.draw_str(cx, ty, time, WHITE, TOPBAR);
-
-    // RIGHT: trit indicator + memory bar + pct label
-    let ind = trit_indicator(ticks);
-    let ind_str = core::str::from_utf8(&ind).unwrap_or("T[+--+]");
-    let mut rx = fw as i32 - 6;
-
-    // Trit indicator
-    rx -= ind_str.len() as i32 * 8;
-    if rx > 120 { fb.draw_str(rx as u32, ty, ind_str, AMBER, 0x090F1B); }
-    rx -= 8;
-
-    // Memory percentage text ("xx%")
-    let mut pct_buf = Strbuf::new();
-    pct_buf.push_u64(s.mem_pct as u64);
-    pct_buf.push(b'%');
-    let pct_str = pct_buf.as_str();
-    rx -= pct_str.len() as i32 * 8;
-    let mem_col = if s.mem_pct > 80 { 0xEF4444u32 } else if s.mem_pct > 60 { AMBER } else { GREEN };
-    if rx > 120 { fb.draw_str(rx as u32, ty, pct_str, mem_col, 0x090F1B); }
-    rx -= 4;
-
-    // Memory bar (52×8, inside a 1px dark track)
-    const BAR_W: i32 = 52;
-    rx -= BAR_W + 2;
-    let bar_y = ty as i32 - 1;
-    if rx > 120 {
-        fb.fill_rect_s(rx, bar_y, BAR_W + 2, 10, 0x060C18);      // outer track
-        fb.fill_rect_s(rx + 1, bar_y + 1, BAR_W, 8, 0x0E1C2C);   // inner track
-        let fill = (BAR_W * s.mem_pct as i32 / 100).max(2);
-        fb.fill_rect_s(rx + 1, bar_y + 1, fill, 8, mem_col);
-    }
-    rx -= 6;
-
-    // "MEM" label
-    if rx > 120 { fb.draw_str((rx - 24) as u32, ty, "MEM", DIM, 0x090F1B); }
-    rx -= 32;  // skip past the "MEM" label
-
-    // App heap usage (bump allocator never frees — this only grows).
-    // Useful early-warning for the leak/exhaustion failure mode that
-    // crashed multi-window earlier in the session.
-    let heap_used = allocator::used_bytes();
-    let heap_total = allocator::total_bytes();
-    let heap_pct = if heap_total > 0 {
-        ((heap_used as u64 * 100 / heap_total as u64) as u8).min(100)
-    } else { 0 };
-    let mut hp = Strbuf::new();
-    hp.push_u64(heap_pct as u64);
-    hp.push(b'%');
-    let hp_str = hp.as_str();
-    let heap_col = if heap_pct > 80 { 0xEF4444u32 } else if heap_pct > 60 { AMBER } else { GREEN };
-    rx -= hp_str.len() as i32 * 8;
-    if rx > 120 { fb.draw_str(rx as u32, ty, hp_str, heap_col, 0x090F1B); }
-    rx -= 32;
-    if rx > 120 { fb.draw_str(rx as u32, ty, "HEAP", DIM, 0x090F1B); }
+    // Memory % to the left of the clock.
+    let mem_col = if s.mem_pct > 80 { TRIT_NEG } else if s.mem_pct > 60 { AMBER } else { GREEN };
+    let mut mp = Strbuf::new(); mp.push_u64(s.mem_pct as u64); mp.push(b'%');
+    let mp_s = mp.as_str();
+    let lbl_x = (clk_x as i32 - (4 + mp_s.len() as i32) * 8 - 16).max(trx as i32 + 90) as u32;
+    fb.draw_str(lbl_x, clk_y, "MEM", DIM, PANEL_SOLID);
+    fb.draw_str(lbl_x + 32, clk_y, mp_s, mem_col, PANEL_SOLID);
+    let _ = ticks;
 }
 
 // ---- Launcher buttons ───────────────────────────────────────────────────────
@@ -509,53 +463,28 @@ const DESKTOP_ICONS: &[DesktopIcon] = &[
     DesktopIcon { label: "Doom",  bitmap: &ICON_DOOM,  color: 0xEF4444, launcher_idx: 12 },
 ];
 
-// 56px wide keeps icons safely left of the default window start (x=79)
-const DICON_W: u32 = 56;
-const DICON_H: u32 = 52;   // 40px image area + 8px label + 4px gap below label
-const DICON_X: u32 = 10;   // left margin → right edge at 66px
-const DICON_GAP: u32 = 6;  // vertical gap between icons
-
-fn dicon_rect(i: usize) -> (u32, u32, u32, u32) {
-    let y = TOPBAR_H + 16 + i as u32 * (DICON_H + DICON_GAP);
-    (DICON_X, y, DICON_W, DICON_H)
-}
-
+// Favourites are horizontal 40×40 tiles inside the bottom panel (see fav_rect).
 fn draw_desktop_icons(fb: &mut Framebuffer, hover_icon: Option<usize>) {
+    let h = fb.height;
     for (i, icon) in DESKTOP_ICONS.iter().enumerate() {
-        let (x, y, w, h) = dicon_rect(i);
-        let img_h: u32 = h - 12;  // reserve 12px at bottom for label
-        let ix = x as i32; let iy = y as i32;
-        let iw = w as i32; let ih = img_h as i32;
+        let (x, y, tw, th) = fav_rect(i, h);
         let hovered = hover_icon == Some(i);
-        // Icon card background
-        let inner_bg = if hovered { 0x2C2C38u32 } else { 0x1A1A24u32 };
-        let border_col = if hovered { icon.color } else { 0x3C3C48u32 };
-        fb.fill_rounded_rect(ix,     iy,     iw,     ih,     6, border_col);
-        fb.fill_rounded_rect(ix + 1, iy + 1, iw - 2, ih - 2, 5, inner_bg);
-        // Accent top bar
-        fb.fill_rect_s(ix + 1, iy + 1, iw - 2, 2, icon.color);
-        // 2x bitmap centered
-        let bx = x + (w - 16) / 2;
-        let by = y + (img_h - 16) / 2;
-        let icon_color = if hovered { icon.color } else { 0x6B7280u32 };
-        fb.draw_bitmap_2x(bx, by, icon.bitmap, icon_color, inner_bg);
-        // Label below icon
-        let lw = icon.label.len() as u32 * 8;
-        let lx = if lw < w { x + (w - lw) / 2 } else { x };
-        let label_color = if hovered { icon.color } else { DIM };
-        fb.fill_rect(x, y + img_h, w, 12, BG);
-        fb.draw_str(lx, y + img_h + 2, icon.label, label_color, BG);
+        // Full-tile repaint each call (so hover-out is fully cleared). Over the
+        // solid panel, a PANEL_SOLID tile is invisible; a hovered tile lifts.
+        let bg = if hovered { 0x3A453F } else { PANEL_SOLID };
+        fb.fill_rounded_rect(x, y, tw, th, 9, bg);
+        if hovered { fb.fill_rect_s(x + 9, y + th - 4, tw - 18, 2, icon.color); } // hover underline
+        let bx = (x + (tw - 16) / 2) as u32;
+        let by = (y + (th - 16) / 2 - 1) as u32;
+        let col = if hovered { icon.color } else { 0xCBD3C8u32 }; // favourites stay bright
+        fb.draw_bitmap_2x(bx, by, icon.bitmap, col, bg);
     }
 }
 
-fn desktop_icon_hit(mx: i32, my: i32) -> Option<usize> {
+fn desktop_icon_hit(mx: i32, my: i32, h: u32) -> Option<usize> {
     for i in 0..DESKTOP_ICONS.len() {
-        let (x, y, w, h) = dicon_rect(i);
-        if mx >= x as i32 && mx < (x + w) as i32
-            && my >= y as i32 && my < (y + h) as i32
-        {
-            return Some(i);
-        }
+        let (x, y, tw, th) = fav_rect(i, h);
+        if mx >= x && mx < x + tw && my >= y && my < y + th { return Some(i); }
     }
     None
 }
@@ -626,10 +555,9 @@ fn tbwin_hit(fw: u32, fh: u32, wins: &[TermWin], mx: i32, my: i32) -> Option<usi
 // ---- Start menu ─────────────────────────────────────────────────────────────
 
 fn dingir_hit(fh: u32, mx: i32, my: i32) -> bool {
-    // Whole "Menu" button is clickable, not just the icon glyph. Mirrors the
-    // button drawn in draw_taskbar: x 4..66, y tb_y+3 .. tb_y+25.
-    let tb_y = fh as i32 - 28;
-    mx >= 4 && mx < 66 && my >= tb_y + 3 && my < tb_y + 25
+    // Whole "Menu" button (bottom panel, left) is clickable.
+    let (x, y, w, ht) = menu_btn_rect(fh);
+    mx >= x && mx < x + w && my >= y && my < y + ht
 }
 
 fn show_desktop_hit(fw: u32, fh: u32, mx: i32, my: i32) -> bool {
@@ -670,8 +598,9 @@ const MENU_ITEMS: &[MenuItem] = &[
 
 fn start_menu_bounds(fh: u32) -> (i32, i32, i32, i32) {
     let h = 24 + MENU_ITEMS.len() as i32 * 20 + 4;
-    let w = 180i32;
-    (2, fh as i32 - 28 - h, w, h)
+    let w = 200i32;
+    // Launcher pops up above the Menu button (bottom-left), mockup-style.
+    (PANEL_MARGIN, panel_top(fh) - h - 8, w, h)
 }
 
 // Desktop stylesheet (CSS subset). The frontend is migrating to declarative
@@ -1278,7 +1207,7 @@ pub extern "C" fn _start() -> ! {
         cx = mouse.x; cy = mouse.y;
 
         // Desktop icon hover — triggers a recomposite when it changes.
-        let new_hover = desktop_icon_hit(cx, cy);
+        let new_hover = desktop_icon_hit(cx, cy, fb.height);
         if new_hover != hover_icon {
             hover_icon = new_hover;
             fb.invalidate_bg();   // icon dock changes → rebuild the cached background
@@ -1402,7 +1331,7 @@ pub extern "C" fn _start() -> ! {
                         wins[mi].win.minimized = false;
                         let tw = wins.remove(mi); wins.push(tw);
                         scene_dirty = true;
-                    } else if let Some(di) = desktop_icon_hit(cx, cy) {
+                    } else if let Some(di) = desktop_icon_hit(cx, cy, fb.height) {
                         // Icon order: Term, Files, Edit, Calc, Help, Prefs, TIS, Snake, Mines
                         let opened = match di {
                             0 => open_term(w, h, wins.len(), &LAUNCHERS[0]),
