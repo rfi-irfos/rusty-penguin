@@ -25,6 +25,8 @@ mod ps2mouse;
 mod ramfs;
 mod vfs;
 mod linux;
+mod pci;
+mod hda;
 
 use ternary_core::{Trit, Tryte};
 use mathematics::{mul_tryte, consensus, scale};
@@ -243,6 +245,15 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
     ps2mouse::init();
     unsafe { pic::unmask_mouse(); }
     vga::write_str("  [PS/2 mouse: OK]\n", vga::Color::Green);
+
+    // Intel HDA audio — attempt to init; ternary result logged.
+    let audio_state = hda::init();
+    use ternary_core::Trit;
+    match audio_state {
+        Trit::Pos  => vga::write_str("  [HDA audio: playing]\n", vga::Color::Green),
+        Trit::Zero => vga::write_str("  [HDA audio: no device]\n", vga::Color::Amber),
+        Trit::Neg  => vga::write_str("  [HDA audio: init failed]\n", vga::Color::Red),
+    }
 
     // Ternary math demo
     vga::write_str("  [mathematics]\n", vga::Color::Cyan);

@@ -43,3 +43,12 @@ pub fn write_byte(b: u8) {
 pub fn write_str(s: &str) {
     for &b in s.as_bytes() { write_byte(b); }
 }
+
+/// Write a u32 as 8 hex digits prefixed with "0x".
+pub fn write_hex_u32(v: u32) {
+    write_byte(b'0'); write_byte(b'x');
+    for i in (0..8).rev() {
+        let nibble = ((v >> (i * 4)) & 0xF) as u8;
+        write_byte(if nibble < 10 { b'0' + nibble } else { b'a' + nibble - 10 });
+    }
+}
