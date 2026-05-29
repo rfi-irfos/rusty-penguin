@@ -103,3 +103,19 @@ sparse-rendering thesis: we read the dormant wallpaper pixels behind the panel a
 only tint them, rather than re-deriving the wallpaper on every compositing pass.
 
 **Honest basis:** Architectural analogy, verified in the shipped compositor.
+
+## F8 — Ternary link-state models the NIC bring-up arc (2026-05-29)
+
+**Finding:** The network bring-up sequence has exactly three meaningful states
+that map directly to Trit semantics: +1 = full DHCP lease (reachable, usable),
+0 = NIC up + ARP replied but no lease (NIC exists, network uncertain), -1 = no
+NIC detected at PCI scan (absent). Binary would conflate "up-but-no-lease" with
+"no NIC", hiding the diagnostic mid-state that matters for debugging network
+stack bricks one-by-one.
+
+**Shipped:** `net::init()` returns `Trit::Pos / Zero / Neg` and `NET_UP` (cached
+for userspace) is set only at `Trit::Pos`. Logged in the ternary `.tern` boot
+manifest under `@network`.
+
+**Honest basis:** Representational — ternary eliminates an ambiguous boolean edge
+case. Functionally verified across bricks 1–5 (commit chain 5a1b218 → b14408e).
