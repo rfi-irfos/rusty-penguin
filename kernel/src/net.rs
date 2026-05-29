@@ -13,6 +13,7 @@ const ETHERTYPE_ARP: u16 = 0x0806;
 const ETHERTYPE_IP:  u16 = 0x0800;
 const PROTO_ICMP:    u8  = 1;
 const PROTO_UDP:     u8  = 17;
+const PROTO_TCP:     u8  = 6;
 
 // Internet (RFC 1071) ones-complement checksum over a big-endian byte buffer.
 fn inet_checksum(data: &[u8]) -> u16 {
@@ -28,6 +29,14 @@ fn inet_checksum(data: &[u8]) -> u16 {
 }
 
 fn nib(n: u8) -> u8 { if n < 10 { b'0' + n } else { b'a' + (n - 10) } }
+
+fn log_dec(mut n: u32) {
+    let mut buf = [0u8; 10];
+    let mut i = 10;
+    if n == 0 { crate::serial::write_str("0"); return; }
+    while n > 0 && i > 0 { i -= 1; buf[i] = b'0' + (n % 10) as u8; n /= 10; }
+    crate::serial::write_str(core::str::from_utf8(&buf[i..]).unwrap_or("?"));
+}
 
 fn log_mac(prefix: &str, mac: &[u8; 6]) {
     crate::serial::write_str(prefix);
@@ -283,6 +292,174 @@ fn dhcp() -> Option<[u8; 4]> {
     None
 }
 
+// ── TCP + HTTP ────────────────────────────────────────────────────────────────
+// A minimal one-shot TCP client: 3-way handshake, send an HTTP GET, ACK the
+// response stream, log the status line, then FIN. No retransmit/reordering —
+// fine over lossless in-order SLIRP. TCP checksum covers the IPv4 pseudo-header.
+const TCP_FIN: u8 = 0x01;
+const TCP_SYN: u8 = 0x02;
+const TCP_RST: u8 = 0x04;
+const TCP_PSH: u8 = 0x08;
+const TCP_ACK: u8 = 0x10;
+const OUR_PORT: u16 = 49152;
+
+fn tcp_checksum(src: &[u8; 4], dst: &[u8; 4], seg: &[u8]) -> u16 {
+    let mut sum: u32 = 0;
+    sum += ((src[0] as u32) << 8) | src[1] as u32;
+    sum += ((src[2] as u32) << 8) | src[3] as u32;
+    sum += ((dst[0] as u32) << 8) | dst[1] as u32;
+    sum += ((dst[2] as u32) << 8) | dst[3] as u32;
+    sum += PROTO_TCP as u32;
+    sum += seg.len() as u32;
+    let mut i = 0;
+    while i + 1 < seg.len() { sum += ((seg[i] as u32) << 8) | seg[i + 1] as u32; i += 2; }
+    if i < seg.len() { sum += (seg[i] as u32) << 8; }
+    while sum >> 16 != 0 { sum = (sum & 0xFFFF) + (sum >> 16); }
+    !(sum as u16)
+}
+
+/// Build an Ethernet+IPv4+TCP frame into `f`; returns its length.
+fn build_tcp(f: &mut [u8], dst_mac: &[u8; 6], src_mac: &[u8; 6],
+             src_ip: &[u8; 4], dst_ip: &[u8; 4], dport: u16,
+             seq: u32, ack: u32, flags: u8, payload: &[u8]) -> usize {
+    for b in f.iter_mut() { *b = 0; }
+    f[0..6].copy_from_slice(dst_mac);
+    f[6..12].copy_from_slice(src_mac);
+    f[12] = 0x08; f[13] = 0x00;
+
+    let t = 34; // TCP header offset
+    f[t]     = (OUR_PORT >> 8) as u8; f[t + 1] = OUR_PORT as u8;
+    f[t + 2] = (dport >> 8) as u8;    f[t + 3] = dport as u8;
+    f[t + 4..t + 8].copy_from_slice(&seq.to_be_bytes());
+    f[t + 8..t + 12].copy_from_slice(&ack.to_be_bytes());
+    f[t + 12] = 5 << 4;               // data offset = 5 words (20 bytes)
+    f[t + 13] = flags;
+    f[t + 14] = 0x20; f[t + 15] = 0x00; // window 8192
+    let plen = payload.len();
+    f[t + 20..t + 20 + plen].copy_from_slice(payload);
+    let tcp_len = 20 + plen;
+    let ck = tcp_checksum(src_ip, dst_ip, &f[t..t + tcp_len]);
+    f[t + 16] = (ck >> 8) as u8; f[t + 17] = ck as u8;
+
+    // IPv4
+    f[14] = 0x45;
+    let total = (20 + tcp_len) as u16;
+    f[16] = (total >> 8) as u8; f[17] = total as u8;
+    f[20] = 0x40; f[22] = 64; f[23] = PROTO_TCP;
+    f[26..30].copy_from_slice(src_ip);
+    f[30..34].copy_from_slice(dst_ip);
+    let ipck = inet_checksum(&f[14..34]);
+    f[24] = (ipck >> 8) as u8; f[25] = ipck as u8;
+    14 + total as usize
+}
+
+// Is `rx[..len]` a TCP segment addressed to our client port? If so return
+// (their_seq, their_ack, flags, payload_offset, payload_len).
+fn parse_tcp(rx: &[u8], len: usize) -> Option<(u32, u32, u8, usize, usize)> {
+    if len < 54 { return None; }
+    if !(rx[12] == 0x08 && rx[13] == 0x00 && rx[23] == PROTO_TCP) { return None; }
+    if !(rx[36] == (OUR_PORT >> 8) as u8 && rx[37] == OUR_PORT as u8) { return None; }
+    let seq = u32::from_be_bytes([rx[38], rx[39], rx[40], rx[41]]);
+    let ackn = u32::from_be_bytes([rx[42], rx[43], rx[44], rx[45]]);
+    let flags = rx[47];
+    let data_off = ((rx[46] >> 4) as usize) * 4;
+    let poff = 34 + data_off;
+    let ip_total = u16::from_be_bytes([rx[16], rx[17]]) as usize;
+    let seg_end = (14 + ip_total).min(len);
+    let plen = seg_end.saturating_sub(poff);
+    Some((seq, ackn, flags, poff, plen))
+}
+
+/// Fetch `GET /` from dst_ip:dport over TCP. Returns true if an HTTP response
+/// arrived. `gw_mac` is the on-link next hop (the SLIRP gateway).
+fn tcp_http_get(gw_mac: &[u8; 6], dst_ip: [u8; 4], dport: u16) -> bool {
+    let nic = match rtl8139::nic() { Some(n) => n, None => return false };
+    let mac = nic.mac;
+    let mut f = [0u8; 256];
+    let mut rx = [0u8; 1536];
+    let isn: u32 = 0x0001_2000;
+
+    // SYN
+    let n = build_tcp(&mut f, gw_mac, &mac, &OUR_IP, &dst_ip, dport, isn, 0, TCP_SYN, &[]);
+    nic.send(&f[..n]);
+    crate::serial::write_str("  [net] TCP SYN -> 10.0.2.2:8088\n");
+
+    // SYN-ACK
+    let mut their_seq = 0u32;
+    let mut established = false;
+    for _ in 0..3_000_000u32 {
+        if let Some(l) = nic.poll_rx(&mut rx) {
+            if let Some((seq, ackn, flags, _, _)) = parse_tcp(&rx, l) {
+                if flags & TCP_RST != 0 {
+                    crate::serial::write_str("  [net] TCP connection refused (RST)\n");
+                    return false;
+                }
+                if flags & TCP_SYN != 0 && flags & TCP_ACK != 0 && ackn == isn.wrapping_add(1) {
+                    their_seq = seq;
+                    established = true;
+                    break;
+                }
+            }
+        }
+    }
+    if !established { crate::serial::write_str("  [net] no SYN-ACK (timeout)\n"); return false; }
+
+    let mut rcv_nxt = their_seq.wrapping_add(1);
+    let snd = isn.wrapping_add(1);
+    // ACK the handshake, then PSH the HTTP request.
+    let n = build_tcp(&mut f, gw_mac, &mac, &OUR_IP, &dst_ip, dport, snd, rcv_nxt, TCP_ACK, &[]);
+    nic.send(&f[..n]);
+    let req = b"GET / HTTP/1.0\r\nHost: 10.0.2.2\r\nConnection: close\r\n\r\n";
+    let n = build_tcp(&mut f, gw_mac, &mac, &OUR_IP, &dst_ip, dport, snd, rcv_nxt, TCP_PSH | TCP_ACK, req);
+    nic.send(&f[..n]);
+    crate::serial::write_str("  [net] HTTP GET / sent\n");
+
+    // Receive the response stream; ACK in-order data, log the status line.
+    let mut total = 0usize;
+    let mut logged = false;
+    let snd_after = snd.wrapping_add(req.len() as u32);
+    for _ in 0..6_000_000u32 {
+        if let Some(l) = nic.poll_rx(&mut rx) {
+            if let Some((seq, _ackn, flags, poff, plen)) = parse_tcp(&rx, l) {
+                if plen > 0 && seq == rcv_nxt {
+                    if !logged {
+                        // log the HTTP status line (up to CRLF)
+                        let mut end = poff;
+                        while end < poff + plen && end + 1 < rx.len()
+                            && !(rx[end] == b'\r' && rx[end + 1] == b'\n') { end += 1; }
+                        crate::serial::write_str("  [net] <- ");
+                        crate::serial::write_str(core::str::from_utf8(&rx[poff..end]).unwrap_or("?"));
+                        crate::serial::write_str("\n");
+                        logged = true;
+                    }
+                    total += plen;
+                    rcv_nxt = rcv_nxt.wrapping_add(plen as u32);
+                    let n = build_tcp(&mut f, gw_mac, &mac, &OUR_IP, &dst_ip, dport, snd_after, rcv_nxt, TCP_ACK, &[]);
+                    nic.send(&f[..n]);
+                }
+                if flags & TCP_FIN != 0 {
+                    rcv_nxt = rcv_nxt.wrapping_add(1);
+                    // ACK the FIN, then close our side.
+                    let n = build_tcp(&mut f, gw_mac, &mac, &OUR_IP, &dst_ip, dport, snd_after, rcv_nxt, TCP_ACK, &[]);
+                    nic.send(&f[..n]);
+                    let n = build_tcp(&mut f, gw_mac, &mac, &OUR_IP, &dst_ip, dport, snd_after, rcv_nxt, TCP_FIN | TCP_ACK, &[]);
+                    nic.send(&f[..n]);
+                    break;
+                }
+            }
+        }
+    }
+    if total > 0 {
+        crate::serial::write_str("  [net] HTTP body ");
+        log_dec(total as u32);
+        crate::serial::write_str(" bytes received (TCP fetch OK)\n");
+        true
+    } else {
+        crate::serial::write_str("  [net] TCP: no data received\n");
+        false
+    }
+}
+
 /// Bring up the NIC, ARP the gateway, then ping it. Ternary result:
 /// Pos = ping round-trip OK, Zero = NIC up but ARP/ping failed, Neg = no NIC.
 pub fn init() -> ternary_core::Trit {
@@ -295,7 +472,11 @@ pub fn init() -> ternary_core::Trit {
         None    => return Trit::Zero,
     };
     let _ = icmp_ping(&gw);   // ping (result logged)
-    match dhcp() {
+    let lease = dhcp();
+    // TCP + HTTP fetch from the host via SLIRP (10.0.2.2:8088). Logged; fails
+    // fast with RST if no server is listening, so it never stalls normal boots.
+    let _ = tcp_http_get(&gw, GW_IP, 8088);
+    match lease {
         Some(_) => Trit::Pos, // full DHCP lease — the strongest proof
         None    => Trit::Zero,
     }
