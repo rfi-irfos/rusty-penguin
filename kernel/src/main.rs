@@ -235,7 +235,16 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
         vga::write_hex(addr, vga::Color::Cyan);
         vga::write_byte(b'\n', vga::Color::White);
     } else {
-        vga::write_str("  [FB] not provided by GRUB — VGA text mode\n", vga::Color::Amber);
+        // GRUB didn't give us a framebuffer — probe common UEFI GOP addresses.
+        // Most Intel iGPUs map their linear framebuffer at 0x80000000 or
+        // 0xC0000000 or another PCI BAR. Without GOP we can't know the exact
+        // address, so we must stay in VGA text mode. The GRUB gfxpayload=... in
+        // grub.cfg should have handled this on any UEFI system — if we reach
+        // here it means GRUB is in pure-EFI mode without gfxpayload, which is
+        // rare. The user should add `set gfxpayload=keep` or `set gfxpayload=1920x1080x32`
+        // to their grub.cfg. We log the advisory so the serial log guides them.
+        vga::write_str("  [FB] no framebuffer from GRUB — VGA text mode\n", vga::Color::Amber);
+        vga::write_str("  [FB] hint: add gfxpayload=1920x1080x32 to grub.cfg entry\n", vga::Color::Amber);
     }
 
     // SYSCALL / SYSRET setup
