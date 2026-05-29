@@ -5,17 +5,18 @@
 
 use crate::rtl8139;
 use crate::e1000;
+use crate::r8169;
 
 // ── NIC abstraction ───────────────────────────────────────────────────────────
-// A zero-cost wrapper that forwards to whichever NIC is active.
 static mut ACTIVE_NIC: ActiveNicKind = ActiveNicKind::None;
 
-enum ActiveNicKind { None, Rtl8139, E1000 }
+enum ActiveNicKind { None, Rtl8139, E1000, R8169 }
 
 fn active_mac() -> Option<[u8; 6]> {
     unsafe { match ACTIVE_NIC {
         ActiveNicKind::Rtl8139 => rtl8139::nic().map(|n| n.mac),
         ActiveNicKind::E1000   => e1000::nic().map(|n| n.mac),
+        ActiveNicKind::R8169   => r8169::nic().map(|n| n.mac),
         ActiveNicKind::None    => None,
     }}
 }
@@ -24,6 +25,7 @@ fn nic_send(frame: &[u8]) {
     unsafe { match ACTIVE_NIC {
         ActiveNicKind::Rtl8139 => { if let Some(n) = rtl8139::nic() { n.send(frame); } }
         ActiveNicKind::E1000   => { if let Some(n) = e1000::nic()   { n.send(frame); } }
+        ActiveNicKind::R8169   => { if let Some(n) = r8169::nic()   { n.send(frame); } }
         ActiveNicKind::None    => {}
     }}
 }
@@ -32,6 +34,7 @@ fn nic_poll_rx(buf: &mut [u8]) -> Option<usize> {
     unsafe { match ACTIVE_NIC {
         ActiveNicKind::Rtl8139 => rtl8139::nic()?.poll_rx(buf),
         ActiveNicKind::E1000   => e1000::nic()?.poll_rx(buf),
+        ActiveNicKind::R8169   => r8169::nic()?.poll_rx(buf),
         ActiveNicKind::None    => None,
     }}
 }
@@ -702,13 +705,17 @@ pub fn http_get(host: &str, out: &mut [u8]) -> Option<usize> {
 /// Pos = ping round-trip OK, Zero = NIC up but ARP/ping failed, Neg = no NIC.
 pub fn init() -> ternary_core::Trit {
     use ternary_core::Trit;
-    // Try RTL8139 first (QEMU default), then Intel e1000/e1000e (real laptops).
+    // Probe NICs: RTL8139 (QEMU), then Intel e1000/e1000e, then Realtek r8169.
+    // The first found wins; only one NIC is ever active.
     if rtl8139::init() {
         unsafe { ACTIVE_NIC = ActiveNicKind::Rtl8139; }
         crate::serial::write_str("  [net] NIC = RTL8139\n");
     } else if e1000::init() {
         unsafe { ACTIVE_NIC = ActiveNicKind::E1000; }
         crate::serial::write_str("  [net] NIC = Intel e1000\n");
+    } else if r8169::init() {
+        unsafe { ACTIVE_NIC = ActiveNicKind::R8169; }
+        crate::serial::write_str("  [net] NIC = Realtek r8169\n");
     } else {
         return Trit::Neg;
     }

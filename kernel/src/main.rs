@@ -29,6 +29,7 @@ mod pci;
 mod hda;
 mod rtl8139;
 mod e1000;
+mod r8169;
 mod net;
 mod usb;
 

@@ -1162,7 +1162,7 @@ impl Terminal {
             const CMDS: &[&str] = &[
                 "ai","alias","bc","calc","cat","cd","clear","cp","cut","date","df","du","echo","env","exit",
                 "file","find","free","grep","head","help","hexdump","history","hostname","hostid","id",
-                "fetch","kinstall","kmanager","kver","ls","lscpu","lsb_release","mem","mkdir","mv","nano",
+                "fetch","wget","kinstall","kmanager","kver","ls","lscpu","lsb_release","mem","mkdir","mv","nano",
                 "neofetch","printf","printenv","ps","psh","pwd","rev","rm","seq","sort","stat","sysinfo",
                 "tail","touch","tr","trit","uname","unalias","uniq","uptime","vi","wc","which","whoami","xxd",
             ];
@@ -1477,6 +1477,7 @@ impl Terminal {
             self.write_output(b"  kmanager           kernel manager TUI\r\n");
             self.write_output(b"\x1b[36mNetwork:\x1b[0m\r\n");
             self.write_output(b"  fetch <host>       HTTP GET / over the kernel TCP/IP stack\r\n");
+            self.write_output(b"  wget <host> <file> download HTTP body to a file\r\n");
             self.write_output(b"\x1b[90m  Tab completion  Up/Down history  Shift+Ctrl+T new window\x1b[0m\r\n");
             self.write_output(b"\x1b[90m  Ctrl+W close  Ctrl+L clear terminal\x1b[0m\r\n");
 
@@ -1916,6 +1917,50 @@ impl Terminal {
                         }
                     }
                     self.write_output(b"\r\n\x1b[90m----\x1b[0m\r\n");
+                }
+            }
+
+        } else if line.starts_with(b"wget ") {
+            // wget <host>[/<path>] <filename> — download via HTTP to VFS.
+            // Usage: wget example.com/foo.txt myfile.txt
+            let rest = core::str::from_utf8(&line[5..]).unwrap_or("").trim();
+            let parts: Vec<&str> = rest.splitn(2, ' ').collect();
+            let url  = parts.first().copied().unwrap_or("");
+            let dest = parts.get(1).copied().unwrap_or("").trim();
+            if url.is_empty() {
+                self.write_output(b"usage: wget <host>[/path] <filename>\r\n");
+            } else {
+                // Split host from path.
+                let (host, _path) = if let Some(p) = url.find('/') {
+                    (&url[..p], &url[p..])
+                } else {
+                    (url, "/")
+                };
+                let filename = if dest.is_empty() {
+                    // Derive from URL.
+                    url.split('/').last().unwrap_or("download")
+                } else { dest };
+                let s = format!("Downloading {} -> {}\r\n", url, filename);
+                self.write_output(s.as_bytes());
+                let mut buf = [0u8; 8192];
+                let n = sys_http_get(host.as_bytes(), &mut buf);
+                if n == 0 {
+                    self.write_output(b"\x1b[31mwget failed\x1b[0m\r\n");
+                    self.last_exit = 1;
+                } else {
+                    // Strip HTTP headers (find \r\n\r\n or \n\n).
+                    let body_start = buf[..n].windows(4)
+                        .position(|w| w == b"\r\n\r\n")
+                        .map(|p| p + 4)
+                        .or_else(|| buf[..n].windows(2)
+                            .position(|w| w == b"\n\n")
+                            .map(|p| p + 2))
+                        .unwrap_or(0);
+                    let body = &buf[body_start..n];
+                    vfs::vfs().write(filename, body);
+                    let s = format!("\x1b[32mSaved {} bytes to {}\x1b[0m\r\n",
+                                    body.len(), filename);
+                    self.write_output(s.as_bytes());
                 }
             }
 
