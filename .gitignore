@@ -10,3 +10,5 @@ iso/initrd.img
 iso/vmlinuz-netboot
 iso/vmlinuz-*
 iso/cache/
+kernel/linux-abi-test/brick2-glibc
+kernel/linux-abi-test/brick2-tls

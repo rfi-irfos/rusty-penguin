@@ -85,3 +85,30 @@ pub fn load(elf: &[u8]) -> Option<u64> {
 
     Some(ehdr.e_entry)
 }
+
+/// Locate the program headers *in the loaded image* and return
+/// (phdr_vaddr, e_phentsize, e_phnum) for the SysV auxv (AT_PHDR/PHENT/PHNUM).
+/// glibc needs these to find PT_TLS (TCB sizing) and PT_GNU_RELRO; without them
+/// it mis-sets up TLS (arch_prctl gets a bogus FS base) and crashes at exit.
+pub fn phdr_info(elf: &[u8]) -> Option<(u64, u64, u64)> {
+    if elf.len() < size_of::<Elf64Ehdr>() { return None; }
+    let ehdr = unsafe { &*(elf.as_ptr() as *const Elf64Ehdr) };
+    if &ehdr.e_ident[0..4] != ELF_MAGIC { return None; }
+    let phoff = ehdr.e_phoff;
+    let phent = ehdr.e_phentsize as u64;
+    let phnum = ehdr.e_phnum as u64;
+    // Find the PT_LOAD segment whose file range covers e_phoff; the phdrs are
+    // then at p_vaddr + (e_phoff - p_offset) in the loaded image.
+    for i in 0..phnum as usize {
+        let off = phoff as usize + i * phent as usize;
+        if off + size_of::<Elf64Phdr>() > elf.len() { break; }
+        let ph = unsafe { &*(elf.as_ptr().add(off) as *const Elf64Phdr) };
+        if ph.p_type == PT_LOAD
+            && phoff >= ph.p_offset
+            && phoff < ph.p_offset + ph.p_filesz
+        {
+            return Some((ph.p_vaddr + (phoff - ph.p_offset), phent, phnum));
+        }
+    }
+    None
+}

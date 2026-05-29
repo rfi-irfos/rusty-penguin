@@ -71,9 +71,28 @@ unsafe fn wrmsr(msr: u32, val: u64) {
 
 // ── The Linux syscall dispatcher ─────────────────────────────────────────────
 /// Returns the Linux ABI value for rax (>=0 success, <0 negated errno).
+/// Per-syscall serial trace toggle (debugging the ABI layer brick by brick).
+const TRACE: bool = false;
+fn dbg_hex(tag: &str, v: u64) {
+    serial::write_str(tag);
+    let mut i = 60i32;
+    serial::write_str("0x");
+    let mut started = false;
+    while i >= 0 {
+        let nib = ((v >> i) & 0xF) as u8;
+        if nib != 0 || started || i == 0 { started = true;
+            serial::write_byte(if nib < 10 { b'0' + nib } else { b'a' + nib - 10 }); }
+        i -= 4;
+    }
+}
+
 pub fn syscall(nr: u64, a1: u64, a2: u64, a3: u64) -> u64 {
     let (a4, a5, a6) = extra_args();
     let _ = (a5, a6);
+    if TRACE {
+        dbg_hex("  [sc] nr=", nr); dbg_hex(" a1=", a1); dbg_hex(" a2=", a2);
+        dbg_hex(" a3=", a3); dbg_hex(" a4=", a4); serial::write_byte(b'\n');
+    }
     // Ternary view of the call's outcome, for the findings log / future telemetry.
     let _outcome: Trit;
     match nr {
@@ -103,10 +122,18 @@ pub fn syscall(nr: u64, a1: u64, a2: u64, a3: u64) -> u64 {
             }
             total
         }
-        // brk(addr): bump program break within [BRK_BASE, BRK_CAP].
+        // brk(addr): bump program break within [BRK_BASE, BRK_CAP]. Linux
+        // guarantees freshly-broken pages read as zero, and glibc's heap/TLS
+        // structures (exit-handler list, tls_dtor_list) depend on it — so zero
+        // any newly-exposed region or the exit path calls a garbage pointer.
         12 => unsafe {
             if a1 == 0 { return BRK_CUR; }
-            if a1 >= BRK_BASE && a1 <= BRK_CAP { BRK_CUR = a1; a1 } else { BRK_CUR }
+            if a1 >= BRK_BASE && a1 <= BRK_CAP {
+                if a1 > BRK_CUR {
+                    core::ptr::write_bytes(BRK_CUR as *mut u8, 0, (a1 - BRK_CUR) as usize);
+                }
+                BRK_CUR = a1; a1
+            } else { BRK_CUR }
         }
         // mmap(addr, len, prot, flags, fd, off): anonymous bump only.
         9 => unsafe {
@@ -116,6 +143,28 @@ pub fn syscall(nr: u64, a1: u64, a2: u64, a3: u64) -> u64 {
             // anonymous memory is expected zeroed
             core::ptr::write_bytes(p as *mut u8, 0, len as usize);
             p
+        }
+        // fstat(fd, statbuf): report fd 1/2 as a character device so glibc
+        // treats stdout sensibly (line-buffered, BUFSIZ from st_blksize).
+        5 => {
+            let sb = a2 as *mut u8;
+            if !sb.is_null() {
+                unsafe {
+                    core::ptr::write_bytes(sb, 0, 144); // sizeof(struct stat)
+                    const S_IFCHR: u32 = 0x2000;
+                    (sb.add(24) as *mut u32).write_unaligned(S_IFCHR | 0o666); // st_mode
+                    (sb.add(56) as *mut u64).write_unaligned(4096);            // st_blksize
+                }
+            }
+            0
+        }
+        // prlimit64(pid, res, new, old): report no limits (RLIM_INFINITY).
+        302 => {
+            let old = a4 as *mut u64;
+            if !old.is_null() {
+                unsafe { *old = u64::MAX; *old.add(1) = u64::MAX; } // rlim_cur, rlim_max
+            }
+            0
         }
         // mprotect / munmap — no-op (bump arena never frees).
         10 | 11 => 0,
@@ -187,8 +236,11 @@ pub fn enter(elf: &[u8]) -> ! {
     // ── System V AMD64 initial stack ──
     // At _start, RSP must point to argc, then: argv[]·NULL, envp[]·NULL,
     // auxv pairs·{AT_NULL,0}. We run argc=0, no env, a minimal auxv.
-    const AT_NULL: u64 = 0; const AT_PAGESZ: u64 = 6; const AT_ENTRY: u64 = 9;
+    const AT_NULL: u64 = 0; const AT_PHDR: u64 = 3; const AT_PHENT: u64 = 4;
+    const AT_PHNUM: u64 = 5; const AT_PAGESZ: u64 = 6; const AT_ENTRY: u64 = 9;
     const AT_RANDOM: u64 = 25;
+    // Program-header info — glibc needs it to find PT_TLS / size the TCB.
+    let (phdr, phent, phnum) = crate::elf::phdr_info(elf).unwrap_or((0, 56, 0));
 
     let top = crate::vmm::USER_STACK_TOP;
     // 16 random bytes for AT_RANDOM (glibc/musl stack canary source).
@@ -199,10 +251,13 @@ pub fn enter(elf: &[u8]) -> ! {
     }
 
     // Lay the control block out as consecutive u64s ending in AT_NULL.
-    let words: [u64; 11] = [
+    let words: [u64; 17] = [
         0,                       // argc
         0,                       // argv[0] = NULL
         0,                       // envp[0] = NULL
+        AT_PHDR,   phdr,
+        AT_PHENT,  phent,
+        AT_PHNUM,  phnum,
         AT_PAGESZ, 4096,
         AT_RANDOM, rand_ptr,
         AT_ENTRY,  entry,

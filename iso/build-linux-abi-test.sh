@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Linux-ABI layer test harness. Builds the bare-metal kernel + a minimal GRUB
-# ISO whose only entry boots the kernel with `linuxtest` on the cmdline, then
-# boots it headless and prints the serial log. Proof that the from-scratch
-# pure-Rust kernel executes an unmodified static Linux x86-64 ELF.
+# ISO that boots `kernel.elf linuxtest` with a chosen Linux binary as
+# bin/linuxtest in the initrd, boots headless, and prints the serial log.
+# Proof that the from-scratch pure-Rust kernel executes unmodified Linux ELFs.
 #
-#   iso/build-linux-abi-test.sh
+#   iso/build-linux-abi-test.sh [path-to-static-linux-elf]
+#       (default: the freestanding kernel/linux-abi-test/linux-hello)
+#   RP_NO_KERNEL=1  skip the kernel rebuild (only swap the test binary/initrd)
 set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -13,17 +15,26 @@ gcc -static -nostdlib -no-pie -fno-stack-protector \
     -o "$REPO_ROOT/kernel/linux-abi-test/linux-hello" \
     "$REPO_ROOT/kernel/linux-abi-test/linux-hello.c" || exit 1
 
-echo "[lx-abi] building bare-metal kernel..."
-(cd "$REPO_ROOT/kernel" && cargo +nightly build --release \
-    -Zjson-target-spec -Zbuild-std=core,compiler_builtins,alloc \
-    -Zbuild-std-features=compiler-builtins-mem \
-    --target x86_64-rusty-penguin.json 2>&1 | grep -E "error|Finished") || exit 1
-KELF="$REPO_ROOT/target/x86_64-rusty-penguin/release/kernel"
+TESTBIN="${1:-$REPO_ROOT/kernel/linux-abi-test/linux-hello}"
+[ -f "$TESTBIN" ] || { echo "[lx-abi] test binary not found: $TESTBIN"; exit 1; }
+echo "[lx-abi] test binary: $TESTBIN"
 
-echo "[lx-abi] assembling minimal test ISO..."
+KELF="$REPO_ROOT/target/x86_64-rusty-penguin/release/kernel"
+if [ "${RP_NO_KERNEL:-0}" != "1" ]; then
+    echo "[lx-abi] building bare-metal kernel..."
+    (cd "$REPO_ROOT/kernel" && cargo +nightly build --release \
+        -Zjson-target-spec -Zbuild-std=core,compiler_builtins,alloc \
+        -Zbuild-std-features=compiler-builtins-mem \
+        --target x86_64-rusty-penguin.json 2>&1 | grep -E "error|Finished") || exit 1
+fi
+
+echo "[lx-abi] assembling test ISO (test binary in initrd as bin/linuxtest)..."
 T=/tmp/lx-iso; rm -rf "$T"; mkdir -p "$T/boot/grub"
 cp "$KELF" "$T/boot/kernel.elf"
-echo "x" > "$T/boot/initrd-bare.img"
+# Real cpio initrd carrying the test binary.
+IR=/tmp/lx-initrd; rm -rf "$IR"; mkdir -p "$IR/bin"
+cp "$TESTBIN" "$IR/bin/linuxtest"
+(cd "$IR" && find . | cpio -o -H newc 2>/dev/null > "$T/boot/initrd-bare.img")
 cat > "$T/boot/grub/grub.cfg" <<'CFG'
 set timeout=0
 set default=0

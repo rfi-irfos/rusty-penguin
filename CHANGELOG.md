@@ -4,6 +4,34 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+### Added — Linux ABI layer brick 2: a real glibc binary runs natively (2026-05-29)
+
+- **The bare-metal Rust kernel runs an unmodified static-glibc binary** — real
+  `printf` output and working **thread-local storage** (`__thread`, verified
+  read+write), through glibc's full startup syscall sequence, exiting cleanly
+  via `exit_group`. Proof: `docs/linux-abi-brick2-serial.txt`. This is a real
+  C library running on our own kernel, not a Linux kernel.
+- Three foundational kernel fixes made it work:
+  - **SSE/SSE2 enabled at boot** (`enable_sse`: CR0.EM=0/MP=1, CR4.OSFXSR/OSXMMEXCPT)
+    — the kernel is soft-float, but every Linux x86-64 binary uses SSE2 (it's
+    the baseline); glibc's `init_cpu_features` `movd %xmm` faulted without it.
+  - **Linux register-preservation in the syscall trampoline** — the Linux ABI
+    requires the kernel to preserve all regs except `rax/rcx/r11`; the trampoline
+    now saves/restores `rdi/rsi/rdx/r8/r9/r10` (not just callee-saved), or glibc
+    gets garbage registers back across every syscall and crashes. (A subtle
+    heisenbug: verbose tracing masked it by shifting the garbage.)
+  - **`AT_PHDR/PHENT/PHNUM` in the auxv** + **zeroed `brk`** memory (Linux
+    guarantees fresh break pages read as zero; glibc heap/TLS structures rely
+    on it).
+- New Linux syscalls: `fstat` (stdout as a char device), `prlimit64`
+  (RLIM_INFINITY). Per-syscall serial trace behind a `TRACE` flag in `linux.rs`.
+- Faster iteration: the kernel now loads the Linux test binary from the initrd
+  (`bin/linuxtest`) so swapping test programs doesn't require a kernel rebuild;
+  `iso/build-linux-abi-test.sh [binary]` + `RP_NO_KERNEL=1`.
+- HONEST SCOPE: `_exit`/`exit_group` work; **returning from `main` / `exit(3)`**
+  still faults in glibc's atexit pointer-guard demangle (brick 2.5, next).
+  Long-running programs (shells, servers, init) are unaffected.
+
 ### Added — Linux ABI layer brick 1: the bare-metal Rust kernel runs a real Linux binary (2026-05-29)
 
 - **The from-scratch pure-Rust Rusty Penguin kernel executes an *unmodified*

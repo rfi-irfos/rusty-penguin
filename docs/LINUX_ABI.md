@@ -36,7 +36,8 @@ thread liveness will be modelled the same way as scheduling lands.
 | # | Brick | Status |
 |---|-------|--------|
 | 1 | Run a **freestanding** static Linux ELF (raw `write`+`exit_group`), SysV initial stack (argc/argv/envp/auxv), per-process ABI mode, Linux syscall dispatch | ✅ **DONE 2026-05-29** — proof `docs/linux-abi-brick1-serial.txt`; harness `iso/build-linux-abi-test.sh` |
-| 2 | Static **musl** libc binary (real `printf`): needs `arch_prctl`(TLS), `brk`/`mmap`, `set_tid_address`, `rt_sig*`, `writev`, `getrandom`, `clock_gettime` — all stubbed/implemented in `linux.rs`, needs verifying end-to-end | ⏳ next |
+| 2 | A real **static glibc** binary runs natively — `printf` + working **TLS** (`__thread`) verified, full startup syscall sequence (`brk`/`arch_prctl`/`set_tid_address`/`fstat`/`prlimit64`/`getrandom`/…), clean exit via `exit_group`. Proof `docs/linux-abi-brick2-serial.txt` | ✅ **DONE 2026-05-29** |
+| 2.5 | **Return-from-`main` / `exit(3)`** — glibc's atexit walk demangles a function pointer (`PTR_DEMANGLE` via `%fs:0x30`) to a bad address and faults. `_exit`/`exit_group` work fine; long-running programs are unaffected, but `atexit` cleanup needs the pointer-guard path debugged | ⏳ next |
 | 3 | **Real per-process VMM + memory** (demand paging, proper mmap/munmap, reclaim) — current arenas are crude bumps in the identity map | ❌ |
 | 4 | **Dynamic linking** (`ld-linux`/`ld-musl`): `openat`/`read`/`fstat`/`mmap` of the loader + libs, `PT_INTERP`, relocations | ❌ |
 | 5 | **glibc** dynamic binaries (busybox-glibc, coreutils) | ❌ |

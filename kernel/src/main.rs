@@ -125,10 +125,31 @@ unsafe fn mb2_cmdline_contains(mb2: u32, needle: &[u8]) -> bool {
     false
 }
 
+/// Enable SSE/SSE2 (CR0.EM=0, CR0.MP=1, CR4.OSFXSR=1, CR4.OSXMMEXCPT=1).
+/// The kernel itself is built soft-float (no SSE), but every real Linux x86-64
+/// binary uses SSE2 (it's the x86-64 baseline) — the Linux ABI layer needs it
+/// or the first `movd %xmm` in glibc's startup faults.
+fn enable_sse() {
+    unsafe {
+        core::arch::asm!(
+            "mov rax, cr0",
+            "and ax, 0xFFFB",  // clear CR0.EM (bit 2): no x87 emulation
+            "or  ax, 0x0002",  // set   CR0.MP (bit 1)
+            "mov cr0, rax",
+            "mov rax, cr4",
+            "or  ax, 0x0600",  // set CR4.OSFXSR (9) + CR4.OSXMMEXCPT (10)
+            "mov cr4, rax",
+            out("rax") _,
+            options(nostack),
+        );
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
     vga::clear();
     serial::init();
+    enable_sse();
 
     if magic != 0x36d76289 {
         vga::write_str("ERROR: bad multiboot2 magic\n", vga::Color::Red);
@@ -270,11 +291,14 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
     // Boot with `linuxtest` on the cmdline to run an unmodified static Linux
     // x86-64 ELF through the Linux ABI layer instead of the desktop.
     if unsafe { mb2_cmdline_contains(mb2, b"linuxtest") } {
-        vga::write_str("\n  [LINUX-ABI] brick 1: executing an unmodified Linux ELF\n", vga::Color::Amber);
-        serial::write_str("\n  [LINUX-ABI] brick 1: executing an unmodified Linux ELF\n");
+        // Prefer bin/linuxtest from the initrd (fast iteration — swap the test
+        // binary without rebuilding the kernel); fall back to the embedded ELF.
+        let elf: &[u8] = ramfs::find(b"bin/linuxtest").unwrap_or(LINUX_HELLO_ELF);
+        vga::write_str("\n  [LINUX-ABI] executing an unmodified Linux ELF\n", vga::Color::Amber);
+        serial::write_str("\n  [LINUX-ABI] executing an unmodified Linux ELF\n");
         vga::clear();
         if fb::is_live() { fb::fill(0, 0, fb::width(), fb::height(), 0x000000); }
-        linux::enter(LINUX_HELLO_ELF);
+        linux::enter(elf);
     }
 
     // ── Ring-3 launch ────────────────────────────────────────────────────────

@@ -73,11 +73,22 @@ core::arch::global_asm!(
     "mov qword ptr [rip + _lx_a5], r8",
     "mov qword ptr [rip + _lx_a6], r9",
 
-    // 2. Save non-scratch regs (rcx/r11 hold user rip/rflags from SYSCALL)
+    // 2. Save state. The Linux syscall ABI requires the kernel to PRESERVE all
+    //    registers except rax (return), rcx and r11 (clobbered by SYSCALL).
+    //    The C call to syscall_handler clobbers the caller-saved regs
+    //    (rdi/rsi/rdx/r8/r9/r10), so we must save+restore them too — not just
+    //    the callee-saved set — or Linux binaries get garbage regs back and
+    //    crash. (Native apps don't care, so this is strictly safer for both.)
     "push r11",          // user RFLAGS
     "push rcx",          // user RIP
-    "push rbp",
+    "push rdi",          // Linux arg1 — preserve for caller
+    "push rsi",          // Linux arg2
+    "push rdx",          // Linux arg3
+    "push r8",           // Linux arg5
+    "push r9",           // Linux arg6
+    "push r10",          // Linux arg4
     "push rbx",
+    "push rbp",
     "push r12",
     "push r13",
     "push r14",
@@ -90,15 +101,21 @@ core::arch::global_asm!(
     "mov rdi, rax",      // nr → 1st param
 
     "call syscall_handler",
-    // rax = return value
+    // rax = return value (kept; everything else restored below)
 
-    // 4. Restore non-scratch regs
+    // 4. Restore (reverse order)
     "pop r15",
     "pop r14",
     "pop r13",
     "pop r12",
-    "pop rbx",
     "pop rbp",
+    "pop rbx",
+    "pop r10",
+    "pop r9",
+    "pop r8",
+    "pop rdx",
+    "pop rsi",
+    "pop rdi",
     "pop rcx",           // user RIP → rcx (consumed by sysretq)
     "pop r11",           // user RFLAGS → r11 (consumed by sysretq)
 
