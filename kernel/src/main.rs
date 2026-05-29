@@ -27,6 +27,8 @@ mod vfs;
 mod linux;
 mod pci;
 mod hda;
+mod rtl8139;
+mod net;
 
 use ternary_core::{Trit, Tryte};
 use mathematics::{mul_tryte, consensus, scale};
@@ -253,6 +255,13 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
         Trit::Pos  => vga::write_str("  [HDA audio: playing]\n", vga::Color::Green),
         Trit::Zero => vga::write_str("  [HDA audio: no device]\n", vga::Color::Amber),
         Trit::Neg  => vga::write_str("  [HDA audio: init failed]\n", vga::Color::Red),
+    }
+
+    // Networking — RTL8139 NIC + ARP round-trip; ternary result logged.
+    match net::init() {
+        Trit::Pos  => vga::write_str("  [net: NIC up, ARP reply OK]\n", vga::Color::Green),
+        Trit::Zero => vga::write_str("  [net: NIC up, no ARP reply]\n", vga::Color::Amber),
+        Trit::Neg  => vga::write_str("  [net: no NIC]\n", vga::Color::Red),
     }
 
     // Ternary math demo

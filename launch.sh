@@ -32,4 +32,6 @@ exec qemu-system-x86_64 \
     -audiodev wav,id=a0,path=/tmp/rusty-penguin-audio.wav \
     -device intel-hda \
     -device hda-duplex,audiodev=a0 \
+    -netdev user,id=n0 \
+    -device rtl8139,netdev=n0 \
     -serial file:/tmp/rusty-penguin.log
