@@ -10,6 +10,21 @@ const OUR_IP: [u8; 4] = [10, 0, 2, 15];
 const GW_IP:  [u8; 4] = [10, 0, 2, 2];
 const BCAST:  [u8; 6] = [0xFF; 6];
 const ETHERTYPE_ARP: u16 = 0x0806;
+const ETHERTYPE_IP:  u16 = 0x0800;
+const PROTO_ICMP:    u8  = 1;
+
+// Internet (RFC 1071) ones-complement checksum over a big-endian byte buffer.
+fn inet_checksum(data: &[u8]) -> u16 {
+    let mut sum: u32 = 0;
+    let mut i = 0;
+    while i + 1 < data.len() {
+        sum += ((data[i] as u32) << 8) | data[i + 1] as u32;
+        i += 2;
+    }
+    if i < data.len() { sum += (data[i] as u32) << 8; }
+    while sum >> 16 != 0 { sum = (sum & 0xFFFF) + (sum >> 16); }
+    !(sum as u16)
+}
 
 fn nib(n: u8) -> u8 { if n < 10 { b'0' + n } else { b'a' + (n - 10) } }
 
@@ -74,15 +89,73 @@ pub fn arp_probe() -> Option<[u8; 6]> {
     None
 }
 
-/// Bring up the NIC and run the ARP round-trip. Returns a ternary result:
-/// Pos = full TX+RX proven, Zero = NIC up but no reply, Neg = no NIC.
+/// Send an ICMP echo request to the gateway and poll for the echo reply.
+/// Proves the IPv4 + ICMP layer end to end. `gw_mac` comes from ARP.
+fn icmp_ping(gw_mac: &[u8; 6]) -> bool {
+    let nic = match rtl8139::nic() { Some(n) => n, None => return false };
+    const PAYLOAD: usize = 32;
+    const ICMP_LEN: usize = 8 + PAYLOAD;
+    const TOTAL: usize = 14 + 20 + ICMP_LEN;
+    let mut f = [0u8; TOTAL];
+
+    // Ethernet
+    f[0..6].copy_from_slice(gw_mac);
+    f[6..12].copy_from_slice(&nic.mac);
+    f[12] = (ETHERTYPE_IP >> 8) as u8; f[13] = (ETHERTYPE_IP & 0xFF) as u8;
+
+    // IPv4 header
+    f[14] = 0x45;                                   // v4, IHL=5
+    let total_len = (20 + ICMP_LEN) as u16;
+    f[16] = (total_len >> 8) as u8; f[17] = total_len as u8;
+    f[20] = 0x40;                                   // flags: Don't Fragment
+    f[22] = 64;                                     // TTL
+    f[23] = PROTO_ICMP;
+    f[26..30].copy_from_slice(&OUR_IP);
+    f[30..34].copy_from_slice(&GW_IP);
+    let ipck = inet_checksum(&f[14..34]);
+    f[24] = (ipck >> 8) as u8; f[25] = ipck as u8;
+
+    // ICMP echo request
+    let id: u16 = 0x1234; let seq: u16 = 1;
+    f[34] = 8;                                       // type = echo request
+    f[38] = (id >> 8) as u8; f[39] = id as u8;
+    f[40] = (seq >> 8) as u8; f[41] = seq as u8;
+    for i in 0..PAYLOAD { f[42 + i] = b'a' + (i as u8 % 26); }
+    let icck = inet_checksum(&f[34..34 + ICMP_LEN]);
+    f[36] = (icck >> 8) as u8; f[37] = icck as u8;
+
+    nic.send(&f);
+    crate::serial::write_str("  [net] ICMP echo -> 10.0.2.2 sent\n");
+
+    let mut rx = [0u8; 1536];
+    for _ in 0..2_000_000u32 {
+        if let Some(len) = nic.poll_rx(&mut rx) {
+            if len >= 42
+                && rx[12] == 0x08 && rx[13] == 0x00      // IPv4
+                && rx[23] == PROTO_ICMP                   // ICMP
+                && rx[34] == 0                            // echo reply
+                && rx[26..30] == GW_IP                    // from the gateway
+                && rx[38] == (id >> 8) as u8 && rx[39] == id as u8
+            {
+                crate::serial::write_str("  [net] ICMP echo reply from 10.0.2.2 (ping OK)\n");
+                return true;
+            }
+        }
+    }
+    crate::serial::write_str("  [net] no ICMP reply (timeout)\n");
+    false
+}
+
+/// Bring up the NIC, ARP the gateway, then ping it. Ternary result:
+/// Pos = ping round-trip OK, Zero = NIC up but ARP/ping failed, Neg = no NIC.
 pub fn init() -> ternary_core::Trit {
     use ternary_core::Trit;
     if !rtl8139::init() {
         return Trit::Neg;
     }
-    match arp_probe() {
-        Some(_) => Trit::Pos,
-        None    => Trit::Zero,
-    }
+    let gw = match arp_probe() {
+        Some(m) => m,
+        None    => return Trit::Zero,
+    };
+    if icmp_ping(&gw) { Trit::Pos } else { Trit::Zero }
 }

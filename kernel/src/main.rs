@@ -257,10 +257,10 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
         Trit::Neg  => vga::write_str("  [HDA audio: init failed]\n", vga::Color::Red),
     }
 
-    // Networking — RTL8139 NIC + ARP round-trip; ternary result logged.
+    // Networking — RTL8139 NIC, ARP, then ICMP ping the gateway.
     match net::init() {
-        Trit::Pos  => vga::write_str("  [net: NIC up, ARP reply OK]\n", vga::Color::Green),
-        Trit::Zero => vga::write_str("  [net: NIC up, no ARP reply]\n", vga::Color::Amber),
+        Trit::Pos  => vga::write_str("  [net: ping 10.0.2.2 OK]\n", vga::Color::Green),
+        Trit::Zero => vga::write_str("  [net: NIC up, no reply]\n", vga::Color::Amber),
         Trit::Neg  => vga::write_str("  [net: no NIC]\n", vga::Color::Red),
     }
 
