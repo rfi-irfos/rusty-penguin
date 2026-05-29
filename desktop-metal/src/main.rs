@@ -333,19 +333,44 @@ fn rtc_str() -> Strbuf {
 
 // ---- Scene drawing ──────────────────────────────────────────────────────────
 
-fn draw_scene_static(fb: &mut Framebuffer) {
+fn draw_scene_static(fb: &mut Framebuffer) { draw_scene_static_v(fb, 0); }
+
+fn draw_scene_static_v(fb: &mut Framebuffer, variant: u8) {
     let w = fb.width; let h = fb.height;
     let ptop = panel_top(h);
 
-    // Wallpaper — warm-stone gradient over the FULL screen (v2 mockup form: no
-    // top bar). Vertical lerp #252D29 → #1B211E + a soft green glow up top.
+    // Wallpaper — warm-stone gradient, 4 variants for "Change Background".
+    // v0: warm stone green (default), v1: cool slate, v2: deep night, v3: sunset amber.
     let mut y = 0u32;
     while y < h {
         let t = y as u64 * 256 / h as u64;
-        let mut r = 0x25u64 - 0x0A * t / 255;
-        let mut g = 0x2Du64 - 0x0C * t / 255;
-        let mut b = 0x29u64 - 0x0B * t / 255;
-        if t < 140 { let glow = (140 - t) * 10 / 140; g += glow; r += glow / 3; }
+        let (r, g, b) = match variant {
+            1 => { // Cool slate blue-grey
+                let r = 0x1Cu64.saturating_sub(0x06 * t / 255);
+                let g = 0x22u64.saturating_sub(0x08 * t / 255);
+                let b = 0x2Eu64.saturating_sub(0x0A * t / 255);
+                (r, g, b)
+            }
+            2 => { // Deep forest night
+                let r = 0x10u64.saturating_sub(0x04 * t / 255);
+                let g = 0x1Au64.saturating_sub(0x08 * t / 255);
+                let b = 0x12u64.saturating_sub(0x05 * t / 255);
+                (r, g, b)
+            }
+            3 => { // Warm amber dusk
+                let r = 0x2Eu64.saturating_sub(0x0A * t / 255);
+                let g = 0x24u64.saturating_sub(0x0A * t / 255);
+                let b = 0x18u64.saturating_sub(0x08 * t / 255);
+                (r, g, b)
+            }
+            _ => { // v0: default warm stone green
+                let mut r = 0x25u64.saturating_sub(0x0A * t / 255);
+                let mut g = 0x2Du64.saturating_sub(0x0C * t / 255);
+                let b = 0x29u64.saturating_sub(0x0B * t / 255);
+                if t < 140 { let glow = (140 - t) * 10 / 140; g += glow; r += glow / 3; }
+                (r, g, b)
+            }
+        };
         fb.fill_rect(0, y, w, 1, ((r as u32) << 16) | ((g as u32) << 8) | b as u32);
         y += 1;
     }
@@ -661,47 +686,97 @@ fn start_menu_hit(fh: u32, mx: i32, my: i32) -> Option<usize> {
 }
 
 // ---- Right-click context menu ───────────────────────────────────────────────
+// Items: (label, color) — empty label = separator.
+// Action indices (non-separator items, in order):
+//   0  Open Terminal     1  Open Files        2  Show Desktop
+//   3  Change Background 4  Display Settings  5  Close All Windows
 
 const CTX_ITEMS: &[(&str, u32)] = &[
-    ("New Terminal",      0x4ADE80),
-    ("Close All Windows", 0xEF4444),
-    ("Refresh Desktop",   0x60A5FA),
+    ("Open Terminal",      0x6FE18B),  // GREEN
+    ("Open Files",         0x8CC6E5),  // BLUE
+    ("",                   0),          // separator
+    ("Show Desktop",       0x909A92),  // DIM
+    ("",                   0),          // separator
+    ("Change Background",  0xECDAA7),  // CREAM
+    ("Display Settings",   0xF5C451),  // AMBER
+    ("",                   0),          // separator
+    ("Close All Windows",  0xEF7575),  // NEG red
 ];
 
+const CTX_ITEM_H:  i32 = 26;  // height of one item row
+const CTX_SEP_H:   i32 = 9;   // height of a separator
+const CTX_W:       i32 = 210;  // menu width
+const CTX_PAD_Y:   i32 = 6;   // top/bottom padding inside menu
+const CTX_BG:      u32 = 0x1E2620;  // warm-stone panel dark
+
+fn ctx_menu_total_h() -> i32 {
+    CTX_PAD_Y * 2 + CTX_ITEMS.iter().map(|(lbl, _)| {
+        if lbl.is_empty() { CTX_SEP_H } else { CTX_ITEM_H }
+    }).sum::<i32>()
+}
+
 fn ctx_menu_bounds(mx: i32, my: i32, fw: u32, fh: u32) -> (i32, i32, i32, i32) {
-    let w = 148i32;
-    let h = 4 + CTX_ITEMS.len() as i32 * 20;
-    let x = mx.min(fw as i32 - w - 4).max(0);
-    let y = my.min(fh as i32 - h - 4).max(0);
+    let w = CTX_W;
+    let h = ctx_menu_total_h();
+    let x = mx.min(fw as i32 - w - 6).max(0);
+    let y = my.min(fh as i32 - h - 6).max(0);
     (x, y, w, h)
 }
 
 fn draw_ctx_menu(fb: &mut Framebuffer, mx: i32, my: i32) {
+    draw_ctx_menu_hover(fb, mx, my, None);
+}
+
+fn draw_ctx_menu_hover(fb: &mut Framebuffer, mx: i32, my: i32, hover: Option<usize>) {
     let (x, y, w, h) = ctx_menu_bounds(mx, my, fb.width, fb.height);
-    // Modern shadow effect
-    fb.fill_rounded_rect(x + 2, y + 2, w, h, 6, 0x0A0A14);
-    // Menu background matching system palette
-    fb.fill_rounded_rect(x, y, w, h, 6, 0x1A1A24);
-    // Top accent line
-    fb.fill_rect_s(x, y, w, 2, GREEN);
+    // Aero-style shadow + frosted glass body
+    fb.fill_rounded_rect(x + 3, y + 6, w + 2, h, 12, 0x070A08);
+    fb.fill_rounded_rect(x + 1, y + 3, w,     h, 11, 0x0C110E);
+    fb.fill_rounded_rect_glass(x, y, w, h, 10, CTX_BG, 230);
+    // Top accent edge (spring green hairline)
+    fb.fill_rect_s(x + 10, y + 1, w - 20, 1, 0x3C5040);
+    // Green top accent strip
+    fb.fill_rect_s(x + 10, y, w - 20, 2, GREEN);
+
+    let mut cy = y + CTX_PAD_Y;
     for (i, (label, color)) in CTX_ITEMS.iter().enumerate() {
-        let iy = y + 2 + i as i32 * 20;
-        let bg = 0x1A1A24u32;  // consistent background
-        fb.fill_rect_s(x + 1, iy, w - 2, 20, bg);
-        // Color accent bar (smaller, refined)
-        fb.fill_rect_s(x + 2, iy + 4, 2, 12, *color);
-        fb.draw_str((x + 8) as u32, (iy + 6) as u32, label, *color, bg);
+        if label.is_empty() {
+            // Separator line
+            let sep_y = cy + CTX_SEP_H / 2;
+            fb.fill_rect_s(x + 12, sep_y, w - 24, 1, 0x3C4641);
+            cy += CTX_SEP_H;
+        } else {
+            // Item background — highlight on hover
+            let hovered = hover == Some(i);
+            let bg = if hovered { 0x2E3C32u32 } else { CTX_BG };
+            if hovered {
+                fb.fill_rounded_rect_glass(x + 2, cy, w - 4, CTX_ITEM_H, 6, bg, 200);
+                // Left accent bar on hover
+                fb.fill_rect_s(x + 4, cy + 5, 3, CTX_ITEM_H - 10, *color);
+            }
+            // Label text
+            let ty = (cy + (CTX_ITEM_H - 8) / 2) as u32;
+            fb.draw_str((x + 14) as u32, ty, label, *color, bg);
+            cy += CTX_ITEM_H;
+        }
     }
 }
 
 fn ctx_menu_item_hit(mx: i32, my: i32, cmx: i32, cmy: i32, fw: u32, fh: u32) -> Option<usize> {
     let (x, y, w, _) = ctx_menu_bounds(cmx, cmy, fw, fh);
     if mx < x || mx >= x + w { return None; }
-    for i in 0..CTX_ITEMS.len() {
-        let iy = y + 2 + i as i32 * 20;
-        if my >= iy && my < iy + 20 { return Some(i); }
+    let mut cy = y + CTX_PAD_Y;
+    for (i, (label, _)) in CTX_ITEMS.iter().enumerate() {
+        if label.is_empty() { cy += CTX_SEP_H; continue; }
+        if my >= cy && my < cy + CTX_ITEM_H { return Some(i); }
+        cy += CTX_ITEM_H;
     }
     None
+}
+
+// Map CTX_ITEMS index → sequential action index (skipping separators).
+fn ctx_action(item_idx: usize) -> usize {
+    CTX_ITEMS[..item_idx].iter().filter(|(l, _)| !l.is_empty()).count()
 }
 
 // ---- Window + terminal wrapper ──────────────────────────────────────────────
@@ -1015,15 +1090,15 @@ fn open_minesweeper(w: i32, h: i32, n: usize) -> Option<TermWin> {
 
 // ---- Full scene recomposite ─────────────────────────────────────────────────
 
-fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, ctx_menu: Option<(i32,i32)>, stats: &SysStats, blink_on: bool, hover_icon: Option<usize>) {
+fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, ctx_menu: Option<(i32,i32)>, stats: &SysStats, blink_on: bool, hover_icon: Option<usize>, wallpaper_v: u8) {
     // Static background (gradient + logo + icon dock) is cached: blitting it is
     // far cheaper than recomputing the 1080-row gradient every frame, which is
     // what made dragging a window at 1080p janky. The cache is rebuilt only
-    // when the static scene changes (icon hover) — see invalidate_bg callers.
+    // when the static scene changes (icon hover, wallpaper change).
     if fb.bg_cached() {
         fb.restore_bg();
     } else {
-        draw_scene_static(fb);
+        draw_scene_static_v(fb, wallpaper_v);
         draw_desktop_icons(fb, hover_icon);
         fb.snapshot_bg();
     }
@@ -1088,6 +1163,7 @@ pub extern "C" fn _start() -> ! {
     let mut start_menu_open = false;
     let mut ctx_menu: Option<(i32, i32)> = None;
     let mut hover_icon: Option<usize> = None;
+    let mut wallpaper_variant: u8 = 0;  // cycles on "Change Background"
 
     // Boot to a clean desktop — the Apple-style welcome card + dock + gradient
     // are the first impression, not a terminal covering them. Open apps from
@@ -1253,13 +1329,32 @@ pub extern "C" fn _start() -> ! {
         if left_edge {
             if let Some((cmx, cmy)) = ctx_menu.take() {
                 if let Some(item) = ctx_menu_item_hit(cx, cy, cmx, cmy, fb.width, fb.height) {
-                    match item {
-                        0 => {
+                    match ctx_action(item) {
+                        0 => { // Open Terminal
                             if let Some(tw) = open_term(w, h, wins.len(), &LAUNCHERS[0]) {
                                 wins.push(tw);
                             }
                         }
-                        1 => { wins.clear(); }
+                        1 => { // Open Files
+                            if let Some(tw) = open_file_manager(w, h, wins.len()) {
+                                wins.push(tw);
+                            }
+                        }
+                        2 => { // Show Desktop — minimize all windows
+                            for tw in wins.iter_mut() { tw.win.minimized = true; }
+                        }
+                        3 => { // Change Background — cycle wallpaper variant
+                            wallpaper_variant = (wallpaper_variant + 1) % 4;
+                            fb.invalidate_bg();
+                        }
+                        4 => { // Display Settings
+                            if let Some(tw) = open_settings(w, h, wins.len()) {
+                                wins.push(tw);
+                            }
+                        }
+                        5 => { // Close All Windows
+                            wins.clear();
+                        }
                         _ => {}
                     }
                 }
@@ -1437,7 +1532,7 @@ pub extern "C" fn _start() -> ! {
             restore_cursor_bg(&mut fb, prev_cx, prev_cy, &cbuf);
 
             if any_chrome {
-                recomposite(&mut fb, &mut wins, start_menu_open, ctx_menu, &stats, blink_on, hover_icon);
+                recomposite(&mut fb, &mut wins, start_menu_open, ctx_menu, &stats, blink_on, hover_icon, wallpaper_variant);
                 scene_dirty = false;
             } else if any_term {
                 // Partial: re-render only the focused terminal content. App and editor

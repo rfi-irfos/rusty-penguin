@@ -61,6 +61,10 @@ static mut MMAP_CUR: u64 = MMAP_BASE;
 const PAGE: u64 = 4096;
 fn page_up(n: u64) -> u64 { (n + PAGE - 1) & !(PAGE - 1) }
 
+// ── Thread TID allocator (minimal, no real scheduling) ───────────────────────
+static mut NEXT_TID: u32 = 2;  // 1 is the main thread; children get 2,3,…
+unsafe fn alloc_tid() -> u32 { let t = NEXT_TID; NEXT_TID = NEXT_TID.wrapping_add(1); t }
+
 // MSR for the FS base (TLS) — set by arch_prctl(ARCH_SET_FS).
 const IA32_FS_BASE: u32 = 0xC000_0100;
 const ARCH_SET_FS: u64 = 0x1002;
@@ -376,6 +380,112 @@ pub fn syscall(nr: u64, a1: u64, a2: u64, a3: u64) -> u64 {
             }
             len as u64
         }
+        // ── Brick 5: threads ─────────────────────────────────────────────────
+        // clone(flags, child_stack, ptid, ctid, tls)
+        // CLONE_THREAD cooperative stub: assigns a tid, wires SETTID/SETTLS flags,
+        // but does NOT create a real concurrent thread (single-CPU kernel, no
+        // preemptive scheduler yet). Programs that only use threads for internal
+        // glibc machinery (malloc, stdio) will work fine — those locks are never
+        // contended when only one logical thread is running.
+        56 => unsafe {
+            let flags = a1;
+            let ptid  = a3 as *mut u32;   // CLONE_PARENT_SETTID target
+            let ctid  = a4 as *mut u32;   // CLONE_CHILD_SETTID/CLEARTID target
+            let tls   = a5;               // CLONE_SETTLS: new FS base for child
+            let tid   = alloc_tid();
+            const CLONE_PARENT_SETTID: u64 = 0x0010_0000;
+            const CLONE_CHILD_SETTID:  u64 = 0x0100_0000;
+            if flags & CLONE_PARENT_SETTID != 0 && !ptid.is_null() { *ptid = tid; }
+            if flags & CLONE_CHILD_SETTID  != 0 && !ctid.is_null() { *ctid = tid; }
+            // CLONE_SETTLS: record the child's TLS base but do NOT apply it to the
+            // parent's FS — the child thread (once we schedule it) sets its own FS.
+            // For now just log it so we know when programs use it.
+            if flags & 0x0008_0000 != 0 && tls != 0 {
+                serial::write_str("  [clone] SETTLS tls=0x");
+                serial::write_hex_u32(tls as u32);
+                serial::write_byte(b'\n');
+            }
+            tid as u64
+        }
+        // futex(uaddr, op, val, timeout, uaddr2, val3)
+        // Minimal brick-5 implementation: WAIT and WAKE are stubs that return
+        // immediately. This is correct for single-threaded-in-practice programs
+        // (glibc's internal locks are never contended when one thread runs).
+        // FUTEX_WAIT: if *uaddr != val → EAGAIN (value already changed, retry)
+        //             if *uaddr == val → return 0 (spurious wakeup, retry CAS)
+        202 => unsafe {
+            let op  = (a2 & 0x7F) as u32;  // strip FUTEX_PRIVATE_FLAG (128)
+            let val = a3 as u32;
+            match op {
+                0 => { // FUTEX_WAIT
+                    let cur = *(a1 as *const u32);
+                    if cur != val { errno(-11) } else { 0 } // EAGAIN if changed
+                }
+                1 => 0, // FUTEX_WAKE → 0 threads woken
+                _ => 0, // other ops: stub success
+            }
+        }
+        // ── File descriptor ops ───────────────────────────────────────────────
+        // poll(fds, nfds, timeout) → 0 (no events, non-blocking stub).
+        7 => 0,
+        // ppoll(fds, nfds, tmo_p, sigmask, sigsetsize) → 0.
+        271 => 0,
+        // epoll_create / epoll_create1 → fake fd 100.
+        213 | 291 => 100,
+        // epoll_ctl → success.
+        233 => 0,
+        // epoll_wait / epoll_pwait → 0 events.
+        232 | 281 => 0,
+        // pipe2(fds, flags) → two fake readable/writable ends (fd 101/102).
+        293 => unsafe {
+            let fds = a1 as *mut u32;
+            if !fds.is_null() { *fds = 101; *fds.add(1) = 102; }
+            0
+        }
+        // dup2 / dup3 → just return newfd.
+        33 | 292 => a2,
+        // dup(oldfd) → return same fd (identity dup).
+        32 => a1,
+        // fcntl(fd, cmd, arg) → F_GETFL=1 returns O_RDWR(2), others return 0.
+        72 => { if a2 == 3 { 2 } else { 0 } }
+        // setsockopt / getsockopt / bind / connect / socket → ENOTSUP stubs
+        // (networking not yet wired; avoids hard ENOSYS crash in glibc's resolver).
+        41 | 49 | 54 | 55 | 200 => errno(-95), // EOPNOTSUPP
+        // readlink(path, buf, size) — common for /proc/self/exe.
+        89 => unsafe {
+            let path = cstr(a1);
+            let buf  = a2 as *mut u8;
+            let sz   = a3 as usize;
+            if !buf.is_null() && sz > 0 && path == b"/proc/self/exe" {
+                let val = b"/bin/linuxtest";
+                let n = val.len().min(sz);
+                core::ptr::copy_nonoverlapping(val.as_ptr(), buf, n);
+                return n as u64;
+            }
+            errno(-2) // ENOENT
+        }
+        // getdents64(fd, dirp, count) → 0 (empty directory).
+        217 => 0,
+        // sysinfo(info) — fill struct sysinfo with rough values.
+        99 => unsafe {
+            let p = a1 as *mut u64;
+            if !p.is_null() {
+                core::ptr::write_bytes(p as *mut u8, 0, 112);
+                *p = 1;                                  // uptime (1 sec)
+                *p.add(9)  = (512u64 * 1024 * 1024);    // totalram
+                *p.add(10) = (480u64 * 1024 * 1024);    // freeram
+                *p.add(18) = 1;                          // mem_unit
+            }
+            0
+        }
+        // tgkill(tgid, tid, sig) → 0 (no signal delivery yet).
+        234 => 0,
+        // rt_sigaction / rt_sigprocmask already stubbed via 13|14 below —
+        // add rt_sigsuspend (130) and sigaltstack (131).
+        130 | 131 => 0,
+        // waitpid / wait4 → ECHILD (no children).
+        61 | 247 => errno(-10),
+
         // exit / exit_group → end the process.
         60 | 231 => {
             vga::write_str("\n  [linux] process exited, code=", vga::Color::Green);

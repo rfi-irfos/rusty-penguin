@@ -58,6 +58,10 @@ core::arch::global_asm!(
     "_lx_a4: .quad 0",
     "_lx_a5: .quad 0",
     "_lx_a6: .quad 0",
+    // User RIP (return address from syscall) — needed by clone() to set the
+    // child thread's initial PC (the instruction after the `syscall` opcode).
+    ".global _user_rip_save",
+    "_user_rip_save: .quad 0",
 
     ".section .text",
     ".global syscall_entry",
@@ -67,11 +71,12 @@ core::arch::global_asm!(
     "mov qword ptr [rip + _user_rsp], rsp",
     "lea rsp, [rip + _syscall_kstack_top]",
 
-    // 1b. Stash Linux args 4–6 (r10/r8/r9) before the Rust call clobbers them.
-    //     Harmless for native syscalls (which ignore these globals).
+    // 1b. Stash Linux args 4–6 (r10/r8/r9) and user RIP (rcx) before the
+    //     Rust call clobbers them. Harmless for native syscalls.
     "mov qword ptr [rip + _lx_a4], r10",
     "mov qword ptr [rip + _lx_a5], r8",
     "mov qword ptr [rip + _lx_a6], r9",
+    "mov qword ptr [rip + _user_rip_save], rcx",
 
     // 2. Save state. The Linux syscall ABI requires the kernel to PRESERVE all
     //    registers except rax (return), rcx and r11 (clobbered by SYSCALL).
