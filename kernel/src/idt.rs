@@ -117,6 +117,10 @@ extern "x86-interrupt" fn irq_timer(_f: InterruptFrame) {
         TICKS += 1;
         pic::eoi(0);
     }
+    // Poll USB HID at the timer tick rate (~100 Hz). This drains the xHCI
+    // event ring and injects keyboard/mouse events into the input ring,
+    // giving USB devices the same latency as PS/2 on modern hardware.
+    crate::usb::poll();
 }
 
 static mut SHIFT_DOWN: bool = false;

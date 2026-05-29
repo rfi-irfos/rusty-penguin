@@ -39,6 +39,32 @@ pub fn enable_bus_master(bus: u8, dev: u8, func: u8) {
     unsafe { write32(bus, dev, func, 0x04, cmd | 0x06) }; // Mem + BusMaster
 }
 
+/// Read class/subclass/prog-if from config offset 0x08.
+pub fn class(bus: u8, dev: u8, func: u8) -> (u8, u8, u8) {
+    let v = unsafe { read32(bus, dev, func, 0x08) };
+    ((v >> 24) as u8, (v >> 16) as u8, (v >> 8) as u8)
+}
+
+/// Scan for the first device with matching (class, subclass). Returns
+/// (bus, dev, func, prog_if).
+pub fn find_class(class_code: u8, subclass: u8) -> Option<(u8, u8, u8, u8)> {
+    for bus in 0u8..=3 {
+        for dev in 0u8..32 {
+            for func in 0u8..8 {
+                let (vendor, _) = vendor_device(bus, dev, func);
+                if vendor == 0xFFFF { if func == 0 { break; } continue; }
+                let (c, s, p) = class(bus, dev, func);
+                if c == class_code && s == subclass { return Some((bus, dev, func, p)); }
+                if func == 0 {
+                    let hdr = unsafe { read32(bus, dev, 0, 0x0C) };
+                    if (hdr >> 23) & 1 == 0 { break; }
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Scan buses 0..4 for a device matching (vendor, device_id).
 /// Returns (bus, dev, func) if found.
 pub fn find(vendor: u16, device_id: u16) -> Option<(u8, u8, u8)> {
