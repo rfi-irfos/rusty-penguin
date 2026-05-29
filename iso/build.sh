@@ -208,6 +208,23 @@ INITRD="$ISO_DIR/initrd.img"
 (cd "$INITRAMFS_DIR" && find . | cpio -o -H newc 2>/dev/null | gzip -9 > "$INITRD")
 echo "[build] initrd.img: $(du -sh "$INITRD" | cut -f1)"
 
+# 2b. Web initrd: the lean initramfs + the X11 web-rootfs (Xorg/xterm + closure),
+# for the `rp.web` boot mode. Kept separate so the default desktop/DOOM initrds
+# stay small (the X stack only loads when you boot the Web entry).
+echo "[build] Building web-rootfs (X11 stack)..."
+WEB_STAGE="$(mktemp -d)"
+trap "rm -rf $WEB_STAGE $INITRAMFS_DIR" EXIT
+bash "$ISO_DIR/build-web-rootfs.sh" "$WEB_STAGE" 2>&1 | sed 's/^/    /'
+# Merge: base initramfs (init, busybox, libs) + the X rootfs.
+WEB_DIR="$(mktemp -d)"
+trap "rm -rf $WEB_DIR $WEB_STAGE $INITRAMFS_DIR" EXIT
+cp -a "$INITRAMFS_DIR/." "$WEB_DIR/"
+cp -a "$WEB_STAGE/." "$WEB_DIR/"
+cp "$WEB_STAGE/start-x.sh" "$WEB_DIR/start-x.sh" 2>/dev/null || true
+WEB_INITRD="$ISO_DIR/initrd-web.img"
+(cd "$WEB_DIR" && find . | cpio -o -H newc 2>/dev/null | gzip -9 > "$WEB_INITRD")
+echo "[build] initrd-web.img: $(du -sh "$WEB_INITRD" | cut -f1)"
+
 # 3a. Build user-psh (bare-metal ring-3 shell — must be before kernel)
 echo "[build] Building user-psh..."
 (cd "$REPO_ROOT/user-psh" && cargo +nightly build --release \
@@ -306,6 +323,7 @@ cp "$KERNEL_ELF" "$ISO_DIR/boot/kernel.elf"
 # bare-metal CPIO module (already at ISO_DIR/initrd-bare.img)
 cp "$BARE_INITRD" "$ISO_DIR/boot/initrd-bare.img"
 [ -f "$ISO_DIR/initrd-doom.img" ] && cp "$ISO_DIR/initrd-doom.img" "$ISO_DIR/boot/initrd-doom.img"
+[ -f "$ISO_DIR/initrd-web.img" ]  && cp "$ISO_DIR/initrd-web.img"  "$ISO_DIR/boot/initrd-web.img"
 # grub.cfg is already at iso/grub/grub.cfg
 cp "$ISO_DIR/grub/grub.cfg" "$ISO_DIR/boot/grub/grub.cfg"
 

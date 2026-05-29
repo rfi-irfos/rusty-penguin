@@ -44,7 +44,13 @@ fn main() {
     // cmdline boots straight to a text shell instead of the desktop — used to
     // run `rp-install <disk>`, and as a rescue console. RP_RECOVERY stops the
     // shell from bouncing back into the desktop.
-    let result = if console {
+    let result = if web_mode() {
+        // rp.web — boot the X11 web session (Xorg on /dev/fb0 + a real GUI app)
+        // instead of the bespoke desktop. The path to running Firefox/Chrome.
+        eprintln!("[init] web mode (rp.web) — starting X11 session...");
+        load_input_modules();
+        launch_x_session()
+    } else if console {
         eprintln!("[init] console mode (rp.console) — run `rp-install /dev/<disk>` to install");
         std::env::set_var("RP_RECOVERY", "1");
         launch_shell()
@@ -66,6 +72,27 @@ fn console_mode() -> bool {
     fs::read_to_string("/proc/cmdline")
         .map(|c| c.contains("rp.console") || c.contains("rp.install"))
         .unwrap_or(false)
+}
+
+fn web_mode() -> bool {
+    fs::read_to_string("/proc/cmdline").map(|c| c.contains("rp.web")).unwrap_or(false)
+}
+
+/// Load input modules so Xorg/libinput sees a keyboard+mouse via /dev/input.
+fn load_input_modules() {
+    for m in ["/lib/modules/virtio_input.ko"] {
+        let _ = Command::new("/bin/busybox").args(["insmod", m]).status();
+    }
+}
+
+/// Launch the X11 web session via the bundled rootfs launcher.
+fn launch_x_session() -> Result<(), Box<dyn std::error::Error>> {
+    if !Path::new("/start-x.sh").exists() {
+        return Err("web rootfs not present (/start-x.sh missing)".into());
+    }
+    let status = Command::new("/bin/busybox").args(["sh", "/start-x.sh"]).status()?;
+    eprintln!("[init] X session exited: {:?}", status.code());
+    Ok(())
 }
 
 fn launch_shell() -> Result<(), Box<dyn std::error::Error>> {
