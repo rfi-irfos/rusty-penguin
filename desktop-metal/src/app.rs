@@ -336,6 +336,191 @@ impl App for Calendar {
     }
 }
 
+/// Kernel Manager — "bring your own kernel" installer.
+///
+/// The whole point (Linus's old challenge: make swapping the kernel stupidly
+/// easy): scan the filesystem for kernel ELF candidates, let you pick one and
+/// stage it as the next boot kernel with a single click, and show the running
+/// kernel + ABI. Staging writes `boot.manifest` into the VFS, which the ISO
+/// build tooling (and the recovery shell's `kinstall`) pick up.
+pub struct KernelManager {
+    candidates: Vec<String>,    // *.elf files found in /
+    selected:   usize,
+    staged:     Option<String>, // kernel currently staged for next boot
+    status:     String,
+    ansi:       crate::ansi::AnsiParser,
+    pub dirty:       bool,
+    pub wants_close: bool,
+}
+
+const KM_LIST_TOP: i32 = 84;   // content-relative y where the kernel list starts
+const KM_ROW_H:    i32 = 24;
+const KM_BTN_H:    i32 = 32;
+
+impl KernelManager {
+    pub fn new() -> Self {
+        let mut km = KernelManager {
+            candidates:  Vec::new(),
+            selected:    0,
+            staged:      None,
+            status:      String::from("Pick a kernel ELF, then click Install."),
+            ansi:        crate::ansi::AnsiParser::new(),
+            dirty:       true,
+            wants_close: false,
+        };
+        km.scan();
+        // Reflect any kernel staged in a previous session.
+        if let Some(data) = vfs::vfs().read("boot.manifest") {
+            if let Some(name) = Self::parse_manifest(data) {
+                if let Some(i) = km.candidates.iter().position(|c| *c == name) {
+                    km.selected = i;
+                }
+                km.status = String::from("Staged kernel found — reboot to apply.");
+                km.staged = Some(name);
+            }
+        }
+        km
+    }
+
+    /// Extract the `kernel_elf=<name>` value from a boot.manifest blob.
+    fn parse_manifest(data: &[u8]) -> Option<String> {
+        let text = core::str::from_utf8(data).ok()?;
+        for line in text.lines() {
+            if let Some(v) = line.strip_prefix("kernel_elf=") {
+                let v = v.trim();
+                if !v.is_empty() { return Some(String::from(v)); }
+            }
+        }
+        None
+    }
+
+    /// Scan the VFS root for files ending in `.elf`.
+    fn scan(&mut self) {
+        self.candidates.clear();
+        let mut buf = [0u8; 4096];
+        let count = unsafe { sys_listdir(b"/", &mut buf) };
+        let mut off = 0usize;
+        for _ in 0..count {
+            if off >= buf.len() { break; }
+            let name_len = buf[off] as usize; off += 1;
+            if off + name_len > buf.len() { break; }
+            let name = String::from_utf8_lossy(&buf[off..off + name_len]).into_owned();
+            off += name_len;
+            if off + 8 > buf.len() { break; }
+            off += 8; // skip the 8-byte size field
+            if name.ends_with(".elf") { self.candidates.push(name); }
+        }
+        if self.selected >= self.candidates.len() { self.selected = 0; }
+    }
+
+    fn install_selected(&mut self) {
+        if self.selected < self.candidates.len() {
+            let name = self.candidates[self.selected].clone();
+            let mut m = String::from("kernel_elf=");
+            m.push_str(&name);
+            m.push('\n');
+            m.push_str("staged_by=Kernel Manager\n");
+            vfs::vfs().write("boot.manifest", m.as_bytes());
+            self.status = alloc::format!("Staged '{}'. Reboot to boot it.", name);
+            self.staged = Some(name);
+        } else {
+            self.status = String::from("No kernel selected — copy a .elf into / first.");
+        }
+        self.dirty = true;
+    }
+}
+
+impl App for KernelManager {
+    fn render(&mut self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, h: u32) {
+        // Header
+        fb.fill_rect(x, y, w, 28, 0x2C2C38);
+        fb.draw_str(x + 12, y + 9, "Kernel Manager", 0xF5F5F7, 0x2C2C38);
+        fb.draw_str(x + 168, y + 9, "bring your own kernel", 0x8CC6E5, 0x2C2C38);
+
+        // Running kernel + ABI
+        fb.fill_rect(x, y + 28, w, 26, 0x232333);
+        fb.draw_str(x + 12, y + 36, "Running: RustyPenguin 1.0.0 x86_64  (psh syscall ABI v1)",
+                    0x6FE18B, 0x232333);
+
+        // Section label
+        fb.draw_str(x + 12, y + 62, "Available kernels (.elf in /):", 0xB8B8B8, 0x1A1A24);
+
+        // Candidate list
+        if self.candidates.is_empty() {
+            fb.draw_str(x + 12, y + KM_LIST_TOP as u32,
+                        "None found. Copy a multiboot2 kernel.elf into / (or psh: kinstall).",
+                        0xB8B8B8, 0x1A1A24);
+        } else {
+            for (i, name) in self.candidates.iter().enumerate() {
+                let row_y = y + KM_LIST_TOP as u32 + (i as u32 * KM_ROW_H as u32);
+                if row_y + KM_ROW_H as u32 > y + h - (KM_BTN_H as u32 + 24) { break; }
+                let is_sel = i == self.selected;
+                let is_staged = self.staged.as_deref() == Some(name.as_str());
+                let bg = if is_sel { 0x4A5568 } else if i % 2 == 0 { 0x1A1A24 } else { 0x232333 };
+                fb.fill_rect(x, row_y, w, KM_ROW_H as u32, bg);
+                if is_staged { fb.fill_rect(x, row_y, 4, KM_ROW_H as u32, 0x6FE18B); }
+                let fg = if is_sel { 0xF5F5F7 } else { 0xCFCFD6 };
+                fb.draw_str(x + 14, row_y + 6, name, fg, bg);
+                if is_staged {
+                    fb.draw_str(x + w - 80, row_y + 6, "staged", 0x6FE18B, bg);
+                }
+            }
+        }
+
+        // Status line (above the buttons)
+        let status_y = y + h - (KM_BTN_H as u32 + 22);
+        fb.fill_rect(x, status_y, w, 18, 0x1A1A24);
+        fb.draw_str(x + 12, status_y + 2, &self.status, 0xF5C451, 0x1A1A24);
+
+        // Buttons: Install (green) + Rescan (blue)
+        let btn_y = y + h - KM_BTN_H as u32 - 2;
+        fb.fill_rect(x + 12, btn_y, 220, KM_BTN_H as u32, 0x2E7D4F);
+        fb.draw_str(x + 40, btn_y + 9, "Install Selected Kernel", 0xF5F5F7, 0x2E7D4F);
+        fb.fill_rect(x + 244, btn_y, 110, KM_BTN_H as u32, 0x355B8C);
+        fb.draw_str(x + 280, btn_y + 9, "Rescan", 0xF5F5F7, 0x355B8C);
+
+        self.dirty = false;
+    }
+
+    fn on_key(&mut self, key: u8) {
+        use crate::ansi::Key as AK;
+        match self.ansi.feed(key) {
+            AK::Up   => { if self.selected > 0 { self.selected -= 1; self.dirty = true; } }
+            AK::Down => { if self.selected + 1 < self.candidates.len() { self.selected += 1; self.dirty = true; } }
+            AK::Char(b'\n') | AK::Char(b'\r') => self.install_selected(),
+            AK::Char(b'r') | AK::Char(b'R')   => { self.scan(); self.status = String::from("Rescanned /."); self.dirty = true; }
+            _ => {}
+        }
+    }
+
+    fn on_mouse(&mut self, x: i32, y: i32, _w: u32, h: u32, buttons: u8) {
+        if buttons & 0x01 == 0 { return; }
+        let btn_y = h as i32 - KM_BTN_H - 2;
+        // Install button
+        if x >= 12 && x < 232 && y >= btn_y && y < btn_y + KM_BTN_H {
+            self.install_selected();
+            return;
+        }
+        // Rescan button
+        if x >= 244 && x < 354 && y >= btn_y && y < btn_y + KM_BTN_H {
+            self.scan();
+            self.status = String::from("Rescanned /.");
+            self.dirty = true;
+            return;
+        }
+        // List row selection
+        if y >= KM_LIST_TOP {
+            let row = ((y - KM_LIST_TOP) / KM_ROW_H) as usize;
+            if row < self.candidates.len() && row != self.selected {
+                self.selected = row;
+                self.dirty = true;
+            }
+        }
+    }
+
+    fn title(&self) -> &str { "Kernel Manager" }
+}
+
 /// Settings application
 pub struct Settings {
     selected: usize,
