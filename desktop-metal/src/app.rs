@@ -1311,12 +1311,11 @@ struct BrLine { kind: u8, text: &'static str, link: i32 }
 struct BrPage { url: &'static str, title: &'static str, lines: &'static [BrLine] }
 
 const PAGE_HOME: &[BrLine] = &[
-    BrLine { kind: K_H1,   text: "Rusty Penguin Web",                                  link: -1 },
-    BrLine { kind: K_NOTE, text: "Native browser . rendered by the ternary engine",   link: -1 },
+    BrLine { kind: K_H1,   text: "Rusty Penguin",                                      link: -1 },
+    BrLine { kind: K_NOTE, text: "Pure-Rust OS . ternary logic . RFI-IRFOS",          link: -1 },
     BrLine { kind: K_SPACE,text: "",                                                   link: -1 },
-    BrLine { kind: K_P,    text: "No Chromium, no WebKit underneath. This window, its",link: -1 },
-    BrLine { kind: K_P,    text: "chrome and every page are drawn by Rusty Penguin's", link: -1 },
-    BrLine { kind: K_P,    text: "own framebuffer + CSS engine.",                      link: -1 },
+    BrLine { kind: K_P,    text: "Type a hostname in the address bar and press Enter", link: -1 },
+    BrLine { kind: K_P,    text: "to browse the live web over our TCP/IP stack.",      link: -1 },
     BrLine { kind: K_SPACE,text: "",                                                   link: -1 },
     BrLine { kind: K_H2,   text: "Bookmarks",                                          link: -1 },
     BrLine { kind: K_LINK, text: "About this OS",                                      link: 1 },
@@ -1352,19 +1351,16 @@ const PAGE_TERNARY: &[BrLine] = &[
 ];
 
 const PAGE_WEB: &[BrLine] = &[
-    BrLine { kind: K_H1,   text: "When does the live web work?",                       link: -1 },
+    BrLine { kind: K_H1,   text: "The live web works now.",                            link: -1 },
     BrLine { kind: K_NOTE, text: "rustypenguin://roadmap",                             link: -1 },
     BrLine { kind: K_SPACE,text: "",                                                   link: -1 },
-    BrLine { kind: K_P,    text: "Honestly: not yet. Loading real sites needs two",    link: -1 },
-    BrLine { kind: K_P,    text: "things this OS is still building from scratch:",     link: -1 },
+    BrLine { kind: K_P,    text: "Type any hostname in the address bar. The OS will:", link: -1 },
+    BrLine { kind: K_P,    text: "1. Resolve it via our DNS stack (UDP/53)",           link: -1 },
+    BrLine { kind: K_P,    text: "2. Open a TCP connection to port 80",                link: -1 },
+    BrLine { kind: K_P,    text: "3. Send HTTP/1.0 GET and receive the page",          link: -1 },
+    BrLine { kind: K_P,    text: "4. Strip headers and render the text here.",         link: -1 },
     BrLine { kind: K_SPACE,text: "",                                                   link: -1 },
-    BrLine { kind: K_P,    text: "1. A network stack - a NIC driver + TCP/IP on the",  link: -1 },
-    BrLine { kind: K_P,    text: "   bare-metal kernel (planned).",                    link: -1 },
-    BrLine { kind: K_P,    text: "2. The Linux ABI layer maturing enough to host a",   link: -1 },
-    BrLine { kind: K_P,    text: "   full web engine (bricks 1-5 done).",              link: -1 },
-    BrLine { kind: K_SPACE,text: "",                                                   link: -1 },
-    BrLine { kind: K_P,    text: "Until then this renders local pages. We don't",      link: -1 },
-    BrLine { kind: K_P,    text: "pretend velocity equals completion.",                link: -1 },
+    BrLine { kind: K_P,    text: "All from scratch. No curl, no libc, no Linux.",      link: -1 },
     BrLine { kind: K_SPACE,text: "",                                                   link: -1 },
     BrLine { kind: K_LINK, text: "< Back to start",                                    link: 0 },
 ];
