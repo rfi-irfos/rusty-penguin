@@ -27,9 +27,13 @@ const RIRBCTL: usize = 0x5C;  // RIRB Control
 const RIRBSIZE:usize = 0x5E;  // RIRB Size
 const DPLBASE: usize = 0x70;  // DMA Position Lower Base
 const DPUBASE: usize = 0x74;  // DMA Position Upper Base
-// SD0 = Stream Descriptor 0 (output) starts at 0x80.
-// Each descriptor is 0x20 bytes (ICH6 layout).
-const SD0_BASE:usize = 0x80;
+// Stream Descriptors: input streams first, then output streams.
+// GCAP[15:12]=OSS (output streams), GCAP[11:8]=ISS (input streams).
+// For QEMU q35 with GCAP=0x4401: ISS=4 inputs, OSS=4 outputs.
+// Output SD 0 is at base + 0x80 + ISS*0x20 = base + 0x80 + 4*0x20 = base + 0x100.
+// We compute this at runtime from GCAP to handle different hardware.
+// Placeholder; the real offset is calculated in hda_init from GCAP.
+const SD0_BASE:usize = 0x80;  // updated at runtime; see sd_out_base()
 const SD_CTL:  usize = 0x00;  // stream control
 const SD_STS:  usize = 0x03;  // stream status
 const SD_LPIB: usize = 0x04;  // link position in buffer
@@ -140,6 +144,13 @@ pub fn init() -> Trit {
     unsafe { hda_init(bar0) }
 }
 
+// Compute the MMIO offset of the first output stream descriptor from GCAP.
+// ISS = GCAP[11:8]; each descriptor is 0x20 bytes; inputs come first.
+fn sd_out_base(gcap: u32) -> usize {
+    let iss = ((gcap >> 8) & 0xF) as usize;
+    0x80 + iss * 0x20
+}
+
 unsafe fn hda_init(base: u64) -> Trit {
     // 3. Reset the controller (GCTL.CRST = 0, then 1).
     w32(base, GCTL, 0);
@@ -152,6 +163,13 @@ unsafe fn hda_init(base: u64) -> Trit {
         return Trit::Neg;
     }
     spin(50_000);  // codec detect time
+
+    // Read GCAP to find the output stream descriptor offset.
+    let gcap = r32(base, GCAP);
+    let sd_out = sd_out_base(gcap);  // offset to first output stream descriptor
+    crate::serial::write_str("  [hda] out_sd_offset=0x");
+    crate::serial::write_hex_u32(sd_out as u32);
+    crate::serial::write_byte(b'\n');
 
     // Check at least one codec is present via STATESTS.
     let statests = r16(base, STATESTS);
@@ -322,30 +340,30 @@ unsafe fn hda_init(base: u64) -> Trit {
     *bdl.add(6) = half;                        // length
     *bdl.add(7) = 1;                           // IOC = 1 (interrupt on completion)
 
-    // 10. Configure Stream Descriptor 0 (SD0, output stream 1).
-    let sd = base + SD0_BASE as u64;
-    w8(base, SD0_BASE + SD_CTL, 0x00);          // stop first
+    // 10. Configure the first OUTPUT stream descriptor (offset from GCAP).
+    w8(base, sd_out + SD_CTL, 0x00);          // stop
     spin(1000);
-    w8(base, SD0_BASE + SD_CTL, 0x01);          // reset (SRST bit)
+    w8(base, sd_out + SD_CTL, 0x01);          // SRST — reset descriptor
     spin(5000);
-    w8(base, SD0_BASE + SD_CTL, 0x00);          // clear reset
-    spin(1000);
+    // Wait for reset to complete (SRST self-clears)
+    let mut t2 = 0u32;
+    while r8(base, sd_out + SD_CTL) & 0x01 != 0 && t2 < 50_000 { spin(10); t2 += 1; }
+    w8(base, sd_out + SD_CTL, 0x00);          // clear
 
-    w32(base, SD0_BASE + SD_CBL,   AUDIO_BYTES);
-    w16(base, SD0_BASE + SD_LVI,   1);           // last valid index = 1 (2 entries)
-    w16(base, SD0_BASE + SD_FMT,   0x4011);      // 44.1 kHz, 16-bit, 2ch
-    w32(base, SD0_BASE + SD_BDLPL, BDL_PHYS as u32);
-    w32(base, SD0_BASE + SD_BDLPU, 0);
-    // Clear status bits first
-    w8(base, SD0_BASE + SD_STS, 0x1C);
+    w32(base, sd_out + SD_CBL,   AUDIO_BYTES);
+    w16(base, sd_out + SD_LVI,   1);           // last valid index = 1 (2 BDL entries)
+    w16(base, sd_out + SD_FMT,   0x4011);      // 44.1 kHz, 16-bit, 2ch
+    w32(base, sd_out + SD_BDLPL, BDL_PHYS as u32);
+    w32(base, sd_out + SD_BDLPU, 0);
+    w8(base,  sd_out + SD_STS,   0x1C);        // clear status bits
     spin(1_000);
-    // Control: stream tag = 1 in bits [23:20], DEIE | FEIE | IOCE in bits [4:2], RUN in bit 1
-    // 0x00100000 = stream tag 1 | 0x1C = IRQ enables | 0x02 = RUN
-    // bits[23:20]=stream tag (1), bits[4:2]=DEIE|FEIE|IOCE, bit1=RUN
-    w32(base, SD0_BASE + SD_CTL, (1u32 << 20) | 0x1C | 0x02);  // tag=1, IRQ enables, RUN
+    // Start: stream tag=1 in bits[23:20], IRQ enables in bits[4:2], RUN in bit 1.
+    w32(base, sd_out + SD_CTL, (1u32 << 20) | 0x1C | 0x02);
     spin(10_000);
 
-    let _ = sd;
+    // Quick sanity: LPIB should be non-zero if DMA is running
+    let lpib = r32(base, sd_out + SD_LPIB);
+    crate::serial::write_str("  [hda] LPIB="); crate::serial::write_hex_u32(lpib); crate::serial::write_byte(b'\n');
     crate::serial::write_str("  [hda] playback started (440 Hz, 44.1 kHz, stereo)\n");
     Trit::Pos
 }
