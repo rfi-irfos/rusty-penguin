@@ -259,8 +259,8 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
 
     // Networking — RTL8139 NIC, ARP, then ICMP ping the gateway.
     match net::init() {
-        Trit::Pos  => vga::write_str("  [net: ping 10.0.2.2 OK]\n", vga::Color::Green),
-        Trit::Zero => vga::write_str("  [net: NIC up, no reply]\n", vga::Color::Amber),
+        Trit::Pos  => vga::write_str("  [net: DHCP lease OK]\n", vga::Color::Green),
+        Trit::Zero => vga::write_str("  [net: NIC up, no lease]\n", vga::Color::Amber),
         Trit::Neg  => vga::write_str("  [net: no NIC]\n", vga::Color::Red),
     }
 
