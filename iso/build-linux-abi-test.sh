@@ -34,6 +34,12 @@ cp "$KELF" "$T/boot/kernel.elf"
 # Real cpio initrd carrying the test binary.
 IR=/tmp/lx-initrd; rm -rf "$IR"; mkdir -p "$IR/bin"
 cp "$TESTBIN" "$IR/bin/linuxtest"
+# Dynamic-linking support: ship the interpreter + libc so ld.so can resolve
+# DT_NEEDED at the standard paths (no ld.so.cache → built-in search dirs).
+mkdir -p "$IR/lib64" "$IR/lib/x86_64-linux-gnu"
+cp -L /lib64/ld-linux-x86-64.so.2     "$IR/lib64/ld-linux-x86-64.so.2"      2>/dev/null
+cp -L /lib/x86_64-linux-gnu/libc.so.6 "$IR/lib/x86_64-linux-gnu/libc.so.6"  2>/dev/null
+cp -L /lib/x86_64-linux-gnu/libc.so.6 "$IR/lib64/libc.so.6"                 2>/dev/null
 (cd "$IR" && find . | cpio -o -H newc 2>/dev/null > "$T/boot/initrd-bare.img")
 cat > "$T/boot/grub/grub.cfg" <<'CFG'
 set timeout=0

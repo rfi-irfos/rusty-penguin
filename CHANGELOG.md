@@ -4,6 +4,30 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+### Added — Linux ABI layer brick 4: dynamic linking — a dynamically-linked glibc binary runs (2026-05-29)
+
+- **The bare-metal Rust kernel runs a *dynamically-linked* glibc binary** (the
+  common case — almost no Linux software ships static). ld.so loads, maps
+  `libc.so.6`, relocates the program, and runs it. Proof:
+  `docs/linux-abi-brick4-dynamic-serial.txt`.
+- ELF loader: `load_bias` (load the ET_DYN interpreter at a chosen base) +
+  `interp_path` (read `PT_INTERP`). `linux::enter` loads `ld-linux-x86-64.so.2`
+  at `AT_BASE`, builds the full auxv (`AT_BASE`/`AT_ENTRY`/`AT_PHDR`) + argv, and
+  jumps to ld.so.
+- File syscalls feeding ld.so: `openat`/`open`/`read`/`pread64`/`lseek`/`close`/
+  `fstat`/`newfstatat`/`access`/`faccessat`, plus **file-backed mmap** (brick 3,
+  same day).
+- Three fixes that cracked it: (1) honor **MAP_FIXED** (ld.so reserves a span
+  then maps each library segment at base+offset; ignoring the address scatters
+  segments and breaks symbol tables); (2) **unique `st_dev`/`st_ino`** per file
+  (ld.so dedups loaded objects by inode — 0/0 for every file made it think libc
+  was already loaded and skip mapping it → "no version information available");
+  (3) ship ld.so + libc in the initrd at the standard paths.
+- HONEST SCOPE: single dynamically-linked program, one libc. Threads
+  (`clone`/`futex`), a real per-process VMM, more libraries, `/proc` are still
+  ahead. But the hardest conceptual barrier — the dynamic loader running on our
+  own kernel — is crossed.
+
 ### Added — Linux ABI layer brick 2: a real glibc binary runs natively (2026-05-29)
 
 - **The bare-metal Rust kernel runs an unmodified static-glibc binary** — real

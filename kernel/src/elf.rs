@@ -34,10 +34,16 @@ struct Elf64Phdr {
     p_align:  u64,
 }
 
+const PT_INTERP: u32 = 3;
+
 /// Load an ELF64 binary into the identity-mapped address space (virt == phys).
-/// Each PT_LOAD segment is written directly to its p_vaddr.
-/// Returns the entry point (e_entry), or None if the ELF is malformed.
-pub fn load(elf: &[u8]) -> Option<u64> {
+/// Returns the entry point (e_entry), or None if malformed.
+pub fn load(elf: &[u8]) -> Option<u64> { load_bias(elf, 0) }
+
+/// Like `load`, but add `bias` to every `p_vaddr` (and the entry). Used to
+/// place a position-independent ELF — e.g. the dynamic linker (ET_DYN) — at a
+/// chosen base. Returns `e_entry + bias`.
+pub fn load_bias(elf: &[u8], bias: u64) -> Option<u64> {
     if elf.len() < size_of::<Elf64Ehdr>() { return None; }
 
     let ehdr = unsafe { &*(elf.as_ptr() as *const Elf64Ehdr) };
@@ -58,7 +64,7 @@ pub fn load(elf: &[u8]) -> Option<u64> {
 
         if ph.p_type != PT_LOAD || ph.p_memsz == 0 { continue; }
 
-        let vaddr   = ph.p_vaddr  as usize;
+        let vaddr   = (ph.p_vaddr + bias) as usize;
         let memsz   = ph.p_memsz  as usize;
         let filesz  = ph.p_filesz as usize;
         let foff    = ph.p_offset as usize;
@@ -78,12 +84,35 @@ pub fn load(elf: &[u8]) -> Option<u64> {
             }
         }
 
-        // Writable segments need PTE_WRITABLE — already set by extend_identity_map.
-        // We only check the flag to satisfy the borrow checker.
         let _ = ph.p_flags & PF_W;
     }
 
-    Some(ehdr.e_entry)
+    Some(ehdr.e_entry + bias)
+}
+
+/// Return the `PT_INTERP` path (dynamic linker), if the ELF is dynamically
+/// linked. The path is NUL-terminated in the file; the NUL is stripped.
+pub fn interp_path(elf: &[u8]) -> Option<&[u8]> {
+    if elf.len() < size_of::<Elf64Ehdr>() { return None; }
+    let ehdr = unsafe { &*(elf.as_ptr() as *const Elf64Ehdr) };
+    if &ehdr.e_ident[0..4] != ELF_MAGIC { return None; }
+    let phoff = ehdr.e_phoff as usize;
+    let phent = ehdr.e_phentsize as usize;
+    for i in 0..ehdr.e_phnum as usize {
+        let off = phoff + i * phent;
+        if off + size_of::<Elf64Phdr>() > elf.len() { break; }
+        let ph = unsafe { &*(elf.as_ptr().add(off) as *const Elf64Phdr) };
+        if ph.p_type == PT_INTERP {
+            let s = ph.p_offset as usize;
+            let e = (ph.p_offset + ph.p_filesz) as usize;
+            if e <= elf.len() {
+                let mut bytes = &elf[s..e];
+                if let Some(z) = bytes.iter().position(|&b| b == 0) { bytes = &bytes[..z]; }
+                return Some(bytes);
+            }
+        }
+    }
+    None
 }
 
 /// Locate the program headers *in the loaded image* and return

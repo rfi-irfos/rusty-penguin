@@ -91,8 +91,13 @@ unsafe fn cstr(ptr: u64) -> &'static [u8] {
 /// Open a ramfs file by path → fd, or negative errno.
 fn open_path(path: &[u8]) -> u64 {
     let p = if path.starts_with(b"/") { &path[1..] } else { path };
+    if TRACE {
+        serial::write_str("  [open] ");
+        for &b in path { serial::write_byte(b); }
+    }
     match crate::ramfs::find(p) {
         Some(data) => unsafe {
+            if TRACE { serial::write_str(" -> OK\n"); }
             for i in 0..MAX_OPEN {
                 if !FDS[i].used {
                     FDS[i] = OpenFile { used: true, data: data.as_ptr(), size: data.len(), off: 0 };
@@ -101,7 +106,7 @@ fn open_path(path: &[u8]) -> u64 {
             }
             errno(-24) // EMFILE
         },
-        None => errno(-2), // ENOENT
+        None => { if TRACE { serial::write_str(" -> ENOENT\n"); } errno(-2) }
     }
 }
 
@@ -112,13 +117,18 @@ fn fd_slot(fd: u64) -> Option<usize> {
     } else { None }
 }
 
-/// Fill a Linux `struct stat` (x86-64, 144 bytes) for a regular file or char dev.
-unsafe fn fill_stat(sb: *mut u8, is_reg: bool, size: u64) {
+/// Fill a Linux `struct stat` (x86-64, 144 bytes). `ino` MUST be unique per
+/// file: ld.so deduplicates loaded objects by (st_dev, st_ino), so identical
+/// inodes make it skip mapping a library it thinks is already loaded.
+unsafe fn fill_stat(sb: *mut u8, is_reg: bool, size: u64, ino: u64) {
     if sb.is_null() { return; }
     core::ptr::write_bytes(sb, 0, 144);
     const S_IFREG: u32 = 0x8000;
     const S_IFCHR: u32 = 0x2000;
     let mode = if is_reg { S_IFREG | 0o644 } else { S_IFCHR | 0o666 };
+    (sb as *mut u64).write_unaligned(1);                // st_dev = 1
+    (sb.add(8)  as *mut u64).write_unaligned(ino);      // st_ino (unique per file)
+    (sb.add(16) as *mut u64).write_unaligned(1);        // st_nlink
     (sb.add(24) as *mut u32).write_unaligned(mode);     // st_mode
     (sb.add(48) as *mut u64).write_unaligned(size);     // st_size
     (sb.add(56) as *mut u64).write_unaligned(4096);     // st_blksize
@@ -164,6 +174,11 @@ pub fn syscall(nr: u64, a1: u64, a2: u64, a3: u64) -> u64 {
         // openat(dirfd, path, flags, mode) / open(path, flags, mode).
         257 => open_path(unsafe { cstr(a2) }),
         2   => open_path(unsafe { cstr(a1) }),
+        // access(path, mode) / faccessat(dirfd, path, mode, flags): exists?
+        21 => { let pp = unsafe { cstr(a1) }; let p = if pp.starts_with(b"/") { &pp[1..] } else { pp };
+                if crate::ramfs::find(p).is_some() { 0 } else { errno(-2) } }
+        269 => { let pp = unsafe { cstr(a2) }; let p = if pp.starts_with(b"/") { &pp[1..] } else { pp };
+                if crate::ramfs::find(p).is_some() { 0 } else { errno(-2) } }
         // close(fd).
         3 => { if let Some(i) = fd_slot(a1) { unsafe { FDS[i].used = false; } } 0 }
         // lseek(fd, off, whence): 0=SET 1=CUR 2=END.
@@ -193,13 +208,13 @@ pub fn syscall(nr: u64, a1: u64, a2: u64, a3: u64) -> u64 {
             let path = cstr(a2);
             if (a4 & 0x1000) != 0 || path.is_empty() {
                 match fd_slot(a1) {
-                    Some(i) => { fill_stat(a3 as *mut u8, true, FDS[i].size as u64); 0 }
-                    None => { fill_stat(a3 as *mut u8, false, 0); 0 }
+                    Some(i) => { fill_stat(a3 as *mut u8, true, FDS[i].size as u64, FDS[i].data as u64); 0 }
+                    None => { fill_stat(a3 as *mut u8, false, 0, 0); 0 }
                 }
             } else {
                 let p = if path.starts_with(b"/") { &path[1..] } else { path };
                 match crate::ramfs::find(p) {
-                    Some(d) => { fill_stat(a3 as *mut u8, true, d.len() as u64); 0 }
+                    Some(d) => { fill_stat(a3 as *mut u8, true, d.len() as u64, d.as_ptr() as u64); 0 }
                     None => errno(-2),
                 }
             }
@@ -246,27 +261,38 @@ pub fn syscall(nr: u64, a1: u64, a2: u64, a3: u64) -> u64 {
         // where ld.so mmaps segments of the interpreter and shared libraries.
         9 => unsafe {
             let len = page_up(a2);
-            if MMAP_CUR + len > MMAP_CAP { errno(-12 /*ENOMEM*/) } else {
-                let p = MMAP_CUR; MMAP_CUR += len;
-                core::ptr::write_bytes(p as *mut u8, 0, len as usize); // zero (anon semantics)
-                let anon = (a4 & 0x20) != 0 || a5 == u64::MAX;          // MAP_ANONYMOUS | fd==-1
-                if !anon {
-                    if let Some(i) = fd_slot(a5) {
-                        let off = a6 as usize;
-                        let copy = FDS[i].size.saturating_sub(off).min(a2 as usize);
-                        if copy > 0 {
-                            core::ptr::copy_nonoverlapping(FDS[i].data.add(off), p as *mut u8, copy);
-                        }
-                    }
+            let fixed = (a4 & 0x10) != 0;                       // MAP_FIXED
+            let anon  = (a4 & 0x20) != 0 || a5 == u64::MAX;     // MAP_ANONYMOUS | fd==-1
+            // Honor MAP_FIXED — ld.so reserves the span then maps each library
+            // segment at base+offset; ignoring the address scatters the segments
+            // and breaks symbol tables. Otherwise bump-allocate from the arena.
+            let p = if fixed && a1 != 0 {
+                a1
+            } else if MMAP_CUR + len <= MMAP_CAP {
+                let q = MMAP_CUR; MMAP_CUR += len; q
+            } else {
+                return errno(-12); // ENOMEM
+            };
+            if anon {
+                core::ptr::write_bytes(p as *mut u8, 0, len as usize);
+            } else if let Some(i) = fd_slot(a5) {
+                let off  = a6 as usize;
+                let copy = FDS[i].size.saturating_sub(off).min(a2 as usize);
+                if copy > 0 {
+                    core::ptr::copy_nonoverlapping(FDS[i].data.add(off), p as *mut u8, copy);
                 }
-                p
+                // zero the bss tail within this (page-aligned, non-overlapping) segment
+                if (len as usize) > copy {
+                    core::ptr::write_bytes((p + copy as u64) as *mut u8, 0, len as usize - copy);
+                }
             }
+            p
         }
         // fstat(fd, statbuf): regular file (real fd) or char device (stdio).
         5 => unsafe {
             match fd_slot(a1) {
-                Some(i) => fill_stat(a2 as *mut u8, true, FDS[i].size as u64),
-                None    => fill_stat(a2 as *mut u8, false, 0),
+                Some(i) => fill_stat(a2 as *mut u8, true, FDS[i].size as u64, FDS[i].data as u64),
+                None    => fill_stat(a2 as *mut u8, false, 0, 0),
             }
             0
         }
@@ -350,43 +376,69 @@ pub fn enter(elf: &[u8]) -> ! {
     // Linux brk/mmap arenas live up to 256 MiB — make sure they're mapped.
     crate::vmm::extend_identity_map(256);
 
-    let entry = crate::elf::load(elf).expect("linux ELF parse failed");
+    // Dynamic linker base (ET_DYN). 8 MiB: above the program (~4 MiB), below the
+    // relocated initrd (40 MiB). The interpreter is small (~0.25 MiB).
+    const INTERP_BASE: u64 = 0x0080_0000;
+
+    // If the program is dynamically linked, load the interpreter (ld.so) and
+    // jump to IT; the program's own entry/phdrs go in the auxv (AT_ENTRY/AT_PHDR)
+    // and ld.so relocates the program + maps shared libraries from the initrd.
+    let (entry, at_base, at_entry) = match crate::elf::interp_path(elf) {
+        Some(ipath) => {
+            let prog_entry = crate::elf::load(elf).expect("program load failed");
+            let p = if ipath.starts_with(b"/") { &ipath[1..] } else { ipath };
+            let interp_elf = crate::ramfs::find(p).expect("dynamic linker not in initrd");
+            let interp_entry = crate::elf::load_bias(interp_elf, INTERP_BASE)
+                .expect("interpreter load failed");
+            serial::write_str("  [linux] dynamic: ld.so loaded; relocating program\n");
+            (interp_entry, INTERP_BASE, prog_entry)
+        }
+        None => {
+            let e = crate::elf::load(elf).expect("linux ELF parse failed");
+            (e, 0, e)
+        }
+    };
 
     // ── System V AMD64 initial stack ──
-    // At _start, RSP must point to argc, then: argv[]·NULL, envp[]·NULL,
-    // auxv pairs·{AT_NULL,0}. We run argc=0, no env, a minimal auxv.
+    // RSP → argc, argv[]·NULL, envp[]·NULL, auxv pairs·{AT_NULL,0}.
     const AT_NULL: u64 = 0; const AT_PHDR: u64 = 3; const AT_PHENT: u64 = 4;
-    const AT_PHNUM: u64 = 5; const AT_PAGESZ: u64 = 6; const AT_ENTRY: u64 = 9;
-    const AT_RANDOM: u64 = 25;
-    // Program-header info — glibc needs it to find PT_TLS / size the TCB.
+    const AT_PHNUM: u64 = 5; const AT_PAGESZ: u64 = 6; const AT_BASE: u64 = 7;
+    const AT_ENTRY: u64 = 9; const AT_RANDOM: u64 = 25; const AT_EXECFN: u64 = 31;
     let (phdr, phent, phnum) = crate::elf::phdr_info(elf).unwrap_or((0, 56, 0));
 
     let top = crate::vmm::USER_STACK_TOP;
-    // 16 random bytes for AT_RANDOM (glibc/musl stack canary source).
-    let rand_ptr = top - 16;
+    // argv[0] string, then 16 random bytes (AT_RANDOM canary source).
+    let argv0 = b"/bin/linuxtest\0";
+    let mut sp = top - argv0.len() as u64;
+    let argv0_ptr = sp;
+    unsafe { for (i, &b) in argv0.iter().enumerate() { *((argv0_ptr + i as u64) as *mut u8) = b; } }
+    sp = (sp - 16) & !0xF;
+    let rand_ptr = sp;
     unsafe {
         let mut x = crate::idt::ticks().wrapping_mul(2862933555777941757).wrapping_add(3037000493);
         for i in 0..16u64 { x = x.wrapping_mul(6364136223846793005).wrapping_add(1); *((rand_ptr + i) as *mut u8) = (x >> 40) as u8; }
     }
 
-    // Lay the control block out as consecutive u64s ending in AT_NULL.
-    let words: [u64; 17] = [
-        0,                       // argc
-        0,                       // argv[0] = NULL
+    let words: [u64; 22] = [
+        1,                       // argc
+        argv0_ptr,               // argv[0]
+        0,                       // argv[1] = NULL
         0,                       // envp[0] = NULL
         AT_PHDR,   phdr,
         AT_PHENT,  phent,
         AT_PHNUM,  phnum,
         AT_PAGESZ, 4096,
+        AT_BASE,   at_base,      // interpreter base (0 if static)
+        AT_ENTRY,  at_entry,     // the PROGRAM's entry (not ld.so's)
         AT_RANDOM, rand_ptr,
-        AT_ENTRY,  entry,
+        AT_EXECFN, argv0_ptr,
         AT_NULL,   0,
     ];
     let bytes = (words.len() * 8) as u64;
-    let mut sp = (rand_ptr - bytes) & !0xF; // 16-byte align the argc slot
-    let user_rsp = sp;
+    let mut asp = (rand_ptr - bytes) & !0xF; // 16-byte align the argc slot
+    let user_rsp = asp;
     unsafe {
-        for w in words.iter() { *(sp as *mut u64) = *w; sp += 8; }
+        for w in words.iter() { *(asp as *mut u64) = *w; asp += 8; }
     }
 
     unsafe { LINUX_ABI = true; }
