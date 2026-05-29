@@ -224,6 +224,80 @@ impl Framebuffer {
         }
     }
 
+    // ── Transparent-background text ───────────────────────────────────────────
+    // Only the lit pixels are drawn; the gaps keep whatever is already on screen
+    // (the wallpaper gradient/glows). This is what lets the hero text and tray
+    // labels float on the wallpaper instead of sitting in a solid box — the
+    // single biggest "this is a real desktop, not a debug console" tell.
+    pub fn draw_char_t(&mut self, x: u32, y: u32, ch: char, fg: u32) {
+        let idx = (ch as u32).wrapping_sub(0x20);
+        if idx >= 95 { return; }
+        let bitmap = &FONT[idx as usize];
+        for row in 0..8u32 {
+            let byte = bitmap[row as usize];
+            for col in 0..8u32 {
+                if (byte >> (7 - col)) & 1 != 0 { self.set_pixel(x + col, y + row, fg); }
+            }
+        }
+    }
+
+    pub fn draw_str_t(&mut self, x: u32, y: u32, s: &str, fg: u32) {
+        for (i, ch) in s.chars().enumerate() {
+            self.draw_char_t(x + (i as u32) * 8, y, ch, fg);
+        }
+    }
+
+    // Scaled transparent glyph: each font pixel becomes a scale×scale block,
+    // gaps left transparent. scale=2 → 16px, scale=3 → 24px tall.
+    pub fn draw_str_scaled_t(&mut self, x: u32, y: u32, s: &str, fg: u32, scale: u32) {
+        let sc = scale.max(1);
+        for (i, ch) in s.chars().enumerate() {
+            let idx = (ch as u32).wrapping_sub(0x20);
+            if idx >= 95 { continue; }
+            let bitmap = &FONT[idx as usize];
+            let gx = x + i as u32 * 8 * sc;
+            for row in 0..8u32 {
+                let byte = bitmap[row as usize];
+                for col in 0..8u32 {
+                    if (byte >> (7 - col)) & 1 != 0 {
+                        for dr in 0..sc { for dc in 0..sc {
+                            self.set_pixel(gx + col * sc + dc, y + row * sc + dr, fg);
+                        }}
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Soft radial glow ──────────────────────────────────────────────────────
+    // Additive-feel light pool: blends `color` toward the wallpaper with a
+    // quadratic falloff from the center. `max_alpha` (0..=255) is the opacity at
+    // the very center. Drawn once into the cached background, so cost is fine.
+    pub fn glow(&mut self, cx: i32, cy: i32, r: i32, color: u32, max_alpha: u32) {
+        if r <= 0 { return; }
+        let r2 = (r * r) as i64;
+        let sr = (color >> 16) & 0xFF; let sg = (color >> 8) & 0xFF; let sb = color & 0xFF;
+        let xa = (cx - r).max(0); let ya = (cy - r).max(0);
+        let xb = (cx + r).min(self.width as i32); let yb = (cy + r).min(self.height as i32);
+        for py in ya..yb {
+            for px in xa..xb {
+                let dx = (px - cx) as i64; let dy = (py - cy) as i64;
+                let d2 = dx * dx + dy * dy;
+                if d2 >= r2 { continue; }
+                // quadratic falloff: full at center, 0 at the rim
+                let f = ((r2 - d2) * (r2 - d2)) / (r2 * r2 / 256); // 0..256
+                let a = (max_alpha as i64 * f / 256).min(255) as u32;
+                if a == 0 { continue; }
+                let d = self.get_pixel(px as u32, py as u32);
+                let dr = (d >> 16) & 0xFF; let dg = (d >> 8) & 0xFF; let db = d & 0xFF;
+                let or = (sr * a + dr * (255 - a)) / 255;
+                let og = (sg * a + dg * (255 - a)) / 255;
+                let ob = (sb * a + db * (255 - a)) / 255;
+                self.set_pixel(px as u32, py as u32, (or << 16) | (og << 8) | ob);
+            }
+        }
+    }
+
     // Signed-coordinate fill_rect — clips to framebuffer bounds.
     pub fn fill_rect_s(&mut self, x: i32, y: i32, w: i32, h: i32, color: u32) {
         if w <= 0 || h <= 0 { return; }

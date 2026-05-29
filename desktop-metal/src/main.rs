@@ -133,24 +133,32 @@ const PANEL_H:      i32 = 54;   // panel height
 const MENU_BTN_W:   i32 = 72;   // "Menu" button width
 const FAV_TILE:     i32 = 40;   // favourite icon tile
 const FAV_GAP:      i32 = 8;    // gap between favourites
-const PANEL_SOLID:  u32 = 0x2A332F;  // panel fill (mockup --panel-solid)
-const PANEL_EDGE:   u32 = 0x3C4641;  // panel hairline / top sheen
+const PANEL_SOLID:  u32 = 0x333D38;  // dock body — warm stone, lighter than the wall so it floats
+const PANEL_EDGE:   u32 = 0x55615A;  // panel hairline / top sheen
 const PANEL_R:      i32 = 14;        // panel corner radius
 
 fn panel_top(h: u32) -> i32 { h as i32 - PANEL_BOTTOM - PANEL_H }
 fn menu_btn_rect(h: u32) -> (i32, i32, i32, i32) { (PANEL_MARGIN + 8, panel_top(h) + 7, MENU_BTN_W, 40) }
+
+// Dock favourites — the mockup pins exactly 5 (Terminal, Files, TIS, Editor,
+// Calculator); everything else lives in the start menu. Values index into
+// DESKTOP_ICONS so the existing click-handler match (keyed on that index) is
+// unchanged. Keeping the dock to 5 also avoids the 10-icon overflow regression.
+const N_FAV: usize = 5;
+const FAV_IDX: [usize; N_FAV] = [0, 1, 6, 2, 3]; // Term, Files, TIS, Edit, Calc
 
 // favourites_row: CSS FlexRow for the icon strip inside the dock.
 // Left edge starts after Menu button + separator gap.
 fn favourites_row(h: u32) -> css::FlexRow {
     let ptop = panel_top(h);
     let x0 = PANEL_MARGIN + 8 + MENU_BTN_W + 16;  // after menu button
-    css::FlexRow::new(x0, ptop + 7, 9 * (FAV_TILE + FAV_GAP), PANEL_H - 14, FAV_GAP)
+    css::FlexRow::new(x0, ptop + 7, N_FAV as i32 * (FAV_TILE + FAV_GAP), PANEL_H - 14, FAV_GAP)
 }
 
-fn fav_rect(i: usize, h: u32) -> (i32, i32, i32, i32) {
+// fav_rect takes a dock SLOT (0..N_FAV), not a DESKTOP_ICONS index.
+fn fav_rect(slot: usize, h: u32) -> (i32, i32, i32, i32) {
     let row = favourites_row(h);
-    let (x, y) = row.item_rect_centered(9, i, FAV_TILE, FAV_TILE);
+    let (x, y) = row.item_rect_centered(N_FAV, slot, FAV_TILE, FAV_TILE);
     (x, y, FAV_TILE, FAV_TILE)
 }
 
@@ -375,48 +383,76 @@ fn draw_scene_static_v(fb: &mut Framebuffer, variant: u8) {
         y += 1;
     }
 
-    // Centered hero card (frosted glass via the ternary CSS engine), in the
-    // space above the bottom panel.
-    const LW: u32 = 260; const LH: u32 = 152;
-    let lx = (w.saturating_sub(LW) / 2) as i32;
-    let ly = ((ptop.max(0) as u32).saturating_sub(LH) / 2) as i32;
-    let card = css::parse(
-        "background:#222b27; border:#3c4641; radius:16; accent:#6fe18b; \
-         pad-x:18; pad-y:16; shadow:1");
-    let inner_bg = card.bg;
-    css::paint_panel(fb, lx, ly, LW as i32, LH as i32, &card, crate::trit::Trit::Zero);
-    let lix = lx as u32; let liy = ly as u32;
-    fb.draw_star8(lx + LW as i32 / 2, ly + 28, 14, ACCENT_CREAM);
-    fb.draw_str_2x(lix + (LW - 5 * 16) / 2, liy + 50, "RUSTY",   WHITE, inner_bg);
-    fb.draw_str_2x(lix + (LW - 7 * 16) / 2, liy + 72, "PENGUIN", GREEN, inner_bg);
-    fb.draw_str(lix + (LW - 10 * 8) / 2, liy + 102, "OS v2.0.0", DIM, inner_bg);
-    let tag = "Bare-metal Rust OS · Sparse ternary inference";
-    let tag_y = ly + LH as i32 + 14;
-    if tag_y + 8 < ptop {
-        fb.draw_str(w.saturating_sub(tag.len() as u32 * 8) / 2, tag_y as u32, tag, DIM, BG);
+    // Warm atmospheric glows + a faint dingir constellation — the depth the
+    // mockup gets from radial-gradients and blurred color pools. Only on the
+    // default variant (the others stay clean tinted gradients).
+    if variant == 0 {
+        let wi = w as i32; let hi = h as i32;
+        fb.glow(wi * 76 / 100, hi * 22 / 100, (w as i32) * 30 / 100, 0x5F9476, 70); // sage, top-right
+        fb.glow(wi * 16 / 100, hi * 84 / 100, (w as i32) * 26 / 100, 0xB47850, 46); // warm amber, bottom-left
+        fb.glow(wi / 2,        hi / 2,        (w as i32) * 20 / 100, 0x506E5F, 40); // center sage
+        // faint cream dingir stars in the dimmer regions (away from the glows),
+        // a hair lighter than the wall so they read as soft highlights, not dirt.
+        let stars: [(i32, i32, i32); 4] = [
+            (wi * 11 / 100, hi * 30 / 100, 11),
+            (wi * 90 / 100, hi * 82 / 100, 14),
+            (wi * 33 / 100, hi * 70 / 100,  9),
+            (wi * 60 / 100, hi * 12 / 100,  8),
+        ];
+        for (sx, sy, sr) in stars { fb.draw_star8(sx, sy, sr, 0x3B4239); }
     }
 
-    // ── Bottom panel — frosted-glass dock via the ternary CSS engine.
-    // Using css::paint_panel gives the dock the same Aero glass + shadow language
-    // as the hero card and windows — a single Style governs the whole desktop.
+    // Centered hero — floating text on the wallpaper, NO card box (matches the
+    // mockup #hero: transparent, pointer-events:none). Big dingir, then
+    // "Rusty Penguin" with Penguin in green, then two tagline lines.
+    let cx = w as i32 / 2;
+    let hero_cy = ptop.max(0) / 2;
+    fb.draw_star8(cx, hero_cy - 56, 26, ACCENT_CREAM);
+    // Title: 3× glyphs (24px). "Rusty " white + "Penguin" green, kerned together.
+    let title_w = (6 + 7) as i32 * 8 * 3; // "Rusty " + "Penguin" at scale 3
+    let tx = (cx - title_w / 2) as u32;
+    let ty = (hero_cy - 18) as u32;
+    fb.draw_str_scaled_t(tx, ty, "Rusty ", WHITE, 3);
+    fb.draw_str_scaled_t(tx + 6 * 8 * 3, ty, "Penguin", GREEN, 3);
+    let tag1 = "Bare-metal Rust OS . Sparse ternary inference . Zero binary";
+    let tag2 = "RFI-IRFOS . Ternary Intelligence Stack";
+    fb.draw_str_t((cx - tag1.len() as i32 * 4) as u32, (hero_cy + 30) as u32, tag1, DIM);
+    fb.draw_str_t((cx - tag2.len() as i32 * 4) as u32, (hero_cy + 48) as u32, tag2, TRIT_ZERO);
+
+    // ── Bottom panel — frosted-glass floating dock.
+    // Drawn as translucent glass over the wallpaper (the warm glows show
+    // through) plus a crisp hairline border + top sheen so it reads as a single
+    // illuminated physical object hovering above the desktop, not a flush bar.
     let px = PANEL_MARGIN; let pw = w as i32 - 2 * PANEL_MARGIN;
-    let dock_style = css::Style {
-        bg: PANEL_SOLID, fg: WHITE, border: PANEL_EDGE, border_w: 1,
-        accent: GREEN, radius: PANEL_R as u32, pad_x: 8, pad_y: 7, shadow: true,
-    };
-    css::paint_panel(fb, px, ptop, pw, PANEL_H, &dock_style, crate::trit::Trit::Zero);
+    // soft drop shadow beneath the dock
+    fb.fill_rounded_rect(px + 3, ptop + 6, pw, PANEL_H, PANEL_R + 1, 0x0C100E);
+    fb.fill_rounded_rect(px + 1, ptop + 3, pw, PANEL_H, PANEL_R,     0x0F140F);
+    // opaque body (uniform with the per-frame tray/tasks repaints) — kept light
+    // and warm so it stands clearly above the wall.
+    fb.fill_rounded_rect(px, ptop, pw, PANEL_H, PANEL_R, PANEL_SOLID);
+    // hairline border + top light-catch
+    draw_round_border(fb, px, ptop, pw, PANEL_H, PANEL_R, PANEL_EDGE);
+    fb.fill_rect_s(px + PANEL_R, ptop + 1, pw - 2 * PANEL_R, 1, 0x66726A);
 
     // Menu button (dingir + "Menu")
     let (mbx, mby, mbw, _mbh) = menu_btn_rect(h);
     fb.fill_rounded_rect(mbx, mby, mbw, 40, 10, 0x323C37);
-    fb.fill_rect_s(mbx, mby, mbw, 2, GREEN);  // green top accent
-    fb.draw_star8(mbx + 15, mby + 20, 9, GREEN);
-    fb.draw_str(mbx as u32 + 30, mby as u32 + 16, "Menu", WHITE, 0x323C37);
+    fb.fill_rect_s(mbx + 8, mby, mbw - 16, 2, GREEN);  // green top accent
+    fb.draw_star8(mbx + 15, mby + 20, 9, ACCENT_CREAM);
+    fb.draw_str(mbx as u32 + 30, mby as u32 + 16, "Menu", GREEN, 0x323C37);
     // separator
-    fb.fill_rect_s(mbx + mbw + 7, ptop + 12, 1, PANEL_H - 24, PANEL_EDGE);
+    fb.fill_rect_s(mbx + mbw + 7, ptop + 14, 1, PANEL_H - 28, PANEL_EDGE);
 
     // Favourites (horizontal app icons)
     draw_desktop_icons(fb, None);
+}
+
+// Crisp 1px rounded border (no fill) — outline for the floating dock/menu.
+fn draw_round_border(fb: &mut Framebuffer, x: i32, y: i32, w: i32, h: i32, r: i32, color: u32) {
+    fb.fill_rect_s(x + r, y,         w - 2 * r, 1, color);
+    fb.fill_rect_s(x + r, y + h - 1, w - 2 * r, 1, color);
+    fb.fill_rect_s(x,         y + r, 1, h - 2 * r, color);
+    fb.fill_rect_s(x + w - 1, y + r, 1, h - 2 * r, color);
 }
 
 fn trit_indicator(ticks: u64) -> [u8; 7] {
@@ -503,27 +539,38 @@ const DESKTOP_ICONS: &[DesktopIcon] = &[
 ];
 
 // Favourites are horizontal 40×40 tiles inside the bottom panel (see fav_rect).
+// Each tile is an accent-tinted rounded square with the app icon in its accent
+// color, like the mockup's .favbtn .fi. `hover_icon` carries a DESKTOP_ICONS
+// index (what desktop_icon_hit returns).
 fn draw_desktop_icons(fb: &mut Framebuffer, hover_icon: Option<usize>) {
     let h = fb.height;
-    for (i, icon) in DESKTOP_ICONS.iter().enumerate() {
-        let (x, y, tw, th) = fav_rect(i, h);
-        let hovered = hover_icon == Some(i);
-        // Full-tile repaint each call (so hover-out is fully cleared). Over the
-        // solid panel, a PANEL_SOLID tile is invisible; a hovered tile lifts.
-        let bg = if hovered { 0x3A453F } else { PANEL_SOLID };
-        fb.fill_rounded_rect(x, y, tw, th, 9, bg);
-        if hovered { fb.fill_rect_s(x + 9, y + th - 4, tw - 18, 2, icon.color); } // hover underline
+    for slot in 0..N_FAV {
+        let icon = &DESKTOP_ICONS[FAV_IDX[slot]];
+        let (x, y, tw, th) = fav_rect(slot, h);
+        let hovered = hover_icon == Some(FAV_IDX[slot]);
+        // accent-tinted tile background (~16% accent over the glass)
+        let tile = tint(icon.color, if hovered { 64 } else { 34 });
+        fb.fill_rounded_rect(x, y, tw, th, 10, tile);
+        if hovered { fb.fill_rect_s(x + 10, y + th - 3, tw - 20, 2, icon.color); }
         let bx = (x + (tw - 16) / 2) as u32;
-        let by = (y + (th - 16) / 2 - 1) as u32;
-        let col = if hovered { icon.color } else { 0xCBD3C8u32 }; // favourites stay bright
-        fb.draw_bitmap_2x(bx, by, icon.bitmap, col, bg);
+        let by = (y + (th - 16) / 2) as u32;
+        fb.draw_bitmap_2x(bx, by, icon.bitmap, icon.color, tile);
     }
 }
 
+// tint: blend an accent color toward the dark glass body at the given alpha
+// (0..255 = how much accent), producing the mockup's color-mix(accent 16%) look.
+fn tint(accent: u32, alpha: u32) -> u32 {
+    let base = 0x39443Eu32;
+    let a = alpha.min(255); let ia = 255 - a;
+    let mix = |sh: u32| (((accent >> sh) & 0xFF) * a + ((base >> sh) & 0xFF) * ia) / 255;
+    (mix(16) << 16) | (mix(8) << 8) | mix(0)
+}
+
 fn desktop_icon_hit(mx: i32, my: i32, h: u32) -> Option<usize> {
-    for i in 0..DESKTOP_ICONS.len() {
-        let (x, y, tw, th) = fav_rect(i, h);
-        if mx >= x && mx < x + tw && my >= y && my < y + th { return Some(i); }
+    for slot in 0..N_FAV {
+        let (x, y, tw, th) = fav_rect(slot, h);
+        if mx >= x && mx < x + tw && my >= y && my < y + th { return Some(FAV_IDX[slot]); }
     }
     None
 }
@@ -534,7 +581,7 @@ fn desktop_icon_hit(mx: i32, my: i32, h: u32) -> Option<usize> {
 // Running-window task buttons live INSIDE the bottom dock, in the tasks area
 // after the favourites (and before the right tray), at full panel-row height.
 fn tasks_start_x(fh: u32) -> i32 {
-    let (lx, _, _, _) = fav_rect(DESKTOP_ICONS.len().saturating_sub(1), fh); // last favourite
+    let (lx, _, _, _) = fav_rect(N_FAV - 1, fh); // last favourite slot
     lx + FAV_TILE + 18  // + separator gap
 }
 fn tbwin_rect(_fw: u32, fh: u32, slot: usize) -> (i32, i32, i32, i32) {
