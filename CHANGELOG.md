@@ -28,9 +28,13 @@ All notable changes to this project will be documented here.
 - Faster iteration: the kernel now loads the Linux test binary from the initrd
   (`bin/linuxtest`) so swapping test programs doesn't require a kernel rebuild;
   `iso/build-linux-abi-test.sh [binary]` + `RP_NO_KERNEL=1`.
-- HONEST SCOPE: `_exit`/`exit_group` work; **returning from `main` / `exit(3)`**
-  still faults in glibc's atexit pointer-guard demangle (brick 2.5, next).
-  Long-running programs (shells, servers, init) are unaffected.
+- **Brick 2.5 (same day): full return-from-`main` / `exit(3)` / `atexit` works.**
+  A complete standard C program now runs start-to-finish (glibc startup → main →
+  atexit handlers → glibc cleanup → `exit_group`, exit code 0). The fix: **zero
+  the general-purpose registers at process entry** to match Linux exec semantics
+  — in particular RDX must be 0 (it conventionally carries an atexit function
+  pointer; leaving kernel garbage there made glibc register a bogus `rtld_fini`
+  and jump to it at exit). Verified with an explicit `atexit` handler too.
 
 ### Added — Linux ABI layer brick 1: the bare-metal Rust kernel runs a real Linux binary (2026-05-29)
 

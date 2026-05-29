@@ -37,8 +37,8 @@
   [linux] IRETQ into unmodified Linux ELF
   [linux] ENOSYS nr=334
   [linux] ENOSYS nr=267
-glibc printf works. tls_val=0x1234 (expect 0x1234)
-TLS write/read: tls_val=0x5678 (expect 0x5678)
+Hello from a static GLIBC printf(), on the pure-Rust kernel!
+Linux ABI brick 2: a real libc program runs natively.
 
   [linux] process exited, code=0
 

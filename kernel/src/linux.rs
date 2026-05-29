@@ -278,6 +278,12 @@ pub fn enter(elf: &[u8]) -> ! {
     serial::write_str("  [linux] IRETQ into unmodified Linux ELF\n");
 
     // IRETQ into ring-3 (same selectors as the native launch in main.rs).
+    // CRITICAL: Linux zeroes the general-purpose registers at exec — in
+    // particular RDX must be 0 (it conventionally carries a function pointer the
+    // program registers with atexit; for a static binary there is none). If we
+    // leave garbage kernel registers, glibc atexit-registers a bogus rtld_fini
+    // and jumps to it at exit (a #GP to a junk address). So zero all GP regs
+    // after building the iretq frame.
     unsafe {
         core::arch::asm!(
             "push 0x1B",      // SS = UDATA | 3
@@ -288,6 +294,11 @@ pub fn enter(elf: &[u8]) -> ! {
             "push rax",
             "push 0x23",      // CS = UCODE | 3
             "push r8",        // user RIP = entry
+            // iretq frame is fully on the stack now — clear all GP registers.
+            "xor rax, rax", "xor rbx, rbx", "xor rcx, rcx", "xor rdx, rdx",
+            "xor rsi, rsi", "xor rdi, rdi", "xor rbp, rbp",
+            "xor r8, r8",   "xor r9, r9",   "xor r10, r10", "xor r11, r11",
+            "xor r12, r12", "xor r13, r13", "xor r14, r14", "xor r15, r15",
             "iretq",
             in("r8") entry,
             in("r9") user_rsp,
