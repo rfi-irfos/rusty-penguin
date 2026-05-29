@@ -87,3 +87,19 @@ off-by-one/overflow-asymmetry bugs.
 *Logging rule: append a new `F#` entry whenever ternary/sparse demonstrably wins,
 with date + honest basis (mathematical / representational / measured / published).
 Keep it credible — this log is meant to be shown.*
+
+## F7 — Ternary sparse rendering as Aero depth (2026-05-29)
+
+**Finding:** The Aero "depth hierarchy" (focused/background window transparency) maps
+directly onto ternary Trit semantics: +1 = focused (fully present, more opaque/bright),
+0 = dormant background window (dimmed, solid), -1 = minimized (gone, invisible).
+Binary rendering would force a choice: opaque or not. Ternary rendering gives the third
+state — "present but receded" — which is exactly what Aero's z-layering creates.
+
+**Basis:** Implemented in `desktop-metal/src/wm.rs` `draw_window()`: focused windows
+use `fill_rounded_rect_glass` (alpha 230) for frosted-glass depth; background windows
+use solid fill (Trit::Zero = dormant). The frosted-glass approach also applies the
+sparse-rendering thesis: we read the dormant wallpaper pixels behind the panel and
+only tint them, rather than re-deriving the wallpaper on every compositing pass.
+
+**Honest basis:** Architectural analogy, verified in the shipped compositor.
