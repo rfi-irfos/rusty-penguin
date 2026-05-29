@@ -610,77 +610,148 @@ fn show_desktop_hit(fw: u32, fh: u32, mx: i32, my: i32) -> bool {
         && my >= fh as i32 - 28 && my < fh as i32
 }
 
-// Start menu items. The first 6 are graphical apps; the remaining are
-// command-line launches that boot a terminal with a preloaded command.
+// ── Start menu ───────────────────────────────────────────────────────────────
+// Matches the HTML mockup form: user header · app list with icons+desc ·
+// games section · footer. Width 280px, items 34px tall.
 #[derive(Copy, Clone)]
-enum MenuLaunch {
-    App(u8),           // dispatched in start_menu_open
-    Term(usize),       // index into LAUNCHERS
-}
+enum MenuLaunch { App(u8), Term(usize) }
 
 struct MenuItem {
     label: &'static str,
+    desc:  &'static str,
     color: u32,
-    kind: MenuLaunch,
+    kind:  MenuLaunch,
 }
 
+// Real apps only — no raw shell commands.
 const MENU_ITEMS: &[MenuItem] = &[
-    MenuItem { label: "Files",       color: BLUE,     kind: MenuLaunch::App(0) },
-    MenuItem { label: "Text Editor", color: AMBER,    kind: MenuLaunch::App(1) },
-    MenuItem { label: "Calculator",  color: 0xFFD700, kind: MenuLaunch::App(2) },
-    MenuItem { label: "Help",        color: 0x90EE90, kind: MenuLaunch::App(3) },
-    MenuItem { label: "Settings",    color: 0x9CA3AF, kind: MenuLaunch::App(4) },
-    MenuItem { label: "TIS Console", color: 0x4A9EFF, kind: MenuLaunch::App(5) },
-    MenuItem { label: "Snake",       color: 0x4ADE80, kind: MenuLaunch::App(6) },
-    MenuItem { label: "Minesweeper", color: 0xFCD34D, kind: MenuLaunch::App(7) },
-    MenuItem { label: "Doom",        color: 0xEF4444, kind: MenuLaunch::App(8) },
-    MenuItem { label: "Terminal",    color: GREEN,    kind: MenuLaunch::Term(0) },
-    MenuItem { label: "ls -la",      color: BLUE,     kind: MenuLaunch::Term(1) },
-    MenuItem { label: "nano",        color: AMBER,    kind: MenuLaunch::Term(2) },
-    MenuItem { label: "ps",          color: 0xA0D0FF, kind: MenuLaunch::Term(3) },
-    MenuItem { label: "ai",          color: 0xFFD700, kind: MenuLaunch::Term(4) },
+    MenuItem { label: "Files",        desc: "Browse & manage files",      color: 0x8CC6E5, kind: MenuLaunch::App(0) },
+    MenuItem { label: "Text Editor",  desc: "Write & edit documents",     color: 0xF5C451, kind: MenuLaunch::App(1) },
+    MenuItem { label: "Calculator",   desc: "Ternary arithmetic",         color: 0xFFD700, kind: MenuLaunch::App(2) },
+    MenuItem { label: "Terminal",     desc: "psh — bare-metal shell",     color: 0x6FE18B, kind: MenuLaunch::Term(0) },
+    MenuItem { label: "Settings",     desc: "System preferences",         color: 0x9CA3AF, kind: MenuLaunch::App(4) },
+    MenuItem { label: "TIS Console",  desc: "Sparse ternary AI runtime",  color: 0x4A9EFF, kind: MenuLaunch::App(5) },
+    // games start at index 6
+    MenuItem { label: "Snake",        desc: "Classic arcade",             color: 0x4ADE80, kind: MenuLaunch::App(6) },
+    MenuItem { label: "Minesweeper",  desc: "Find the mines",             color: 0xFCD34D, kind: MenuLaunch::App(7) },
+    MenuItem { label: "Doom",         desc: "E1M1 — shareware DOOM",      color: 0xEF4444, kind: MenuLaunch::App(8) },
 ];
+const MENU_APPS_END: usize = 6;  // items 0..6 = apps, 6..9 = games
+
+const MENU_W:       i32 = 280;
+const MENU_HDR_H:   i32 = 54;   // dingir avatar + title + subtitle
+const MENU_SECT_H:  i32 = 20;   // "APPLICATIONS" / "GAMES" label
+const MENU_ITEM_H:  i32 = 34;   // icon + name + description per row
+const MENU_SEP_H:   i32 = 9;    // separator between sections
+const MENU_FOOT_H:  i32 = 38;   // footer: Settings + Shut down
+
+fn menu_total_h() -> i32 {
+    MENU_HDR_H + MENU_SECT_H
+    + MENU_APPS_END as i32 * MENU_ITEM_H
+    + MENU_SEP_H + MENU_SECT_H
+    + (MENU_ITEMS.len() - MENU_APPS_END) as i32 * MENU_ITEM_H
+    + MENU_FOOT_H
+}
 
 fn start_menu_bounds(fh: u32) -> (i32, i32, i32, i32) {
-    let h = 24 + MENU_ITEMS.len() as i32 * 20 + 4;
-    let w = 200i32;
-    // Launcher pops up above the Menu button (bottom-left), mockup-style.
-    (PANEL_MARGIN, panel_top(fh) - h - 8, w, h)
+    let h = menu_total_h();
+    (PANEL_MARGIN, panel_top(fh) - h - 8, MENU_W, h)
 }
 
-// Desktop stylesheet (CSS subset). The frontend is migrating to declarative
-// styles via the ternary CSS engine — Apple-like surfaces, hairline borders.
-const THEME: &str = ".menu { background:#1c1c1e; border:#3a3a3c; radius:12; \
-                              accent:#0a84ff; pad-x:0; pad-y:0; shadow:1 }";
+fn draw_menu_item(fb: &mut Framebuffer, x: i32, y: i32, w: i32, item: &MenuItem, hovered: bool) {
+    let bg = if hovered { 0x2A3830u32 } else { 0x1E2620u32 };
+    fb.fill_rounded_rect_glass(x + 4, y, w - 8, MENU_ITEM_H, 8, bg, if hovered { 200 } else { 0 });
+    // Colored icon square (28×28, radius 6)
+    let icon_x = x + 10; let icon_y = y + (MENU_ITEM_H - 28) / 2;
+    let ic_bg = {
+        let r = ((item.color >> 16) & 0xFF) / 3;
+        let g = ((item.color >>  8) & 0xFF) / 3;
+        let b = (item.color         & 0xFF) / 3;
+        (r << 16) | (g << 8) | b
+    };
+    fb.fill_rounded_rect(icon_x, icon_y, 28, 28, 6, ic_bg);
+    // Icon: first letter of label as a simple 8x8 glyph, centered
+    let first = item.label.as_bytes().first().copied().unwrap_or(b' ');
+    fb.draw_char((icon_x + 10) as u32, (icon_y + 10) as u32, first as char, item.color, ic_bg);
+    // Name (bold appearance: two slightly offset draws)
+    let tx = (x + 46) as u32; let ty = (y + 6) as u32;
+    fb.draw_str(tx, ty, item.label, WHITE, bg);
+    // Description
+    fb.draw_str(tx, ty + 10, item.desc, 0x909A92, bg);
+}
 
 fn draw_start_menu(fb: &mut Framebuffer) {
     let (x, y, w, h) = start_menu_bounds(fb.height);
-    // Panel rendered through the ternary CSS engine (soft shadow, rounded
-    // corners, hairline edge). Item geometry below is unchanged so the existing
-    // hit-testing (start_menu_hit) stays valid.
-    let menu = css::StyleSheet::parse(THEME).get(".menu");
-    let bg = menu.bg;
-    css::paint_panel(fb, x, y, w, h, &menu, crate::trit::Trit::Zero);
-    // Header
-    fb.fill_rect_s(x + 1, y + 2, w - 2, 20, 0x2C2C2E);
-    fb.draw_bitmap_2x((x + 6) as u32, (y + 5) as u32, &DINGIR, GREEN, 0x2C2C2E);
-    fb.draw_str((x + 26) as u32, (y + 7) as u32, "RUSTY PENGUIN", WHITE, 0x2C2C2E);
-    fb.fill_rect_s(x + 1, y + 22, w - 2, 1, 0x3A3A3C);  // hairline separator
-    // Menu items (same offsets as start_menu_hit).
-    for (i, item) in MENU_ITEMS.iter().enumerate() {
-        let iy = y + 24 + i as i32 * 20;
-        fb.fill_rect_s(x + 2, iy, w - 4, 20, bg);
-        fb.fill_rect_s(x + 5, iy + 4, 2, 12, item.color);  // accent bar
-        fb.draw_str((x + 12) as u32, (iy + 6) as u32, item.label, item.color, bg);
+    let bg = 0x1E2620u32;
+
+    // Shadow + glass panel
+    fb.fill_rounded_rect(x + 3, y + 6, w + 2, h, 14, 0x07090A);
+    fb.fill_rounded_rect(x + 1, y + 3, w,     h, 12, 0x0C110E);
+    fb.fill_rounded_rect_glass(x, y, w, h, 12, bg, 235);
+    fb.fill_rect_s(x + 12, y, w - 24, 2, GREEN);  // green top accent
+
+    // ── Header: dingir avatar circle + "Rusty Penguin" + "OS v2.0.0" ────────
+    let av_x = x + 14; let av_y = y + 10;
+    fb.fill_circle(av_x + 18, av_y + 18, 18, 0x3A4A3E);
+    fb.fill_circle(av_x + 18, av_y + 18, 16, 0x2A3830);
+    fb.draw_star8(av_x + 18, av_y + 18, 10, ACCENT_CREAM);
+    fb.draw_str((av_x + 40) as u32, (av_y + 5) as u32, "Rusty Penguin", WHITE, bg);
+    fb.draw_str((av_x + 40) as u32, (av_y + 17) as u32, "OS v2.0.0  Ternary", 0x6FE18B, bg);
+
+    // Hairline below header
+    fb.fill_rect_s(x + 8, y + MENU_HDR_H - 1, w - 16, 1, 0x3C4641);
+
+    // ── Applications section ─────────────────────────────────────────────────
+    let apps_y = y + MENU_HDR_H;
+    fb.draw_str((x + 14) as u32, (apps_y + 6) as u32, "APPLICATIONS", 0x909A92, bg);
+    for i in 0..MENU_APPS_END {
+        let iy = apps_y + MENU_SECT_H + i as i32 * MENU_ITEM_H;
+        draw_menu_item(fb, x, iy, w, &MENU_ITEMS[i], false);
     }
+
+    // Separator
+    let sep_y = apps_y + MENU_SECT_H + MENU_APPS_END as i32 * MENU_ITEM_H + MENU_SEP_H / 2;
+    fb.fill_rect_s(x + 12, sep_y, w - 24, 1, 0x3C4641);
+
+    // ── Games section ────────────────────────────────────────────────────────
+    let games_y = apps_y + MENU_SECT_H + MENU_APPS_END as i32 * MENU_ITEM_H + MENU_SEP_H;
+    fb.draw_str((x + 14) as u32, (games_y + 6) as u32, "GAMES", 0x909A92, bg);
+    for i in MENU_APPS_END..MENU_ITEMS.len() {
+        let iy = games_y + MENU_SECT_H + (i - MENU_APPS_END) as i32 * MENU_ITEM_H;
+        draw_menu_item(fb, x, iy, w, &MENU_ITEMS[i], false);
+    }
+
+    // ── Footer: Settings · Shut Down ─────────────────────────────────────────
+    let foot_y = y + h - MENU_FOOT_H;
+    fb.fill_rect_s(x + 8, foot_y, w - 16, 1, 0x3C4641);
+    let btn_bg = 0x252E2Au32;
+    // Settings button (left)
+    fb.fill_rounded_rect(x + 10, foot_y + 6, (w / 2) - 14, 24, 8, btn_bg);
+    fb.draw_str((x + 20) as u32, (foot_y + 13) as u32, "Settings", 0x909A92, btn_bg);
+    // Shut Down button (right)
+    fb.fill_rounded_rect(x + w / 2 + 4, foot_y + 6, (w / 2) - 14, 24, 8, btn_bg);
+    fb.draw_str((x + w / 2 + 10) as u32, (foot_y + 13) as u32, "Shut Down", TRIT_NEG, btn_bg);
 }
 
 fn start_menu_hit(fh: u32, mx: i32, my: i32) -> Option<usize> {
     let (x, y, w, _) = start_menu_bounds(fh);
     if mx < x || mx >= x + w { return None; }
-    for i in 0..MENU_ITEMS.len() {
-        let iy = y + 24 + i as i32 * 20;
-        if my >= iy && my < iy + 20 { return Some(i); }
+    let apps_y = y + MENU_HDR_H + MENU_SECT_H;
+    for i in 0..MENU_APPS_END {
+        let iy = apps_y + i as i32 * MENU_ITEM_H;
+        if my >= iy && my < iy + MENU_ITEM_H { return Some(i); }
+    }
+    let games_y = apps_y + MENU_APPS_END as i32 * MENU_ITEM_H + MENU_SEP_H + MENU_SECT_H;
+    for i in MENU_APPS_END..MENU_ITEMS.len() {
+        let iy = games_y + (i - MENU_APPS_END) as i32 * MENU_ITEM_H;
+        if my >= iy && my < iy + MENU_ITEM_H { return Some(i); }
+    }
+    // Footer: Settings (index 4 = existing Settings app), Shut Down
+    let foot_y = y + menu_total_h() - MENU_FOOT_H;
+    if my >= foot_y + 6 && my < foot_y + 30 {
+        if mx < x + w / 2 { return Some(4); }  // Settings
+        // Shut Down — handled by special value
+        return Some(99);
     }
     None
 }
@@ -1361,20 +1432,27 @@ pub extern "C" fn _start() -> ! {
                 scene_dirty = true;
             } else if start_menu_open {
                 if let Some(mi) = start_menu_hit(fb.height, cx, cy) {
-                    let opened = match MENU_ITEMS[mi].kind {
-                        MenuLaunch::Term(li) => open_term(w, h, wins.len(), &LAUNCHERS[li]),
-                        MenuLaunch::App(0)   => open_file_manager(w, h, wins.len()),
-                        MenuLaunch::App(1)   => open_editor(w, h, wins.len(), "readme.txt", "Text Editor"),
-                        MenuLaunch::App(2)   => open_calculator(w, h, wins.len()),
-                        MenuLaunch::App(3)   => open_help_browser(w, h, wins.len()),
-                        MenuLaunch::App(4)   => open_settings(w, h, wins.len()),
-                        MenuLaunch::App(5)   => open_tis_console(w, h, wins.len()),
-                        MenuLaunch::App(6)   => open_snake(w, h, wins.len()),
-                        MenuLaunch::App(7)   => open_minesweeper(w, h, wins.len()),
-                        MenuLaunch::App(8)   => open_doom(w, h, wins.len()),
-                        MenuLaunch::App(_)   => None,
-                    };
-                    if let Some(tw) = opened { wins.push(tw); }
+                    if mi == 99 {
+                        // Shut Down: call sys_reboot (native syscall 11)
+                        unsafe { core::arch::asm!("syscall", in("rax") 11u64, out("rcx") _, out("r11") _, options(nostack)); }
+                        loop { unsafe { core::arch::asm!("hlt", options(nostack)); } }
+                    }
+                    if mi < MENU_ITEMS.len() {
+                        let opened = match MENU_ITEMS[mi].kind {
+                            MenuLaunch::Term(li) => open_term(w, h, wins.len(), &LAUNCHERS[li]),
+                            MenuLaunch::App(0)   => open_file_manager(w, h, wins.len()),
+                            MenuLaunch::App(1)   => open_editor(w, h, wins.len(), "readme.txt", "Text Editor"),
+                            MenuLaunch::App(2)   => open_calculator(w, h, wins.len()),
+                            MenuLaunch::App(3)   => open_help_browser(w, h, wins.len()),
+                            MenuLaunch::App(4)   => open_settings(w, h, wins.len()),
+                            MenuLaunch::App(5)   => open_tis_console(w, h, wins.len()),
+                            MenuLaunch::App(6)   => open_snake(w, h, wins.len()),
+                            MenuLaunch::App(7)   => open_minesweeper(w, h, wins.len()),
+                            MenuLaunch::App(8)   => open_doom(w, h, wins.len()),
+                            MenuLaunch::App(_)   => None,
+                        };
+                        if let Some(tw) = opened { wins.push(tw); }
+                    }
                 }
                 start_menu_open = false;
                 scene_dirty = true;
