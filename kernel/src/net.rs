@@ -1,9 +1,48 @@
-// Minimal networking: Ethernet framing + ARP, enough to prove a full TX→RX
-// round-trip on the RTL8139. We send an ARP "who-has <gateway>" and poll for
-// the reply, then log the gateway's MAC. This is brick 1 of the net stack;
-// IPv4/ICMP/UDP/DHCP/TCP ride on top later.
+// Rusty Penguin network stack — multi-NIC aware.
+// Supports RTL8139 (QEMU, some older hardware) and Intel e1000/e1000e
+// (modern laptops, QEMU -device e1000). Both have the same .mac/.send/.poll_rx
+// API; ActiveNic wraps whichever initialised first.
 
 use crate::rtl8139;
+use crate::e1000;
+
+// ── NIC abstraction ───────────────────────────────────────────────────────────
+// A zero-cost wrapper that forwards to whichever NIC is active.
+static mut ACTIVE_NIC: ActiveNicKind = ActiveNicKind::None;
+
+enum ActiveNicKind { None, Rtl8139, E1000 }
+
+fn active_mac() -> Option<[u8; 6]> {
+    unsafe { match ACTIVE_NIC {
+        ActiveNicKind::Rtl8139 => rtl8139::nic().map(|n| n.mac),
+        ActiveNicKind::E1000   => e1000::nic().map(|n| n.mac),
+        ActiveNicKind::None    => None,
+    }}
+}
+
+fn nic_send(frame: &[u8]) {
+    unsafe { match ACTIVE_NIC {
+        ActiveNicKind::Rtl8139 => { if let Some(n) = rtl8139::nic() { n.send(frame); } }
+        ActiveNicKind::E1000   => { if let Some(n) = e1000::nic()   { n.send(frame); } }
+        ActiveNicKind::None    => {}
+    }}
+}
+
+fn nic_poll_rx(buf: &mut [u8]) -> Option<usize> {
+    unsafe { match ACTIVE_NIC {
+        ActiveNicKind::Rtl8139 => rtl8139::nic()?.poll_rx(buf),
+        ActiveNicKind::E1000   => e1000::nic()?.poll_rx(buf),
+        ActiveNicKind::None    => None,
+    }}
+}
+
+// Proxy NIC object with the same API used everywhere in this file.
+struct Nic { mac: [u8; 6] }
+impl Nic {
+    fn send(&self, frame: &[u8]) { nic_send(frame); }
+    fn poll_rx(&self, buf: &mut [u8]) -> Option<usize> { nic_poll_rx(buf) }
+}
+fn nic() -> Option<Nic> { active_mac().map(|m| Nic { mac: m }) }
 
 // QEMU user-mode networking (SLIRP) defaults: guest 10.0.2.15, gateway 10.0.2.2.
 const OUR_IP: [u8; 4] = [10, 0, 2, 15];
@@ -84,9 +123,9 @@ fn build_arp_request(frame: &mut [u8; 42], src_mac: &[u8; 6], target_ip: &[u8; 4
 }
 
 /// ARP-resolve any on-link IP. Returns the host's MAC if a reply arrives within
-/// the poll budget. Used for the gateway (TX+RX proof) and the DNS server.
+/// the poll budget. Used for the gateway and the DNS server.
 pub fn arp_resolve(target_ip: &[u8; 4]) -> Option<[u8; 6]> {
-    let nic = rtl8139::nic()?;
+    let nic = nic()?;
 
     let mut frame = [0u8; 42];
     build_arp_request(&mut frame, &nic.mac, target_ip);
@@ -103,8 +142,9 @@ pub fn arp_resolve(target_ip: &[u8; 4]) -> Option<[u8; 6]> {
     crate::serial::write_str(core::str::from_utf8(&ipbuf[..p]).unwrap_or("?"));
     crate::serial::write_str(" sent\n");
 
+
     let mut rx = [0u8; 1536];
-    for _ in 0..2_000_000u32 {
+    for _ in 0..10_000_000u32 {
         if let Some(len) = nic.poll_rx(&mut rx) {
             if len >= 42
                 && rx[12] == 0x08 && rx[13] == 0x06          // ethertype ARP
@@ -125,7 +165,7 @@ pub fn arp_resolve(target_ip: &[u8; 4]) -> Option<[u8; 6]> {
 /// Send an ICMP echo request to the gateway and poll for the echo reply.
 /// Proves the IPv4 + ICMP layer end to end. `gw_mac` comes from ARP.
 fn icmp_ping(gw_mac: &[u8; 6]) -> bool {
-    let nic = match rtl8139::nic() { Some(n) => n, None => return false };
+    let nic = match nic() { Some(n) => n, None => return false };
     const PAYLOAD: usize = 32;
     const ICMP_LEN: usize = 8 + PAYLOAD;
     const TOTAL: usize = 14 + 20 + ICMP_LEN;
@@ -161,7 +201,7 @@ fn icmp_ping(gw_mac: &[u8; 6]) -> bool {
     crate::serial::write_str("  [net] ICMP echo -> 10.0.2.2 sent\n");
 
     let mut rx = [0u8; 1536];
-    for _ in 0..2_000_000u32 {
+    for _ in 0..10_000_000u32 {
         if let Some(len) = nic.poll_rx(&mut rx) {
             if len >= 42
                 && rx[12] == 0x08 && rx[13] == 0x00      // IPv4
@@ -266,7 +306,7 @@ fn parse_dhcp(rx: &[u8], len: usize, want_type: u8) -> Option<([u8; 4], [u8; 4])
 
 /// Run a DHCP handshake; on success logs and returns the leased IP.
 fn dhcp() -> Option<[u8; 4]> {
-    let nic = rtl8139::nic()?;
+    let nic = nic()?;
     let mac = nic.mac;
     let mut f = [0u8; 400];
     let mut rx = [0u8; 1536];
@@ -276,7 +316,7 @@ fn dhcp() -> Option<[u8; 4]> {
     nic.send(&f[..n]);
     crate::serial::write_str("  [net] DHCP DISCOVER sent\n");
     let mut offer = None;
-    for _ in 0..3_000_000u32 {
+    for _ in 0..10_000_000u32 {
         if let Some(l) = nic.poll_rx(&mut rx) {
             if let Some(r) = parse_dhcp(&rx, l, 2) { offer = Some(r); break; }
         }
@@ -289,7 +329,7 @@ fn dhcp() -> Option<[u8; 4]> {
     let n = build_dhcp(&mut f, &mac, 3, Some(yiaddr), Some(sid));
     nic.send(&f[..n]);
     crate::serial::write_str("  [net] DHCP REQUEST sent\n");
-    for _ in 0..3_000_000u32 {
+    for _ in 0..10_000_000u32 {
         if let Some(l) = nic.poll_rx(&mut rx) {
             if let Some((ip, _)) = parse_dhcp(&rx, l, 5) { // ACK
                 log_ip("  [net] DHCP ACK — lease ", &ip);
@@ -386,7 +426,7 @@ fn parse_tcp(rx: &[u8], len: usize) -> Option<(u32, u32, u8, usize, usize)> {
 fn tcp_http_get(next_mac: &[u8; 6], dst_ip: [u8; 4], dport: u16, host: &str,
                 out: &mut [u8]) -> Option<usize> {
     let gw_mac = next_mac;
-    let nic = match rtl8139::nic() { Some(n) => n, None => return None };
+    let nic = match nic() { Some(n) => n, None => return None };
     let mac = nic.mac;
     let mut f = [0u8; 256];
     let mut rx = [0u8; 1536];
@@ -403,7 +443,7 @@ fn tcp_http_get(next_mac: &[u8; 6], dst_ip: [u8; 4], dport: u16, host: &str,
     // SYN-ACK
     let mut their_seq = 0u32;
     let mut established = false;
-    for _ in 0..3_000_000u32 {
+    for _ in 0..10_000_000u32 {
         if let Some(l) = nic.poll_rx(&mut rx) {
             if let Some((seq, ackn, flags, _, _)) = parse_tcp(&rx, l) {
                 if flags & TCP_RST != 0 {
@@ -443,7 +483,7 @@ fn tcp_http_get(next_mac: &[u8; 6], dst_ip: [u8; 4], dport: u16, host: &str,
     let mut total = 0usize;
     let mut logged = false;
     let snd_after = snd.wrapping_add(req.len() as u32);
-    for _ in 0..6_000_000u32 {
+    for _ in 0..15_000_000u32 {
         if let Some(l) = nic.poll_rx(&mut rx) {
             if let Some((seq, _ackn, flags, poff, plen)) = parse_tcp(&rx, l) {
                 if plen > 0 && seq == rcv_nxt {
@@ -607,7 +647,7 @@ fn parse_dns_a(msg: &[u8], txid: u16) -> Option<[u8; 4]> {
 /// Resolve `domain` to an IPv4 address via the DNS server. `dns_mac` is the
 /// on-link MAC of the DNS host (from ARP).
 fn dns_resolve(dns_mac: &[u8; 6], domain: &str) -> Option<[u8; 4]> {
-    let nic = rtl8139::nic()?;
+    let nic = nic()?;
     let mac = nic.mac;
     let txid: u16 = 0x1A2B;
     let mut query = [0u8; 256];
@@ -622,7 +662,7 @@ fn dns_resolve(dns_mac: &[u8; 6], domain: &str) -> Option<[u8; 4]> {
     crate::serial::write_str(" -> 10.0.2.3\n");
 
     let mut rx = [0u8; 1536];
-    for _ in 0..4_000_000u32 {
+    for _ in 0..10_000_000u32 {
         if let Some(l) = nic.poll_rx(&mut rx) {
             if let Some((poff, plen)) = parse_udp_payload(&rx, l, DNS_PORT, OUR_DNS_PORT) {
                 if let Some(ip) = parse_dns_a(&rx[poff..poff + plen], txid) {
@@ -662,11 +702,17 @@ pub fn http_get(host: &str, out: &mut [u8]) -> Option<usize> {
 /// Pos = ping round-trip OK, Zero = NIC up but ARP/ping failed, Neg = no NIC.
 pub fn init() -> ternary_core::Trit {
     use ternary_core::Trit;
-    if !rtl8139::init() {
+    // Try RTL8139 first (QEMU default), then Intel e1000/e1000e (real laptops).
+    if rtl8139::init() {
+        unsafe { ACTIVE_NIC = ActiveNicKind::Rtl8139; }
+        crate::serial::write_str("  [net] NIC = RTL8139\n");
+    } else if e1000::init() {
+        unsafe { ACTIVE_NIC = ActiveNicKind::E1000; }
+        crate::serial::write_str("  [net] NIC = Intel e1000\n");
+    } else {
         return Trit::Neg;
     }
-    let nic_mac = rtl8139::nic().map(|n| n.mac);
-    if let Some(m) = nic_mac { log_mac("  [net] our MAC ", &m); }
+    if let Some(m) = nic().map(|n| n.mac) { log_mac("  [net] our MAC ", &m); }
     let gw = match arp_resolve(&GW_IP) {
         Some(m) => m,
         None    => return Trit::Zero,

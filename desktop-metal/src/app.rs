@@ -1429,7 +1429,8 @@ pub struct Browser {
 
 impl Browser {
     pub fn new() -> Self {
-        const HOME: &[u8] = b"rustypenguin://home";
+        // Default landing page: google.com (navigates via the live TCP/IP stack).
+        const HOME: &[u8] = b"google.com";
         let mut url = [0u8; 128];
         url[..HOME.len()].copy_from_slice(HOME);
         Browser {
