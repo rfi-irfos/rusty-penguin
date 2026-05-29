@@ -1382,97 +1382,407 @@ fn br_line_advance(kind: u8) -> i32 {
     match kind { K_H1 => 38, K_H2 => 26, K_P => 19, K_LINK => 24, K_NOTE => 19, _ => 11 }
 }
 
+/// sys_http_get(host, out) — kernel TCP/IP fetch (syscall #16).
+unsafe fn sys_http_get_raw(host: &[u8], out: &mut [u8]) -> usize {
+    let n: u64;
+    let arg2 = (host.len() as u64 & 0xFFFF) | ((out.len() as u64) << 16);
+    core::arch::asm!(
+        "syscall",
+        inout("rax") 16u64 => n,
+        in("rdi") host.as_ptr(),
+        in("rsi") arg2,
+        in("rdx") out.as_mut_ptr(),
+        out("rcx") _, out("r11") _,
+        options(nostack),
+    );
+    n as usize
+}
+
+// Max bytes of fetched HTML the browser buffers. Fits in the 24 MiB heap.
+const FETCH_BUF: usize = 16_384;
+// Rendered lines extracted from the fetched HTML (heap).
+const MAX_LIVE_LINES: usize = 200;
+
+#[derive(Copy, Clone, PartialEq)]
+enum BrMode {
+    Static,     // showing a built-in local page (page index in Browser.page)
+    Loading,    // sys_http_get in progress
+    Live,       // showing a fetched remote page
+    Err,        // last fetch failed
+}
+
 pub struct Browser {
-    page: usize,
-    pub dirty: bool,
+    page:         usize,
+    // URL bar
+    url:          [u8; 128],
+    url_len:      usize,
+    addr_focused: bool,
+    // Live page
+    mode:         BrMode,
+    resp_buf:     Vec<u8>,              // raw HTTP response bytes
+    live_lines:   Vec<String>,          // extracted text lines for rendering
+    scroll:       usize,                // first visible live line
+    pub dirty:       bool,
     pub wants_close: bool,
+    ansi:         crate::ansi::AnsiParser,
 }
 
 impl Browser {
-    pub fn new() -> Self { Browser { page: 0, dirty: true, wants_close: false } }
+    pub fn new() -> Self {
+        const HOME: &[u8] = b"rustypenguin://home";
+        let mut url = [0u8; 128];
+        url[..HOME.len()].copy_from_slice(HOME);
+        Browser {
+            page: 0,
+            url, url_len: HOME.len(),
+            addr_focused: false,
+            mode: BrMode::Static,
+            resp_buf: Vec::new(),
+            live_lines: Vec::new(),
+            scroll: 0,
+            dirty: true,
+            wants_close: false,
+            ansi: crate::ansi::AnsiParser::new(),
+        }
+    }
+
+    /// Update the URL bar text to reflect the given slice.
+    fn set_url(&mut self, s: &[u8]) {
+        let n = s.len().min(self.url.len());
+        self.url[..n].copy_from_slice(&s[..n]);
+        self.url_len = n;
+    }
+
+    /// Navigate: detect rustypenguin:// schemes vs plain hostnames.
+    fn navigate(&mut self) {
+        let url = &self.url[..self.url_len];
+        // Local scheme — map to built-in pages.
+        if url.starts_with(b"rustypenguin://") || url.is_empty() {
+            let slug = &url[url.iter().position(|&b| b == b'/').map(|p| p + 2).unwrap_or(0)..];
+            let slug = if let Some(p) = slug.iter().position(|&b| b == b'/') { &slug[p+1..] } else { slug };
+            self.page = match slug { b"about" => 1, b"ternary" => 2, b"roadmap" => 3, _ => 0 };
+            self.mode = BrMode::Static;
+            self.dirty = true;
+            return;
+        }
+        // Strip leading http:// if present.
+        let host = if url.starts_with(b"http://") { &url[7..] } else { url };
+        // Strip trailing path (keep only the host part for the syscall).
+        let host = if let Some(p) = host.iter().position(|&b| b == b'/') { &host[..p] } else { host };
+        if host.is_empty() { return; }
+        // Fetch.
+        self.mode = BrMode::Loading;
+        self.dirty = true;
+        let mut buf = alloc::vec![0u8; FETCH_BUF];
+        let n = unsafe { sys_http_get_raw(host, &mut buf) };
+        if n == 0 {
+            self.mode = BrMode::Err;
+            self.dirty = true;
+            return;
+        }
+        buf.truncate(n);
+        self.resp_buf = buf;
+        self.extract_lines();
+        self.scroll = 0;
+        self.mode = BrMode::Live;
+        self.dirty = true;
+    }
+
+    /// Strip HTTP headers + HTML tags from resp_buf, produce text lines.
+    fn extract_lines(&mut self) {
+        self.live_lines.clear();
+        let data = &self.resp_buf;
+        // Skip HTTP headers: find \r\n\r\n or \n\n.
+        let body_start = data.windows(4).position(|w| w == b"\r\n\r\n")
+            .map(|p| p + 4)
+            .or_else(|| data.windows(2).position(|w| w == b"\n\n").map(|p| p + 2))
+            .unwrap_or(0);
+        let html = &data[body_start..];
+        // Simple tag stripper: walk, skip <...>, collect text.
+        let mut text: Vec<u8> = Vec::with_capacity(html.len());
+        let mut in_tag = false;
+        let mut in_script = false;
+        let mut i = 0;
+        while i < html.len() {
+            match html[i] {
+                b'<' => {
+                    // Detect <script / <style — skip until closing tag.
+                    let rest = &html[i..];
+                    if rest.len() > 7 && (rest[1..7].eq_ignore_ascii_case(b"script") || rest[1..6].eq_ignore_ascii_case(b"style")) {
+                        in_script = true;
+                    }
+                    if in_script {
+                        // scan for </script> or </style>
+                        if let Some(p) = rest.windows(9).position(|w| {
+                            w[..2] == *b"</" && w[2..8].eq_ignore_ascii_case(b"script")
+                        }).or_else(|| rest.windows(8).position(|w| {
+                            w[..2] == *b"</" && w[2..7].eq_ignore_ascii_case(b"style")
+                        })) {
+                            i += p;
+                            in_script = false;
+                            in_tag = true;
+                        } else {
+                            break; // malformed, bail
+                        }
+                    } else {
+                        in_tag = true;
+                        // Block-level tags → emit a newline so lines break.
+                        let tag = if html.len() > i + 1 { html[i+1] } else { 0 };
+                        if matches!(tag | 0x20, b'p'|b'h'|b'd'|b'l'|b't'|b'b') {
+                            if !text.is_empty() && *text.last().unwrap() != b'\n' {
+                                text.push(b'\n');
+                            }
+                        }
+                    }
+                    i += 1;
+                }
+                b'>' if in_tag => { in_tag = false; i += 1; }
+                _ if in_tag => { i += 1; }
+                b'&' => {
+                    // Basic entity decode.
+                    let rest = &html[i..];
+                    if rest.starts_with(b"&amp;")       { text.push(b'&'); i += 5; }
+                    else if rest.starts_with(b"&lt;")   { text.push(b'<'); i += 4; }
+                    else if rest.starts_with(b"&gt;")   { text.push(b'>'); i += 4; }
+                    else if rest.starts_with(b"&nbsp;") { text.push(b' '); i += 6; }
+                    else { text.push(b'&'); i += 1; }
+                }
+                b'\r' => { i += 1; } // collapse \r\n → \n
+                ch => { text.push(ch); i += 1; }
+            }
+        }
+        // Word-wrap each text line at ~72 chars.
+        const WRAP: usize = 72;
+        for raw_line in text.split(|&b| b == b'\n') {
+            let s = core::str::from_utf8(raw_line).unwrap_or("").trim();
+            if s.is_empty() {
+                if !self.live_lines.last().map(|l: &String| l.is_empty()).unwrap_or(true) {
+                    self.live_lines.push(String::new());
+                }
+                continue;
+            }
+            if s.len() <= WRAP {
+                self.live_lines.push(String::from(s));
+            } else {
+                let bytes = s.as_bytes();
+                let mut start = 0;
+                while start < bytes.len() {
+                    let end = (start + WRAP).min(bytes.len());
+                    let end = if end < bytes.len() {
+                        // break at last space before end
+                        bytes[start..end].iter().rposition(|&b| b == b' ')
+                            .map(|p| start + p + 1)
+                            .unwrap_or(end)
+                    } else { end };
+                    if let Ok(chunk) = core::str::from_utf8(&bytes[start..end]) {
+                        let trimmed = chunk.trim();
+                        if !trimmed.is_empty() { self.live_lines.push(String::from(trimmed)); }
+                    }
+                    if end <= start { break; }
+                    start = end;
+                }
+            }
+        }
+        if self.live_lines.len() > MAX_LIVE_LINES {
+            self.live_lines.truncate(MAX_LIVE_LINES);
+        }
+    }
 }
 
 impl App for Browser {
     fn render(&mut self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, h: u32) {
-        let page = br_page(self.page);
-
-        // ── Toolbar (dark chrome) ──────────────────────────────────────────────
+        // ── Toolbar ───────────────────────────────────────────────────────────
         fb.fill_rect(x, y, w, BR_TOOLBAR_H, 0x2A332F);
         fb.fill_rect(x, y + BR_TOOLBAR_H, w, 1, 0x55615A);
-        // nav buttons: back / forward / reload
-        let by = y + 5;
-        let labels = ["<", ">", "@"]; // @ stands in for reload glyph
-        for (i, lab) in labels.iter().enumerate() {
-            let bx = x + 6 + i as u32 * 26;
-            let active = i == 0 && self.page != 0; // only Back is ever active here
-            let bg = if active { 0x39443E } else { 0x232C28 };
-            let fg = if active { 0x6FE18B } else { 0x6B756D };
-            fb.fill_rounded_rect(bx as i32, by as i32, 22, 22, 6, bg);
-            fb.draw_str(bx + 8, by + 7, lab, fg, bg);
-        }
-        // address bar pill
+        let by = y as i32 + 5;
+        // Back button
+        let can_back = self.mode == BrMode::Static && self.page != 0
+                    || self.mode == BrMode::Live || self.mode == BrMode::Err;
+        let bg_back = if can_back { 0x39443E } else { 0x232C28 };
+        let fg_back = if can_back { 0x6FE18B } else { 0x6B756D };
+        fb.fill_rounded_rect(x as i32 + 6, by, 22, 22, 6, bg_back);
+        fb.draw_str(x + 14, y + 12, "<", fg_back, bg_back);
+        // Address bar
         let ax = x + 6 + 3 * 26 + 6;
         let aw = (x + w).saturating_sub(ax + 8);
-        fb.fill_rounded_rect(ax as i32, by as i32, aw as i32, 22, 8, 0x1A211C);
-        // small lock dot + url text
-        fb.fill_circle((ax + 12) as i32, (by + 11) as i32, 3, 0x6FE18B);
-        fb.draw_aa((ax + 22) as i32, (by + 4) as i32, page.url, 0xCFE6D6, crate::fb::AA_S);
+        let bar_bg = if self.addr_focused { 0x2A3A28 } else { 0x1A211C };
+        fb.fill_rounded_rect(ax as i32, by, aw as i32, 22, 8, bar_bg);
+        // lock dot (green = rustypenguin, blue = http, orange = err)
+        let dot_col = match self.mode {
+            BrMode::Static  => 0x6FE18B,
+            BrMode::Live    => 0x4A9EFF,
+            BrMode::Loading => 0xF5C451,
+            BrMode::Err     => 0xEF4444,
+        };
+        fb.fill_circle((ax + 12) as i32, (by + 11), 3, dot_col);
+        let url_str = core::str::from_utf8(&self.url[..self.url_len]).unwrap_or("");
+        let cursor = if self.addr_focused { "_" } else { "" };
+        let mut ubuf = String::from(url_str);
+        ubuf.push_str(cursor);
+        fb.draw_aa((ax + 22) as i32, by + 4, &ubuf, 0xCFE6D6, crate::fb::AA_S);
 
-        // ── Page area (light "web" surface) ────────────────────────────────────
+        // ── Page area ─────────────────────────────────────────────────────────
         let py0 = y + BR_TOOLBAR_H + 1;
         let ph  = h.saturating_sub(BR_TOOLBAR_H + 1);
         fb.fill_rect(x, py0, w, ph, 0xF2F0E8);
+        let lx = x as i32 + 24;
 
-        let mut cy = py0 as i32 + 14;
-        let lx = (x + 24) as i32;
-        for ln in page.lines {
-            if (cy as u32) + 30 > py0 + ph { break; }
-            match ln.kind {
-                K_H1   => { fb.draw_aa(lx, cy, ln.text, 0x1B6B3A, crate::fb::AA_L); }
-                K_H2   => { fb.draw_aa(lx, cy, ln.text, 0xB4502A, crate::fb::AA_S); }
-                K_P    => { fb.draw_aa(lx, cy, ln.text, 0x3A3A36, crate::fb::AA_S); }
-                K_NOTE => { fb.draw_aa(lx, cy, ln.text, 0x8A8A82, crate::fb::AA_T); }
-                K_LINK => {
-                    let lw = Framebuffer::aa_w(ln.text, crate::fb::AA_S);
-                    fb.draw_aa(lx, cy, ln.text, 0x2A6FB0, crate::fb::AA_S);
-                    fb.fill_rect(lx as u32, cy as u32 + 17, lw as u32, 1, 0x2A6FB0);
+        match self.mode {
+            BrMode::Static => {
+                let page = br_page(self.page);
+                let mut cy = py0 as i32 + 14;
+                for ln in page.lines {
+                    if cy as u32 + 30 > py0 + ph { break; }
+                    match ln.kind {
+                        K_H1   => { fb.draw_aa(lx, cy, ln.text, 0x1B6B3A, crate::fb::AA_L); }
+                        K_H2   => { fb.draw_aa(lx, cy, ln.text, 0xB4502A, crate::fb::AA_S); }
+                        K_P    => { fb.draw_aa(lx, cy, ln.text, 0x3A3A36, crate::fb::AA_S); }
+                        K_NOTE => { fb.draw_aa(lx, cy, ln.text, 0x8A8A82, crate::fb::AA_T); }
+                        K_LINK => {
+                            let lw = Framebuffer::aa_w(ln.text, crate::fb::AA_S);
+                            fb.draw_aa(lx, cy, ln.text, 0x2A6FB0, crate::fb::AA_S);
+                            fb.fill_rect(lx as u32, cy as u32 + 17, lw as u32, 1, 0x2A6FB0);
+                        }
+                        _ => {}
+                    }
+                    cy += br_line_advance(ln.kind);
                 }
-                _ => {}
             }
-            cy += br_line_advance(ln.kind);
+            BrMode::Loading => {
+                fb.draw_aa(lx, py0 as i32 + 40, "Fetching page...", 0x8A8A82, crate::fb::AA_S);
+            }
+            BrMode::Err => {
+                fb.draw_aa(lx, py0 as i32 + 40, "Could not load page.", 0xEF4444, crate::fb::AA_S);
+                fb.draw_aa(lx, py0 as i32 + 62, "Check hostname or network.", 0x8A8A82, crate::fb::AA_S);
+            }
+            BrMode::Live => {
+                let line_h: i32 = 19;
+                let visible = (ph as i32 / line_h).max(1) as usize;
+                let start = self.scroll.min(self.live_lines.len().saturating_sub(1));
+                let mut cy = py0 as i32 + 10;
+                for line in self.live_lines.iter().skip(start).take(visible) {
+                    if cy as u32 + 20 > py0 + ph { break; }
+                    if line.is_empty() { cy += line_h / 2; continue; }
+                    fb.draw_aa(lx, cy, line.as_str(), 0x3A3A36, crate::fb::AA_S);
+                    cy += line_h;
+                }
+                // Scroll indicator
+                if self.live_lines.len() > visible {
+                    let bar_h = (ph * visible as u32 / self.live_lines.len() as u32).max(6);
+                    let bar_y = py0 + start as u32 * ph / self.live_lines.len() as u32;
+                    fb.fill_rect(x + w - 5, bar_y, 3, bar_h, 0xB8C8B0);
+                }
+            }
         }
         self.dirty = false;
     }
 
-    fn on_mouse(&mut self, mx: i32, my: i32, _w: u32, _h: u32, buttons: u8) {
+    fn on_mouse(&mut self, mx: i32, my: i32, w: u32, h: u32, buttons: u8) {
         if buttons & 1 == 0 { return; }
-        // Back button hit (top-left of toolbar)
-        if mx >= 6 && mx < 28 && my >= 5 && my < 27 {
-            if self.page != 0 { self.page = 0; self.dirty = true; }
+        let by = 5i32;
+        let ax = (6 + 3 * 26 + 6) as i32;
+        let aw = (w as i32).saturating_sub(ax + 8);
+        // Click address bar → focus it
+        if mx >= ax && mx < ax + aw && my >= by && my < by + 22 {
+            self.addr_focused = true;
+            self.dirty = true;
             return;
         }
-        // Link hit-testing in the page area — re-walk the same layout.
-        let page = br_page(self.page);
-        let mut cy = BR_TOOLBAR_H as i32 + 1 + 14;
-        for ln in page.lines {
-            let adv = br_line_advance(ln.kind);
-            if ln.kind == K_LINK && ln.link >= 0 {
-                let lw = Framebuffer::aa_w(ln.text, crate::fb::AA_S);
-                if mx >= 24 && mx < 24 + lw && my >= cy && my < cy + adv {
-                    self.page = ln.link as usize;
-                    self.dirty = true;
-                    return;
+        self.addr_focused = false;
+        // Back button
+        if mx >= 6 && mx < 28 && my >= 5 && my < 27 {
+            self.go_back();
+            return;
+        }
+        // Static page link clicks
+        if self.mode == BrMode::Static {
+            let page = br_page(self.page);
+            let mut cy = (BR_TOOLBAR_H as i32) + 1 + 14;
+            for ln in page.lines {
+                let adv = br_line_advance(ln.kind);
+                if ln.kind == K_LINK && ln.link >= 0 {
+                    let lw = Framebuffer::aa_w(ln.text, crate::fb::AA_S);
+                    if mx >= 24 && mx < 24 + lw && my >= cy && my < cy + adv {
+                        self.page = ln.link as usize;
+                        self.update_url_from_page();
+                        self.dirty = true;
+                        return;
+                    }
                 }
+                cy += adv;
             }
-            cy += adv;
+        }
+        // Live page scroll (click in page area = scroll toward click position)
+        if self.mode == BrMode::Live {
+            let page_h = h as i32 - BR_TOOLBAR_H as i32 - 1;
+            if my > BR_TOOLBAR_H as i32 {
+                if my < BR_TOOLBAR_H as i32 + page_h / 2 {
+                    self.scroll = self.scroll.saturating_sub(3);
+                } else {
+                    self.scroll = (self.scroll + 3).min(self.live_lines.len().saturating_sub(1));
+                }
+                self.dirty = true;
+            }
         }
     }
 
-    fn on_key(&mut self, _key: u8) {}
+    fn on_key(&mut self, key: u8) {
+        use crate::ansi::Key as AK;
+        if self.addr_focused {
+            match self.ansi.feed(key) {
+                AK::Char(b'\n') | AK::Char(b'\r') => {
+                    self.addr_focused = false;
+                    self.navigate();
+                }
+                AK::Char(0x08) | AK::Char(0x7F) => {
+                    if self.url_len > 0 { self.url_len -= 1; self.dirty = true; }
+                }
+                AK::Char(ch) if ch >= 0x20 && ch < 0x7F => {
+                    if self.url_len < self.url.len() - 1 {
+                        self.url[self.url_len] = ch;
+                        self.url_len += 1;
+                        self.dirty = true;
+                    }
+                }
+                AK::Up   => { self.scroll = self.scroll.saturating_sub(1); self.dirty = true; }
+                AK::Down => { self.scroll = (self.scroll + 1).min(self.live_lines.len().saturating_sub(1)); self.dirty = true; }
+                _ => {}
+            }
+        } else {
+            match self.ansi.feed(key) {
+                AK::Up   => { self.scroll = self.scroll.saturating_sub(1); self.dirty = true; }
+                AK::Down => { self.scroll = (self.scroll + 1).min(self.live_lines.len().saturating_sub(1)); self.dirty = true; }
+                _ => {}
+            }
+        }
+    }
 
     fn wants_close(&self) -> bool { self.wants_close }
-
     fn title(&self) -> &str { "Web" }
+}
+
+impl Browser {
+    fn go_back(&mut self) {
+        match self.mode {
+            BrMode::Live | BrMode::Err => {
+                self.mode = BrMode::Static;
+                self.page = 0;
+                self.update_url_from_page();
+            }
+            BrMode::Static if self.page != 0 => {
+                self.page = 0;
+                self.update_url_from_page();
+            }
+            _ => {}
+        }
+        self.dirty = true;
+    }
+    fn update_url_from_page(&mut self) {
+        let url = br_page(self.page).url.as_bytes();
+        let n = url.len().min(self.url.len());
+        self.url[..n].copy_from_slice(&url[..n]);
+        self.url_len = n;
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
