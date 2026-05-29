@@ -22,6 +22,11 @@ the bare-metal Rust kernel straight into the Rusty Penguin desktop. Everything
 Built by [RFI-IRFOS](https://github.com/rfi-irfos) as part of the
 [Ternary Intelligence Stack](https://ternlang.com).
 
+![Rusty Penguin desktop — start menu and the native browser](docs/rusty-penguin-desktop-v2.png)
+
+*The bare-metal Rust desktop: floating dock, start menu, and the native browser —
+all rendered by Rusty Penguin's own framebuffer, anti-aliased font and CSS engine.*
+
 ---
 
 ## Why a third state
