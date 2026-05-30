@@ -115,7 +115,8 @@ velocity equals completion.
 | Apps: terminal, files, editor, calculator, monitor, settings, TIS console | ✅ |
 | **NIC drivers: RTL8139, Intel e1000/i219, Realtek r8169** | ✅ ~95% laptop coverage |
 | **TCP/IP stack: ARP/ICMP/UDP/DHCP/DNS/TCP/HTTP** | ✅ fetches real internet |
-| **Live web browser — type host → real page** | ✅ google.com default |
+| **TLS 1.3 client (X25519 · ChaCha20-Poly1305 · from scratch)** | ✅ real HTTPS, QEMU-verified vs live web |
+| **Live web browser — type host → real page** | ✅ http + https, follows redirects |
 | `fetch`, `wget` terminal commands | ✅ |
 | Linux ABI layer (static + dynamic glibc binaries) | ✅ Bricks 1–5 done |
 | **Multi-user login (SHA-256 passwords, /home/<user>)** | ✅ |
@@ -135,6 +136,9 @@ velocity equals completion.
 | Recovery console | ✅ |
 
 ### Remaining gaps for "replace Ubuntu" daily driving
+- TLS certificate-chain validation (the TLS 1.3 client does the handshake +
+  verifies the server Finished, but has no CA trust store or wall clock yet —
+  confidentiality vs a passive attacker, not active-MITM protection)
 - Bare-metal disk persistence (AHCI/NVMe ext4 write — multi-week brick)
 - GPU acceleration (framebuffer only; software rendering)
 - WiFi on bare-metal kernel (needs per-chip driver + firmware)
