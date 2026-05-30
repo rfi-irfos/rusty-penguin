@@ -31,14 +31,17 @@ Verified: boot/A/B each print a distinct live CR3 (0x22f000 / 0x238000 /
 0x239000), interleaved, no fault. **Foundation complete: preemptive multitasking
 + per-process isolation.**
 
-## Increment 3c — ring-3 task in a private address space  ← NEXT
-So far tasks run in ring 0. A real process (desktop, fbDOOM) runs in ring 3.
-Needs: load an ELF into a private AS (PMM frames mapped USER at its vaddrs),
-a user stack, a ring-3 iret frame (cs=0x23/ss=0x1b), AND **per-task TSS.rsp0**
-— when the timer interrupts a ring-3 task, the CPU loads the kernel stack from
-TSS.rsp0, so `preempt_tick` must update rsp0 to the next task's kernel stack on
-every switch (else a ring-3 preemption corrupts state). Verify: a ring-3 stub
-makes a syscall the kernel logs, preempted alongside the boot thread.
+## Increment 3c — ring-3 task in a private address space  (flag: `schedtest5`)  ✅ DONE (1652370, verified)
+A ring-3 stub loaded into a private AS (code+stack mapped USER at ≥512 GiB),
+ring-3 iret frame (cs=0x23/ss=0x1b), per-task TSS.rsp0 updated in preempt_tick.
+Verified: ring-3 syscall (tag 0x55) logged 59×, boot thread 43×, interleaved,
+no fault. Ring-3 multitasking foundation complete.
+
+## NEXT: Increment 3d — real processes in private LOW addresses
+Blocker: `new_address_space` shares all of PML4[0], so it only isolates ≥512 GiB.
+The desktop (4 MiB) and fbDOOM (16 MiB) need PRIVATE low-half mappings + a shared
+kernel. Architecture decision in **docs/VMM_HIGHER_HALF.md** (recommend a
+higher-half kernel). Pick a direction before building 3d.
 
 ## Increment 4 — virtual `/dev/fb0`
 When a Linux process opens `/dev/fb0`, hand it an **offscreen** buffer (not the
