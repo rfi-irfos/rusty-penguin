@@ -193,6 +193,24 @@ extern "x86-interrupt" fn irq_timer(_f: InterruptFrame) {
     crate::usb::poll();
 }
 
+/// The per-tick bookkeeping the timer IRQ must do regardless of who handles it
+/// (used by the scheduler's preemptive timer handler). Increments ticks, ACKs
+/// the PIC, and polls USB.
+pub fn timer_bookkeeping() {
+    unsafe {
+        TICKS += 1;
+        pic::eoi(0);
+    }
+    crate::usb::poll();
+}
+
+/// Repoint the timer IRQ vector (IDT[32]) to `handler`. The CPU reads the IDT on
+/// each interrupt, so no `lidt` reload is needed. Used to install the scheduler's
+/// preemptive timer handler. `handler` is the raw entry address.
+pub fn set_timer_vector(handler: u64) {
+    unsafe { IDT[32] = IdtEntry::gate(handler); }
+}
+
 static mut SHIFT_DOWN: bool = false;
 static mut ALTGR_DOWN: bool = false;
 static mut CTRL_DOWN:  bool = false;

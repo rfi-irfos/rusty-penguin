@@ -186,6 +186,115 @@ extern "C" fn task_b() -> ! {
     task_exit();
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Increment 2: timer-driven PREEMPTION. fbDOOM's game loop never yields, so the
+// 100 Hz timer must switch tasks. Unlike the cooperative switch (callee-saved
+// only), preemption interrupts arbitrary code, so we save/restore the FULL
+// register set + the CPU's iret frame. Every task's suspended kernel stack thus
+// has the uniform layout [15 GPRs][rip][cs][rflags][rsp][ss]; the same `iretq`
+// resumes a preempted task or launches a freshly-spawned one.
+//
+// Gated behind `schedtest2`. Increment 3 extends this to ring-3 + per-process
+// address spaces (CR3 switch) for the real desktop ⇄ fbDOOM case.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Prime a fresh kernel-task stack with a full [15 GPRs][iret frame] so the
+/// preemptive switch can `iretq` straight into `entry` at ring 0 with IF set.
+fn spawn_preempt(entry: extern "C" fn() -> !) -> usize {
+    unsafe {
+        for i in 1..MAX_TASKS {
+            if !TASKS[i].used {
+                let base = core::ptr::addr_of_mut!(KSTACKS[i]) as *mut u8;
+                let top = ((base.add(KSTACK_SIZE) as u64) & !0xF) as u64;
+                let mut sp = top;
+                let push = |sp: &mut u64, v: u64| { *sp -= 8; *(*sp as *mut u64) = v; };
+                // iret frame (high→low: ss, rsp, rflags, cs, rip)
+                push(&mut sp, 0x10);   // ss  = kernel data
+                push(&mut sp, top);    // rsp = task's own stack top after entry
+                push(&mut sp, 0x202);  // rflags, IF=1
+                push(&mut sp, 0x08);   // cs  = kernel code
+                push(&mut sp, entry as usize as u64); // rip = entry
+                for _ in 0..15 { push(&mut sp, 0); }  // 15 GPRs = 0
+                TASKS[i] = Task { rsp: sp, used: true, alive: true };
+                return i;
+            }
+        }
+        0
+    }
+}
+
+/// Called from the naked preemptive timer stub with the interrupted task's saved
+/// stack pointer; returns the next task's stack pointer to resume. Also does the
+/// normal per-tick bookkeeping (ticks/EOI/USB).
+extern "C" fn preempt_tick(cur_rsp: u64) -> u64 {
+    crate::idt::timer_bookkeeping();
+    unsafe {
+        TASKS[CUR_TASK].rsp = cur_rsp;
+        let nxt = next_alive(CUR_TASK);
+        CUR_TASK = nxt;
+        TASKS[nxt].rsp
+    }
+}
+
+/// Preemptive timer IRQ entry. Saves the full GPR set on the current task's
+/// kernel stack (atop the CPU's iret frame), hands the stack pointer to
+/// `preempt_tick`, switches to the returned task's stack, restores its GPRs and
+/// `iretq`s into it.
+#[unsafe(naked)]
+unsafe extern "C" fn irq_timer_preempt() {
+    core::arch::naked_asm!(
+        "push rax", "push rcx", "push rdx", "push rbx", "push rbp", "push rsi", "push rdi",
+        "push r8", "push r9", "push r10", "push r11", "push r12", "push r13", "push r14", "push r15",
+        "mov rdi, rsp",         // arg0 = current saved-frame pointer
+        "call {tick}",          // rax = next task's rsp
+        "mov rsp, rax",
+        "pop r15", "pop r14", "pop r13", "pop r12", "pop r11", "pop r10", "pop r9", "pop r8",
+        "pop rdi", "pop rsi", "pop rbp", "pop rbx", "pop rdx", "pop rcx", "pop rax",
+        "iretq",
+        tick = sym preempt_tick,
+    )
+}
+
+#[inline(never)]
+fn busy_spin() {
+    for _ in 0..25_000_000u64 {
+        unsafe { core::arch::asm!("nop", options(nomem, nostack, preserves_flags)); }
+    }
+}
+
+/// Increment-2 self-test (cmdline `schedtest2`): two kernel tasks that NEVER
+/// yield, plus the boot thread — all preempted by the 100 Hz timer. If the
+/// preemptive switch works, A, B and boot all print (interleaved); without it,
+/// only the boot thread would ever run. Does not return (timer drives forever).
+pub fn selftest_preempt() -> ! {
+    use crate::serial::write_str;
+    write_str("\n[sched] === Increment 2: timer-PREEMPTION self-test ===\n");
+    unsafe {
+        core::arch::asm!("cli");
+        TASKS[0] = Task { rsp: 0, used: true, alive: true };
+        CUR_TASK = 0;
+    }
+    spawn_preempt(ptask_a);
+    spawn_preempt(ptask_b);
+    // Install the preemptive timer handler and let the 100 Hz IRQ drive switching.
+    crate::idt::set_timer_vector(irq_timer_preempt as *const () as u64);
+    unsafe { core::arch::asm!("sti"); }
+    let mut n = 0u32;
+    loop {
+        write_str("[sched] boot-thread (preempted)\n");
+        busy_spin();
+        n += 1;
+        if n >= 6 { write_str("[sched] === preemption proven: A/B ran without yielding ===\n"); }
+    }
+}
+
+extern "C" fn ptask_a() -> ! {
+    loop { crate::serial::write_str("[sched]   PREEMPT task A\n"); busy_spin(); }
+}
+extern "C" fn ptask_b() -> ! {
+    loop { crate::serial::write_str("[sched]   PREEMPT task B\n"); busy_spin(); }
+}
+
 /// Fill `buf` with packed 32-byte PsRecord entries.
 /// Layout per record: [u64 pid][u8 state][7 pad][16 name]
 /// Returns number of records written.
