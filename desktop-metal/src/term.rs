@@ -13,6 +13,10 @@ pub const ROWS: usize = 24;
 pub const TERM_PIX_W: u32 = (COLS * 8) as u32;
 pub const TERM_PIX_H: u32 = (ROWS * 8) as u32;
 
+// Character cell size in pixels (8×8 bitmap font).
+pub const CHAR_W: usize = 8;
+pub const CHAR_H: usize = 8;
+
 const DEFAULT_FG: u32 = 0x4ADE80;
 const DEFAULT_BG: u32 = 0x0F172A;
 
@@ -71,12 +75,12 @@ impl EditorState {
         if self.cursor_col > max { self.cursor_col = max; }
     }
 
-    fn clamp_scroll(&mut self) {
-        const CONTENT: usize = ROWS - 2;
+    fn clamp_scroll(&mut self, term_rows: usize) {
+        let content = term_rows.saturating_sub(2);
         if self.cursor_row < self.scroll_top {
             self.scroll_top = self.cursor_row;
-        } else if self.cursor_row >= self.scroll_top + CONTENT {
-            self.scroll_top = self.cursor_row - CONTENT + 1;
+        } else if self.cursor_row >= self.scroll_top + content {
+            self.scroll_top = self.cursor_row - content + 1;
         }
     }
 
@@ -267,6 +271,8 @@ const HISTORY_CAP: usize = 32;
 // ── Terminal ──────────────────────────────────────────────────────────────────
 
 pub struct Terminal {
+    pub cols:        usize,    // current terminal width in characters
+    pub rows:        usize,    // current terminal height in characters
     pub cells:       Vec<Cell>,
     pub cur_col:     usize,
     pub cur_row:     usize,
@@ -375,6 +381,8 @@ impl Terminal {
     pub fn spawn() -> Result<Self, String> {
         let blank = Cell::default();
         let mut t = Terminal {
+            cols:        COLS,
+            rows:        ROWS,
             cells:       alloc::vec![blank; COLS * ROWS],
             cur_col:     0, cur_row: 0,
             cur_fg:      DEFAULT_FG, cur_bg: DEFAULT_BG,
@@ -417,29 +425,29 @@ impl Terminal {
 
     fn scroll_up(&mut self) {
         let blank = self.blank();
-        for row in 0..ROWS - 1 {
-            for col in 0..COLS {
-                self.cells[row * COLS + col] = self.cells[(row + 1) * COLS + col];
+        for row in 0..self.rows - 1 {
+            for col in 0..self.cols {
+                self.cells[row * self.cols + col] = self.cells[(row + 1) * self.cols + col];
             }
         }
-        for col in 0..COLS { self.cells[(ROWS - 1) * COLS + col] = blank; }
+        for col in 0..self.cols { self.cells[(self.rows - 1) * self.cols + col] = blank; }
     }
 
     fn put_char(&mut self, ch: u8) {
         let cell = Cell { ch, fg: self.cur_fg, bg: self.cur_bg };
-        self.cells[self.cur_row * COLS + self.cur_col] = cell;
+        self.cells[self.cur_row * self.cols + self.cur_col] = cell;
         self.cur_col += 1;
-        if self.cur_col >= COLS {
+        if self.cur_col >= self.cols {
             self.cur_col = 0;
             self.cur_row += 1;
-            if self.cur_row >= ROWS { self.scroll_up(); self.cur_row = ROWS - 1; }
+            if self.cur_row >= self.rows { self.scroll_up(); self.cur_row = self.rows - 1; }
         }
     }
 
     fn newline(&mut self) {
         self.cur_col = 0;
         self.cur_row += 1;
-        if self.cur_row >= ROWS { self.scroll_up(); self.cur_row = ROWS - 1; }
+        if self.cur_row >= self.rows { self.scroll_up(); self.cur_row = self.rows - 1; }
     }
 
     pub fn process_byte(&mut self, b: u8) {
@@ -451,7 +459,7 @@ impl Terminal {
                     if self.cur_col > 0 {
                         self.cur_col -= 1;
                         let blank = self.blank();
-                        self.cells[self.cur_row * COLS + self.cur_col] = blank;
+                        self.cells[self.cur_row * self.cols + self.cur_col] = blank;
                     }
                     EscState::Normal
                 }
@@ -520,7 +528,7 @@ impl Terminal {
                 let mut parts = p.splitn(2, ';');
                 let r = parts.next().and_then(|s| s.parse::<usize>().ok()).unwrap_or(1).max(1) - 1;
                 let c = parts.next().and_then(|s| s.parse::<usize>().ok()).unwrap_or(1).max(1) - 1;
-                self.cur_row = r.min(ROWS - 1); self.cur_col = c.min(COLS - 1);
+                self.cur_row = r.min(self.rows - 1); self.cur_col = c.min(self.cols - 1);
             }
             b'A' if p.is_empty() => {
                 if !self.history.is_empty() {
@@ -554,7 +562,7 @@ impl Terminal {
             b'C' if p.is_empty() => {
                 if self.line_cursor < self.line_len {
                     self.line_cursor += 1;
-                    self.cur_col = (self.cur_col + 1).min(COLS - 1);
+                    self.cur_col = (self.cur_col + 1).min(self.cols - 1);
                 }
             }
             b'H' if p.is_empty() => {
@@ -565,7 +573,7 @@ impl Terminal {
             b'F' if p.is_empty() => {
                 let fwd = self.line_len - self.line_cursor;
                 self.line_cursor = self.line_len;
-                self.cur_col = (self.cur_col + fwd).min(COLS - 1);
+                self.cur_col = (self.cur_col + fwd).min(self.cols - 1);
             }
             b'~' if p == "3" => {
                 if self.line_cursor < self.line_len {
@@ -577,8 +585,8 @@ impl Terminal {
                 }
             }
             b'A' => { self.cur_row = self.cur_row.saturating_sub(n1()); }
-            b'B' => { self.cur_row = (self.cur_row + n1()).min(ROWS - 1); }
-            b'C' => { self.cur_col = (self.cur_col + n1()).min(COLS - 1); }
+            b'B' => { self.cur_row = (self.cur_row + n1()).min(self.rows - 1); }
+            b'C' => { self.cur_col = (self.cur_col + n1()).min(self.cols - 1); }
             b'D' => { self.cur_col = self.cur_col.saturating_sub(n1()); }
             _ => {}
         }
@@ -588,15 +596,15 @@ impl Terminal {
     fn redraw_from(&mut self, from: usize) {
         let start_col = self.cur_col;
         for i in from..self.line_len {
-            if self.cur_col < COLS {
+            if self.cur_col < self.cols {
                 let ch = self.line_buf[i];
-                self.cells[self.cur_row * COLS + self.cur_col] =
+                self.cells[self.cur_row * self.cols + self.cur_col] =
                     Cell { ch, fg: self.cur_fg, bg: self.cur_bg };
                 self.cur_col += 1;
             }
         }
-        if self.cur_col < COLS {
-            self.cells[self.cur_row * COLS + self.cur_col] = self.blank();
+        if self.cur_col < self.cols {
+            self.cells[self.cur_row * self.cols + self.cur_col] = self.blank();
             self.cur_col += 1;
         }
         let desired = start_col + self.line_cursor.saturating_sub(from);
@@ -617,7 +625,7 @@ impl Terminal {
 
     fn erase_line_input(&mut self) {
         while self.line_cursor < self.line_len {
-            self.cur_col = (self.cur_col + 1).min(COLS - 1);
+            self.cur_col = (self.cur_col + 1).min(self.cols - 1);
             self.line_cursor += 1;
         }
         while self.line_len > 0 {
@@ -722,7 +730,7 @@ impl Terminal {
             0x05 => {
                 let fwd = self.line_len - self.line_cursor;
                 self.line_cursor = self.line_len;
-                self.cur_col = (self.cur_col + fwd).min(COLS - 1);
+                self.cur_col = (self.cur_col + fwd).min(self.cols - 1);
                 self.dirty = true;
             }
             0x09 => { self.complete_tab(); } // Tab
@@ -772,7 +780,7 @@ impl Terminal {
                     b'F' => { ed.cursor_col = ed.line_len(ed.cursor_row); }
                     _    => {}
                 }
-                ed.clamp_scroll();
+                ed.clamp_scroll(self.rows);
                 self.editor = Some(ed);
                 self.render_editor();
                 return;
@@ -794,7 +802,7 @@ impl Terminal {
             _ => {}
         }
 
-        ed.clamp_scroll();
+        ed.clamp_scroll(self.rows);
 
         if do_save {
             let bytes = ed.to_bytes();
@@ -873,9 +881,9 @@ impl Terminal {
         const I_FG: u32 = 0x60A5FA; const W_FG: u32 = 0xF8FAFC;
 
         let fill = |cells: &mut Vec<Cell>, row: usize, fg: u32, bg: u32, text: &[u8]| {
-            for col in 0..COLS { cells[row * COLS + col] = Cell { ch: b' ', fg, bg }; }
-            for (col, &ch) in text.iter().enumerate().take(COLS) {
-                cells[row * COLS + col] = Cell { ch, fg, bg };
+            for col in 0..self.cols { cells[row * self.cols + col] = Cell { ch: b' ', fg, bg }; }
+            for (col, &ch) in text.iter().enumerate().take(self.cols) {
+                cells[row * self.cols + col] = Cell { ch, fg, bg };
             }
         };
 
@@ -903,9 +911,9 @@ impl Terminal {
         ];
         for (i, (left, right)) in ABI.iter().enumerate() {
             let row = 5 + i;
-            for col in 0..COLS { self.cells[row * COLS + col] = Cell { ch: b' ', fg: D_FG, bg: C_BG }; }
+            for col in 0..self.cols { self.cells[row * self.cols + col] = Cell { ch: b' ', fg: D_FG, bg: C_BG }; }
             for (col, &ch) in left.iter().enumerate().take(40) {
-                self.cells[row * COLS + col] = Cell { ch, fg: D_FG, bg: C_BG };
+                self.cells[row * self.cols + col] = Cell { ch, fg: D_FG, bg: C_BG };
             }
             for (col, &ch) in right.iter().enumerate().take(40) {
                 self.cells[row * COLS + 40 + col] = Cell { ch, fg: D_FG, bg: C_BG };
@@ -960,7 +968,7 @@ impl Terminal {
         // Position cursor in path input field
         let path_len = km.path.len();
         self.cur_row = 20;
-        self.cur_col = (9 + path_len).min(COLS - 2);
+        self.cur_col = (9 + path_len).min(self.cols - 2);
         self.dirty = true;
     }
 
@@ -968,14 +976,14 @@ impl Terminal {
 
     pub fn render_editor(&mut self) {
         let ed = match &self.editor { Some(e) => e, None => return };
-        const CONTENT: usize = ROWS - 2;
+        let content = self.rows.saturating_sub(2);
         const HDR_BG:  u32 = 0x1D4ED8;  // blue header
         const HDR_FG:  u32 = 0xF8FAFC;
         const SB_BG:   u32 = 0x1E3A5F;  // dark status bar
         const SB_FG:   u32 = 0xCBD5E1;
 
         // Header row (row 0)
-        for col in 0..COLS {
+        for col in 0..self.cols {
             self.cells[col] = Cell { ch: b' ', fg: HDR_FG, bg: HDR_BG };
         }
         let hdr = {
@@ -984,19 +992,19 @@ impl Terminal {
             if ed.modified { s.push_str("  [modified]"); }
             s
         };
-        for (col, &ch) in hdr.as_bytes().iter().enumerate().take(COLS) {
+        for (col, &ch) in hdr.as_bytes().iter().enumerate().take(self.cols) {
             self.cells[col] = Cell { ch, fg: HDR_FG, bg: HDR_BG };
         }
 
         // Content rows (1..ROWS-1)
-        for vis in 0..CONTENT {
+        for vis in 0..content {
             let doc_row = ed.scroll_top + vis;
             let term_row = vis + 1;
             // Line number gutter (4 chars wide)
             let gutter_bg = 0x111827u32;
             let gutter_fg = 0x374151u32;
             for col in 0..4usize {
-                self.cells[term_row * COLS + col] = Cell { ch: b' ', fg: gutter_fg, bg: gutter_bg };
+                self.cells[term_row * self.cols + col] = Cell { ch: b' ', fg: gutter_fg, bg: gutter_bg };
             }
             if doc_row < ed.lines.len() {
                 // Print line number (right-aligned in 3 chars + space)
@@ -1011,8 +1019,8 @@ impl Terminal {
                 }
             }
             // Content area (cols 4..COLS)
-            for col in 4..COLS {
-                self.cells[term_row * COLS + col] = Cell { ch: b' ', fg: DEFAULT_FG, bg: DEFAULT_BG };
+            for col in 4..self.cols {
+                self.cells[term_row * self.cols + col] = Cell { ch: b' ', fg: DEFAULT_FG, bg: DEFAULT_BG };
             }
             if let Some(line) = ed.lines.get(doc_row) {
                 for (i, &ch) in line.iter().enumerate() {
@@ -1020,34 +1028,34 @@ impl Terminal {
                     if col >= COLS { break; }
                     let is_cur = doc_row == ed.cursor_row && i == ed.cursor_col;
                     let (fg, bg) = if is_cur { (DEFAULT_BG, DEFAULT_FG) } else { (DEFAULT_FG, DEFAULT_BG) };
-                    self.cells[term_row * COLS + col] = Cell { ch, fg, bg };
+                    self.cells[term_row * self.cols + col] = Cell { ch, fg, bg };
                 }
                 // Block cursor at end of line
                 if doc_row == ed.cursor_row && ed.cursor_col == line.len() {
                     let col = line.len() + 4;
-                    if col < COLS {
-                        self.cells[term_row * COLS + col] = Cell { ch: b' ', fg: DEFAULT_BG, bg: DEFAULT_FG };
+                    if col < self.cols {
+                        self.cells[term_row * self.cols + col] = Cell { ch: b' ', fg: DEFAULT_BG, bg: DEFAULT_FG };
                     }
                 }
             }
         }
 
         // Status bar (last row)
-        for col in 0..COLS {
+        for col in 0..self.cols {
             self.cells[(ROWS - 1) * COLS + col] = Cell { ch: b' ', fg: SB_FG, bg: SB_BG };
         }
         let sb = format!("  ^S Save  ^X Exit    Ln {}  Col {}  {}",
             ed.cursor_row + 1, ed.cursor_col + 1,
             if ed.modified { "modified" } else { "        " });
-        for (col, &ch) in sb.as_bytes().iter().enumerate().take(COLS) {
+        for (col, &ch) in sb.as_bytes().iter().enumerate().take(self.cols) {
             self.cells[(ROWS - 1) * COLS + col] = Cell { ch, fg: SB_FG, bg: SB_BG };
         }
 
         // Position terminal cursor
         let vis_row = ed.cursor_row.saturating_sub(ed.scroll_top);
-        if vis_row < CONTENT {
+        if vis_row < content {
             self.cur_row = vis_row + 1;
-            self.cur_col = (ed.cursor_col + 4).min(COLS - 1);
+            self.cur_col = (ed.cursor_col + 4).min(self.cols - 1);
         }
         self.dirty = true;
     }
@@ -2607,17 +2615,40 @@ impl Terminal {
         self.write_output(format!("{}  ({})\r\n", r, Self::to_tern(r)).as_bytes());
     }
 
+    // ── Resize ───────────────────────────────────────────────────────────────
+
+    /// Resize the terminal grid to `new_cols` × `new_rows`, preserving content
+    /// that fits. Called when a window is resized.
+    pub fn resize_term(&mut self, new_cols: usize, new_rows: usize) {
+        let new_cols = new_cols.max(8);
+        let new_rows = new_rows.max(4);
+        if new_cols == self.cols && new_rows == self.rows { return; }
+        let blank = self.blank();
+        let mut new_cells = alloc::vec![blank; new_cols * new_rows];
+        for row in 0..new_rows.min(self.rows) {
+            for col in 0..new_cols.min(self.cols) {
+                new_cells[row * new_cols + col] = self.cells[row * self.cols + col];
+            }
+        }
+        self.cells = new_cells;
+        self.cols  = new_cols;
+        self.rows  = new_rows;
+        self.cur_col = self.cur_col.min(new_cols.saturating_sub(1));
+        self.cur_row = self.cur_row.min(new_rows.saturating_sub(1));
+        self.dirty = true;
+    }
+
     // ── Render ───────────────────────────────────────────────────────────────
 
     pub fn render(&self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, h: u32, show_cursor: bool) {
-        let max_col = (w / 8).min(COLS as u32) as usize;
-        let max_row = (h / 8).min(ROWS as u32) as usize;
+        let max_col = (w / 8).min(self.cols as u32) as usize;
+        let max_row = (h / 8).min(self.rows as u32) as usize;
         for row in 0..max_row {
             for col in 0..max_col {
                 let px = x + col as u32 * 8;
                 let py = y + row as u32 * 8;
                 if px + 8 > fb.width || py + 8 > fb.height { continue; }
-                let cell = &self.cells[row * COLS + col];
+                let cell = &self.cells[row * self.cols + col];
                 fb.draw_char(px, py, cell.ch as char, cell.fg, cell.bg);
             }
         }
@@ -2629,7 +2660,7 @@ impl Terminal {
         let cy = y + self.cur_row as u32 * 8;
         if cx + 8 > fb.width || cy + 8 > fb.height { return; }
         if cx >= x + w || cy >= y + h { return; }
-        let cell = &self.cells[self.cur_row * COLS + self.cur_col];
+        let cell = &self.cells[self.cur_row * self.cols + self.cur_col];
         if show {
             fb.fill_rect(cx, cy, 8, 8, DEFAULT_FG);
             if cell.ch > b' ' { fb.draw_char(cx, cy, cell.ch as char, DEFAULT_BG, DEFAULT_FG); }

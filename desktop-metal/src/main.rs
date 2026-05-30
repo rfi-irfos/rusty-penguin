@@ -1230,15 +1230,25 @@ struct TermWin {
 
 fn open_term(w: i32, h: i32, n: usize, l: &Launcher) -> Option<TermWin> {
     match term::Terminal::spawn() {
-        Ok(t) => {
+        Ok(mut t) => {
             let off = n as i32 * 20;
             let left_margin = 75;
-            let wx = ((w - left_margin - wm::WINDOW_W) / 2 + left_margin + off)
+            // Open at ~60% of screen width and ~65% of usable height by default.
+            let tw = ((w * 3 / 5) & !7).max(wm::WINDOW_W).min(w - left_margin - 20);
+            let th = ((h * 13 / 20) & !7).max(wm::WINDOW_H).min(h - 28 - TOPBAR_H as i32 - 20);
+            let wx = ((w - left_margin - tw) / 2 + left_margin + off)
                 .max(left_margin)
-                .min(w - wm::WINDOW_W);
-            let wy = ((h - wm::WINDOW_H - 28) / 2 + off).max(TOPBAR_H as i32).min(h - wm::WINDOW_H - 28);
+                .min(w - tw);
+            let wy = ((h - th - 28) / 2 + off).max(TOPBAR_H as i32).min(h - th - 28);
+            // Reflow terminal to match the initial window size.
+            let nc = ((tw - 2) as usize / term::CHAR_W).max(8);
+            let nr = ((th - 2 - wm::TITLEBAR_H) as usize / term::CHAR_H).max(4);
+            t.resize_term(nc, nr);
+            let mut win = wm::Window::new(wx, wy, l.title);
+            win.w = tw; win.h = th;
+            win.restore_w = tw; win.restore_h = th;
             Some(TermWin {
-                win: wm::Window::new(wx, wy, l.title),
+                win,
                 term: t,
                 editor: None,
                 app: None,
@@ -2064,6 +2074,12 @@ pub extern "C" fn _start() -> ! {
                     let nh = nh.min(h - tw.win.y - 28);
                     if nw != tw.win.w || nh != tw.win.h {
                         tw.win.w = nw; tw.win.h = nh;
+                        // Reflow the terminal to fill the new window content area.
+                        let cw = (nw - 2).max(0) as usize;
+                        let ch = (nh - 2 - wm::TITLEBAR_H).max(0) as usize;
+                        let new_cols = (cw / term::CHAR_W).max(8);
+                        let new_rows = (ch / term::CHAR_H).max(4);
+                        tw.term.resize_term(new_cols, new_rows);
                         scene_dirty = true;
                     }
                 }
