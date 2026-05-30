@@ -729,6 +729,198 @@ fn show_desktop_hit(fw: u32, fh: u32, mx: i32, my: i32) -> bool {
         && my >= fh as i32 - 28 && my < fh as i32
 }
 
+// ── Quick Settings panel (GNOME-style connections / toggles) ─────────────────
+// A frosted-glass dropdown anchored above the tray. Click the tray to open it.
+// Volume and Dark Style are wired to real state (audio syscall / wallpaper); the
+// Wi-Fi / Bluetooth / DND / Airplane / Night Light tiles hold state and are the
+// surface for the per-chip drivers as they land (bare-metal radio is a separate
+// hardware brick — see project memory). Honest, not faked.
+struct QuickSettings {
+    wifi: bool, bluetooth: bool, dark: bool, dnd: bool, airplane: bool, nightlight: bool,
+    volume: u8,
+}
+static mut QS: QuickSettings = QuickSettings {
+    wifi: true, bluetooth: false, dark: false, dnd: false, airplane: false, nightlight: false,
+    volume: 80,
+};
+static mut QS_OPEN: bool = false;
+
+const QS_W: i32 = 320;
+const QS_H: i32 = 296;
+const QS_TILE_H: i32 = 50;
+const QS_PAD: i32 = 14;
+
+const QS_LABELS: [&str; 6] = ["Wi-Fi", "Bluetooth", "Dark Style", "Do Not Disturb", "Airplane", "Night Light"];
+
+fn qs_rect(fh: u32, fw: u32) -> (i32, i32, i32, i32) {
+    let pr = PANEL_MARGIN + (fw as i32 - 2 * PANEL_MARGIN);
+    let x = pr - QS_W - 6;
+    let y = panel_top(fh) - QS_H - 10;
+    (x, y, QS_W, QS_H)
+}
+
+fn qs_tile_rect(px: i32, py: i32, idx: usize) -> (i32, i32, i32, i32) {
+    let tile_w = (QS_W - QS_PAD * 3) / 2;
+    let col = (idx % 2) as i32;
+    let row = (idx / 2) as i32;
+    let x = px + QS_PAD + col * (tile_w + QS_PAD);
+    let y = py + 50 + row * (QS_TILE_H + 12);
+    (x, y, tile_w, QS_TILE_H)
+}
+
+fn qs_slider_rect(px: i32, py: i32) -> (i32, i32, i32, i32) {
+    // below the 3 rows of tiles
+    let y = py + 50 + 3 * (QS_TILE_H + 12) + 12;
+    (px + QS_PAD + 30, y, QS_W - 2 * QS_PAD - 30, 8)
+}
+
+fn qs_tile_hit(px: i32, py: i32, cx: i32, cy: i32) -> Option<usize> {
+    for i in 0..6 {
+        let (x, y, w, h) = qs_tile_rect(px, py, i);
+        if cx >= x && cx < x + w && cy >= y && cy < y + h { return Some(i); }
+    }
+    None
+}
+
+fn qs_slider_hit(px: i32, py: i32, cx: i32, cy: i32) -> Option<u8> {
+    let (x, y, w, h) = qs_slider_rect(px, py);
+    if cx >= x - 6 && cx < x + w + 6 && cy >= y - 10 && cy < y + h + 10 {
+        let v = ((cx - x).max(0).min(w) * 100 / w) as u8;
+        return Some(v);
+    }
+    None
+}
+
+unsafe fn qs_toggle(idx: usize) {
+    match idx {
+        0 => QS.wifi = !QS.wifi,
+        1 => QS.bluetooth = !QS.bluetooth,
+        2 => QS.dark = !QS.dark,
+        3 => QS.dnd = !QS.dnd,
+        4 => QS.airplane = !QS.airplane,
+        5 => QS.nightlight = !QS.nightlight,
+        _ => {}
+    }
+}
+
+unsafe fn set_master_volume(vol: u8) {
+    core::arch::asm!(
+        "syscall",
+        in("rax") 18u64,
+        in("rdi") vol as u64,
+        out("rcx") _, out("r11") _,
+        options(nostack),
+    );
+}
+
+fn tray_hit(fw: u32, fh: u32, mx: i32, my: i32) -> bool {
+    let pr = PANEL_MARGIN + (fw as i32 - 2 * PANEL_MARGIN);
+    let ptop = panel_top(fh);
+    mx >= pr - 346 && mx < pr - 4 && my >= ptop && my < ptop + PANEL_H
+}
+
+// ── icon primitives (minimalist, drawn from shapes — no glyph font) ──────────
+fn qs_icon(fb: &mut Framebuffer, idx: usize, cx: i32, cy: i32, col: u32) {
+    match idx {
+        0 => { // Wi-Fi — four ascending signal bars
+            for b in 0..4i32 {
+                let bh = 4 + b * 4;
+                fb.fill_rect_s(cx - 9 + b * 6, cy + 8 - bh, 4, bh, col);
+            }
+        }
+        1 => { // Bluetooth — a slim diamond rune
+            for dy in -8..=8i32 {
+                let span = 8 - dy.abs();
+                if span > 0 { fb.fill_rect_s(cx - span / 2, cy + dy, span.max(1), 1, col); }
+            }
+            fb.fill_rect_s(cx, cy - 8, 1, 17, col);
+        }
+        2 => { // Dark Style — crescent moon (carve an offset disc out of a disc)
+            fb.fill_circle(cx, cy, 9, col);
+            fb.fill_circle(cx + 4, cy - 3, 8, QS_TILE_BG);
+        }
+        3 => { // Do Not Disturb — ring with a diagonal slash
+            fb.fill_circle(cx, cy, 9, col);
+            fb.fill_circle(cx, cy, 6, QS_TILE_BG);
+            for t in -8..=8i32 { fb.fill_rect_s(cx + t, cy - t, 2, 2, col); }
+        }
+        4 => { // Airplane — a simple plus-wing silhouette
+            fb.fill_rect_s(cx - 1, cy - 9, 3, 18, col);  // fuselage
+            fb.fill_rect_s(cx - 9, cy - 1, 18, 3, col);  // wings
+            fb.fill_rect_s(cx - 4, cy + 6, 9, 2, col);   // tailplane
+        }
+        5 => { // Night Light — sun-warm dot with short rays
+            fb.fill_circle(cx, cy, 5, col);
+            for (dx, dy) in [(-10,0),(10,0),(0,-10),(0,10),(-7,-7),(7,7),(-7,7),(7,-7)] {
+                fb.fill_rect_s(cx + dx, cy + dy, 2, 2, col);
+            }
+        }
+        _ => {}
+    }
+}
+
+const QS_TILE_BG: u32 = 0x1E2620;   // off — warm-stone dark
+const QS_TILE_ON: u32 = 0x2E7D4F;   // on  — spring-green
+
+fn draw_quick_settings(fb: &mut Framebuffer) {
+    let (px, py, pw, ph) = qs_rect(fb.height, fb.width);
+    // Aero shadow + frosted body
+    fb.fill_rounded_rect(px + 4, py + 7, pw, ph, 16, 0x070A08);
+    fb.fill_rounded_rect(px + 1, py + 3, pw, ph, 15, 0x0C100E);
+    fb.fill_rounded_rect_glass(px, py, pw, ph, 14, 0x222A24, 236);
+    // top light-catch
+    fb.fill_rect_s(px + 14, py + 1, pw - 28, 1, 0x3C5040);
+
+    // Title row + power status
+    fb.draw_aa(px + QS_PAD, py + 14, "Quick Settings", WHITE, crate::fb::AA_S);
+    let batt = unsafe { sys_battery_pct() };
+    let pw_lbl: &str = if batt <= 100 { "" } else { "AC" };
+    if batt <= 100 {
+        let mut bb = Strbuf::new(); bb.push_u64(batt as u64); bb.push(b'%');
+        let bs = bb.as_str();
+        let bwid = Framebuffer::aa_w(bs, crate::fb::AA_S);
+        fb.draw_aa(px + pw - QS_PAD - bwid, py + 14, bs, 0x6FE18B, crate::fb::AA_S);
+    } else {
+        let bwid = Framebuffer::aa_w(pw_lbl, crate::fb::AA_S);
+        fb.draw_aa(px + pw - QS_PAD - bwid, py + 14, pw_lbl, 0x6FE18B, crate::fb::AA_S);
+    }
+
+    // Toggle tiles
+    let states = unsafe { [QS.wifi, QS.bluetooth, QS.dark, QS.dnd, QS.airplane, QS.nightlight] };
+    for i in 0..6 {
+        let (x, y, w, h) = qs_tile_rect(px, py, i);
+        let on = states[i];
+        let bg = if on { QS_TILE_ON } else { QS_TILE_BG };
+        fb.fill_rounded_rect(x, y, w, h, 10, bg);
+        if on { fb.fill_rect_s(x + 10, y + 1, w - 20, 1, 0x8FE6B0); }
+        let icol = if on { 0xEAF6EE } else { 0x8A948C };
+        qs_icon(fb, i, x + 22, y + h / 2, icol);
+        let tcol = if on { WHITE } else { 0xB8C2BA };
+        fb.draw_aa(x + 40, y + h / 2 - 8, QS_LABELS[i], tcol, crate::fb::AA_T);
+        let scol = if on { 0x9CE9BC } else { 0x6B756D };
+        fb.draw_aa(x + 40, y + h / 2 + 4, if on { "On" } else { "Off" }, scol, crate::fb::AA_T);
+    }
+
+    // Volume slider
+    let (sx, sy, sw, _sh) = qs_slider_rect(px, py);
+    qs_icon_speaker(fb, sx - 22, sy + 4);
+    fb.fill_rounded_rect(sx, sy, sw, 6, 3, 0x141A16);
+    let v = unsafe { QS.volume } as i32;
+    let fillw = (sw * v / 100).max(0);
+    fb.fill_rounded_rect(sx, sy, fillw, 6, 3, QS_TILE_ON);
+    fb.fill_circle(sx + fillw, sy + 3, 7, 0xEAF6EE);
+    fb.fill_circle(sx + fillw, sy + 3, 5, QS_TILE_ON);
+}
+
+fn qs_icon_speaker(fb: &mut Framebuffer, cx: i32, cy: i32) {
+    fb.fill_rect_s(cx - 6, cy - 3, 3, 6, 0xB8C2BA);          // box
+    for dy in -6..=6i32 {                                    // cone
+        let span = 6 - dy.abs();
+        if span > 0 && dy.abs() <= 6 { fb.fill_rect_s(cx - 3, cy + dy, (span / 2 + 1).min(5), 1, 0xB8C2BA); }
+    }
+    fb.fill_rect_s(cx + 4, cy - 4, 1, 9, 0x6FE18B);          // wave
+}
+
 // ── Start menu ───────────────────────────────────────────────────────────────
 // Matches the HTML mockup form: user header · app list with icons+desc ·
 // games section · footer. Width 280px, items 34px tall.
@@ -1387,6 +1579,7 @@ fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, 
     if start_menu { draw_start_menu(fb); }
     if let Some((cmx, cmy)) = ctx_menu { draw_ctx_menu(fb, cmx, cmy); }
     draw_topbar(fb, up.as_str(), stats, sys_ticks());
+    if unsafe { QS_OPEN } { draw_quick_settings(fb); }
     // Dock hover tooltip (drawn last, as an overlay; the cached bg restore on the
     // next recomposite wipes it cleanly). Suppressed while a menu is open.
     if !start_menu && ctx_menu.is_none() {
@@ -1608,7 +1801,33 @@ pub extern "C" fn _start() -> ! {
         }
 
         if left_edge {
-            if let Some((cmx, cmy)) = ctx_menu.take() {
+            let qs_open = unsafe { QS_OPEN };
+            if tray_hit(w as u32, h as u32, cx, cy) {
+                // Toggle the quick-settings panel from the tray.
+                unsafe { QS_OPEN = !qs_open; }
+                ctx_menu = None; start_menu_open = false;
+                scene_dirty = true;
+            } else if qs_open {
+                let (px, py, pw0, ph0) = qs_rect(h as u32, w as u32);
+                if cx >= px && cx < px + pw0 && cy >= py && cy < py + ph0 {
+                    if let Some(t) = qs_tile_hit(px, py, cx, cy) {
+                        unsafe { qs_toggle(t); }
+                        if t == 2 { // Dark Style → swap wallpaper to the dark/light variant
+                            wallpaper_variant = if unsafe { QS.dark } { 3 } else { 0 };
+                            fb.invalidate_bg();
+                        }
+                        scene_dirty = true;
+                    } else if let Some(v) = qs_slider_hit(px, py, cx, cy) {
+                        unsafe { QS.volume = v; set_master_volume(v); }
+                        scene_dirty = true;
+                    }
+                    // click on panel chrome → consume, keep panel open
+                } else {
+                    // click outside the panel just dismisses it
+                    unsafe { QS_OPEN = false; }
+                    scene_dirty = true;
+                }
+            } else if let Some((cmx, cmy)) = ctx_menu.take() {
                 if let Some(item) = ctx_menu_item_hit(cx, cy, cmx, cmy, fb.width, fb.height) {
                     match ctx_action(item) {
                         0 => { // Open Terminal
@@ -1843,6 +2062,7 @@ pub extern "C" fn _start() -> ! {
                 }
                 if start_menu_open { draw_start_menu(&mut fb); }
                 if let Some((cmx, cmy)) = ctx_menu { draw_ctx_menu(&mut fb, cmx, cmy); }
+                if unsafe { QS_OPEN } { draw_quick_settings(&mut fb); }
             }
 
             if topbar_due && !any_chrome {
