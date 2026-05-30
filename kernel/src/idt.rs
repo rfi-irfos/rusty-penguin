@@ -163,6 +163,11 @@ extern "x86-interrupt" fn irq_keyboard(_f: InterruptFrame) {
                 crate::input::push_key(0x1B, sc);
                 crate::input::push_key(b'[', 0);
                 crate::input::push_key(dir, 0);
+                if crate::linux::is_linux() {
+                    crate::linux::push_linux_key(0x1B);
+                    crate::linux::push_linux_key(b'[');
+                    crate::linux::push_linux_key(dir);
+                }
             }
             // Home (ESC [ H) and End (ESC [ F)
             0x47 => {
@@ -195,7 +200,7 @@ extern "x86-interrupt" fn irq_keyboard(_f: InterruptFrame) {
         0x9D => unsafe { CTRL_DOWN = false; },
         0x3A => unsafe { CAPS_LOCK ^= true; },
         0x0E => {
-            // Backspace: deliver 0x08 to ring-3 via both queues; ring-3 handles echo
+            // Backspace
             unsafe {
                 let next = (KBD_HEAD + 1) % KBD_BUF_SIZE;
                 if next != KBD_TAIL {
@@ -204,6 +209,7 @@ extern "x86-interrupt" fn irq_keyboard(_f: InterruptFrame) {
                 }
             }
             crate::input::push_key(0x08, 0x0E);
+            if crate::linux::is_linux() { crate::linux::push_linux_key(0x08); }
         }
         _ => {
             let shift = unsafe { SHIFT_DOWN };
@@ -228,6 +234,7 @@ extern "x86-interrupt" fn irq_keyboard(_f: InterruptFrame) {
                     }
                 }
                 crate::input::push_key(ch, sc);
+                if crate::linux::is_linux() { crate::linux::push_linux_key(ch); }
             }
         }
     }

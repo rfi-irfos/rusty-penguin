@@ -67,6 +67,24 @@ unsafe fn sys_kbd_layout(op: u64) -> u64 {
     n
 }
 
+/// sys_exec_linux (#28): kernel suspends desktop, executes a Linux ELF from
+/// the initrd by path, then restarts the desktop when that process exits.
+/// Returns only if the binary was not found — otherwise diverges in the kernel.
+fn sys_exec_linux(path: &[u8]) -> u64 {
+    let n: u64;
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            inout("rax") 28u64 => n,
+            in("rdi") path.as_ptr() as u64,
+            in("rsi") path.len() as u64,
+            out("rcx") _, out("r11") _,
+            options(nostack),
+        );
+    }
+    n
+}
+
 fn sys_meminfo() -> (u32, u32) {
     let n: u64;
     unsafe {
@@ -429,11 +447,10 @@ fn draw_scene_static_v(fb: &mut Framebuffer, variant: u8) {
                 let b = 0x18u64.saturating_sub(0x08 * t / 255);
                 (r, g, b)
             }
-            _ => { // v0: default warm stone green
-                let mut r = 0x25u64.saturating_sub(0x0A * t / 255);
-                let mut g = 0x2Du64.saturating_sub(0x0C * t / 255);
-                let b = 0x29u64.saturating_sub(0x0B * t / 255);
-                if t < 140 { let glow = (140 - t) * 10 / 140; g += glow; r += glow / 3; }
+            _ => { // v0: deep midnight blue
+                let r = 0x0Eu64.saturating_sub(0x08 * t / 255);
+                let g = 0x1Bu64.saturating_sub(0x12 * t / 255);
+                let b = 0x2Eu64.saturating_sub(0x1E * t / 255);
                 (r, g, b)
             }
         };
@@ -446,18 +463,16 @@ fn draw_scene_static_v(fb: &mut Framebuffer, variant: u8) {
     // default variant (the others stay clean tinted gradients).
     if variant == 0 {
         let wi = w as i32; let hi = h as i32;
-        fb.glow(wi * 76 / 100, hi * 22 / 100, (w as i32) * 30 / 100, 0x5F9476, 70); // sage, top-right
-        fb.glow(wi * 16 / 100, hi * 84 / 100, (w as i32) * 26 / 100, 0xB47850, 46); // warm amber, bottom-left
-        fb.glow(wi / 2,        hi / 2,        (w as i32) * 20 / 100, 0x506E5F, 40); // center sage
-        // faint cream dingir stars in the dimmer regions (away from the glows),
-        // a hair lighter than the wall so they read as soft highlights, not dirt.
+        fb.glow(wi * 76 / 100, hi * 22 / 100, (w as i32) * 30 / 100, 0x1A4A6B, 60); // cool blue, top-right
+        fb.glow(wi * 16 / 100, hi * 84 / 100, (w as i32) * 26 / 100, 0x1A3D5E, 40); // deep blue, bottom-left
+        fb.glow(wi / 2,        hi / 2,        (w as i32) * 20 / 100, 0x152A45, 35); // center navy
         let stars: [(i32, i32, i32); 4] = [
             (wi * 11 / 100, hi * 30 / 100, 11),
             (wi * 90 / 100, hi * 82 / 100, 14),
             (wi * 33 / 100, hi * 70 / 100,  9),
             (wi * 60 / 100, hi * 12 / 100,  8),
         ];
-        for (sx, sy, sr) in stars { fb.draw_star8(sx, sy, sr, 0x3B4239); }
+        for (sx, sy, sr) in stars { fb.draw_star8(sx, sy, sr, 0x1E2E45); }
     }
 
     // Centered hero — floating text on the wallpaper, NO card box (matches the
@@ -1557,6 +1572,12 @@ fn open_snake(w: i32, h: i32, n: usize) -> Option<TermWin> {
 }
 
 fn open_doom(w: i32, h: i32, n: usize) -> Option<TermWin> {
+    // Try real fbDOOM (Linux binary in initrd).  sys_exec_linux() hands control
+    // to the kernel which IRETs into fbDOOM; if that succeeds this line is never
+    // reached.  It only returns (u64::MAX) when fbdoom is absent from the initrd,
+    // in which case fall back to the pure-Rust raycaster.
+    sys_exec_linux(b"bin/fbdoom");
+    // --- fallback: pure-Rust raycaster ---
     match term::Terminal::spawn() {
         Ok(t) => {
             let game = alloc::boxed::Box::new(app::Doom::new(sys_ticks()));
@@ -2104,12 +2125,13 @@ pub extern "C" fn _start() -> ! {
             if was_active { scene_dirty = true; }
         }
 
-        // Pump per-tick updates into animated apps (e.g. Snake). Only the
-        // non-minimized windows advance; an app that actually changed state
-        // marks its window dirty so the recomposite path below redraws it.
-        // Sparse: apps that don't animate return false and cost nothing.
+        // Pump per-tick updates into animated apps (e.g. Snake). Throttled to
+        // ~33 Hz (every 3rd 100 Hz tick) so a running game does not force a
+        // full recomposite + 8 MB present at 100 Hz — 3x reduction in worst-case
+        // MMIO bandwidth without any perceptible change in smoothness.
+        let game_tick = now_ticks % 3 == 0;
         for tw in wins.iter_mut() {
-            if tw.win.minimized { continue; }
+            if tw.win.minimized || !game_tick { continue; }
             if let Some(app) = &mut tw.app {
                 if app.tick(now_ticks) { tw.win_dirty = true; }
             }
@@ -2182,6 +2204,13 @@ pub extern "C" fn _start() -> ! {
             match drag_band {
                 Some((y0, y1)) if !any_term && !topbar_due =>
                     fb.present_rows(y0.max(0) as u32, y1.max(0) as u32),
+                _ if !any_chrome && !any_term && !topbar_due => {
+                    // Cursor-only frame: flush just the band the cursor swept through.
+                    // Avoids the full 8 MB MMIO write (~40x cheaper) on every mouse tick.
+                    let y_top = (prev_cy.min(cy) as u32).saturating_sub(2);
+                    let y_bot = ((prev_cy.max(cy) as u32) + CURSOR_H + 4).min(fb.height);
+                    fb.present_rows(y_top, y_bot);
+                }
                 _ => fb.present(),
             }
             frames_since_stat = frames_since_stat.saturating_add(1);

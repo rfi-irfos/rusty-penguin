@@ -2,7 +2,7 @@
 
 [![Language: Rust](https://img.shields.io/badge/Language-Rust-ce422b?logo=rust)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green)](LICENSE)
-[![Version: 2.2.0](https://img.shields.io/badge/Version-2.2.0-blue)](https://github.com/rfi-irfos/rusty-penguin)
+[![Version: 2.3.0](https://img.shields.io/badge/Version-2.3.0-blue)](https://github.com/rfi-irfos/rusty-penguin)
 [![Platform: x86_64](https://img.shields.io/badge/Platform-x86__64-333)](https://en.wikipedia.org/wiki/X86-64)
 [![Kernel: Pure Rust](https://img.shields.io/badge/Kernel-Pure%20Rust%2C%20no%20libc-purple)](https://github.com/rfi-irfos/rusty-penguin)
 [![Status: Active Development](https://img.shields.io/badge/Status-Active%20Development-brightgreen)](https://github.com/rfi-irfos/rusty-penguin/pulse)
@@ -149,6 +149,35 @@ velocity equals completion.
 
 ## Boot it
 
+### Zero-to-QEMU in one line
+
+Paste this into a fresh Linux or macOS terminal. It installs the Rust toolchain
+and all required tools, builds the ISO, and launches it in QEMU automatically:
+
+```bash
+curl -sSf https://raw.githubusercontent.com/rfi-irfos/rusty-penguin/main/install-dev.sh | bash
+```
+
+What it does: installs `rustup` (nightly + required targets), `grub-mkrescue`/
+`xorriso`, and `qemu-system-x86_64` via your system package manager, clones the
+repo, runs `bash iso/build.sh`, then launches `bash launch.sh`. Total time on a
+fast connection: ~3 minutes.
+
+### Manual setup (if you prefer)
+```bash
+# 1. Rust nightly + bare-metal targets
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain nightly
+source ~/.cargo/env
+rustup component add rust-src --toolchain nightly
+
+# 2. QEMU + ISO tools (Ubuntu/Debian)
+sudo apt-get install -y qemu-system-x86 grub-pc-bin grub-efi-amd64-bin xorriso
+
+# 3. Build + launch
+git clone https://github.com/rfi-irfos/rusty-penguin && cd rusty-penguin
+bash iso/build.sh && bash launch.sh
+```
+
 ### On a real laptop (recommended path for daily driving)
 ```bash
 # Flash to USB (replace /dev/sdX with your USB drive)
@@ -179,14 +208,14 @@ kernel. For a full work week (browser, persistence, Git), use the
 
 ### It runs DOOM
 
-A separate GRUB entry, **`Rusty Penguin -- DOOM (demoable)`**, boots straight
-into id Software's original 1993 shareware DOOM (E1M1) on the bare framebuffer
-via fbDOOM — no X, no Wayland, no SDL:
+Click the **Doom** icon in the dock. The kernel suspends the desktop, hands the
+raw framebuffer to id Software's 1993 shareware DOOM (E1M1) via fbDOOM, and
+restarts the desktop when you quit. No X, no Wayland, no SDL:
 
 ![DOOM running on Rusty Penguin](docs/doom-on-rusty-penguin.png)
 
-(The desktop's in-menu "Doom" is a small pure-Rust raycaster; hosting the real
-fbDOOM binary *inside* a desktop window is gated on the Linux ABI layer above.)
+A separate GRUB entry, **`Rusty Penguin -- DOOM (demoable)`**, boots straight
+into DOOM without the desktop at all (for maximum performance demo).
 
 ---
 

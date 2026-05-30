@@ -58,6 +58,49 @@ const MMAP_CAP:  u64 = 0x1000_0000; // 256 MiB
 static mut BRK_CUR:  u64 = BRK_BASE;
 static mut MMAP_CUR: u64 = MMAP_BASE;
 
+// ── Linux stdin key ring (populated by the PS/2 IRQ; served by read(0,…)) ────
+const LKEYS_SZ: usize = 64;
+static mut LKEYS:   [u8; LKEYS_SZ] = [0u8; LKEYS_SZ];
+static mut LKEYS_H: usize = 0;  // write index
+static mut LKEYS_T: usize = 0;  // read index
+
+/// Push an ASCII byte into the Linux-process stdin buffer (called from IRQ).
+pub fn push_linux_key(b: u8) {
+    if b == 0 { return; }
+    unsafe {
+        let next = (LKEYS_H + 1) % LKEYS_SZ;
+        if next != LKEYS_T { LKEYS[LKEYS_H] = b; LKEYS_H = next; }
+    }
+}
+
+fn pop_linux_key() -> Option<u8> {
+    unsafe {
+        if LKEYS_H == LKEYS_T { return None; }
+        let b = LKEYS[LKEYS_T];
+        LKEYS_T = (LKEYS_T + 1) % LKEYS_SZ;
+        Some(b)
+    }
+}
+
+/// When true, exit_group restarts desktop-metal instead of halting.
+pub static mut RESTART_DESKTOP: bool = false;
+
+/// Reset all per-process Linux ABI state (called before restarting desktop).
+pub fn reset() {
+    unsafe {
+        LINUX_ABI = false;
+        BRK_CUR   = BRK_BASE;
+        MMAP_CUR  = MMAP_BASE;
+        LKEYS_H   = 0;
+        LKEYS_T   = 0;
+        RESTART_DESKTOP = false;
+        for fd in FDS.iter_mut() { fd.used = false; }
+    }
+}
+
+/// Virtual fd sentinel for /dev/fb0 (not a real FDS slot — handled specially).
+const DEV_FB_FD: u64 = 200;
+
 const PAGE: u64 = 4096;
 fn page_up(n: u64) -> u64 { (n + PAGE - 1) & !(PAGE - 1) }
 
@@ -95,6 +138,8 @@ unsafe fn cstr(ptr: u64) -> &'static [u8] {
 /// Open a ramfs file by path → fd, or negative errno.
 fn open_path(path: &[u8]) -> u64 {
     let p = if path.starts_with(b"/") { &path[1..] } else { path };
+    // Special device nodes
+    if p == b"dev/fb0" || p == b"dev/tty" || p == b"dev/tty0" { return DEV_FB_FD; }
     if TRACE {
         serial::write_str("  [open] ");
         for &b in path { serial::write_byte(b); }
@@ -168,7 +213,7 @@ pub fn syscall(nr: u64, a1: u64, a2: u64, a3: u64) -> u64 {
         dbg_hex(" a3=", a3); dbg_hex(" a4=", a4); serial::write_byte(b'\n');
     }
     let ret: u64 = match nr {
-        // read(fd, buf, len) — ramfs-backed files; stdin → EOF.
+        // read(fd, buf, len) — ramfs files or stdin from the Linux key ring.
         0 => unsafe {
             if let Some(i) = fd_slot(a1) {
                 let avail = FDS[i].size.saturating_sub(FDS[i].off);
@@ -178,6 +223,19 @@ pub fn syscall(nr: u64, a1: u64, a2: u64, a3: u64) -> u64 {
                     FDS[i].off += n;
                 }
                 n as u64
+            } else if a1 <= 2 {
+                // stdin (fd=0): pop from Linux key ring; stdout/stderr reads→ 0.
+                if a1 != 0 { return 0; }
+                let buf = a2 as *mut u8;
+                let cap = (a3 as usize).min(256);
+                let mut n = 0usize;
+                while n < cap {
+                    match pop_linux_key() {
+                        Some(b) => { *buf.add(n) = b; n += 1; }
+                        None => break,
+                    }
+                }
+                if n == 0 { errno(-11) } else { n as u64 }  // EAGAIN if no keys
             } else { 0 }
         }
         // openat(dirfd, path, flags, mode) / open(path, flags, mode).
@@ -269,6 +327,11 @@ pub fn syscall(nr: u64, a1: u64, a2: u64, a3: u64) -> u64 {
         // a real fd is given (a5=fd, a6=offset) — needed for dynamic linking,
         // where ld.so mmaps segments of the interpreter and shared libraries.
         9 => unsafe {
+            // /dev/fb0 mmap: return physical framebuffer address directly.
+            // The FB is identity-mapped by enter() via map_mmio_range, so
+            // virt == phys and ring-3 can write pixels straight to hardware.
+            if a5 == DEV_FB_FD { return crate::fb::base() as u64; }
+
             let len = page_up(a2);
             let fixed = (a4 & 0x10) != 0;                       // MAP_FIXED
             let anon  = (a4 & 0x20) != 0 || a5 == u64::MAX;     // MAP_ANONYMOUS | fd==-1
@@ -348,8 +411,58 @@ pub fn syscall(nr: u64, a1: u64, a2: u64, a3: u64) -> u64 {
         }
         // mprotect / munmap — no-op (bump arena never frees).
         10 | 11 => 0,
-        // ioctl — pretend success (e.g. isatty/TCGETS probes).
-        16 => 0,
+        // ioctl — handle /dev/fb0 queries; pretend success for everything else.
+        16 => {
+            if a1 == DEV_FB_FD {
+                const FBIOGET_VSCREENINFO: u64 = 0x4600;
+                const FBIOGET_FSCREENINFO: u64 = 0x4602;
+                match a2 {
+                    FBIOGET_VSCREENINFO => unsafe {
+                        // struct fb_var_screeninfo (160 bytes, kernel abi)
+                        let p = a3 as *mut u8;
+                        if p.is_null() { return 0; }
+                        core::ptr::write_bytes(p, 0, 160);
+                        let fw = crate::fb::width();
+                        let fh = crate::fb::height();
+                        (p as *mut u32).write_unaligned(fw);         // xres
+                        (p.add(4)  as *mut u32).write_unaligned(fh); // yres
+                        (p.add(8)  as *mut u32).write_unaligned(fw); // xres_virtual
+                        (p.add(12) as *mut u32).write_unaligned(fh); // yres_virtual
+                        // xoffset=0, yoffset=0 already zero
+                        (p.add(24) as *mut u32).write_unaligned(32); // bits_per_pixel
+                        // red.offset=16 .length=8  [bytes 32–43]
+                        (p.add(32) as *mut u32).write_unaligned(16);
+                        (p.add(36) as *mut u32).write_unaligned(8);
+                        // green.offset=8 .length=8  [bytes 44–55]
+                        (p.add(44) as *mut u32).write_unaligned(8);
+                        (p.add(48) as *mut u32).write_unaligned(8);
+                        // blue.offset=0 .length=8  [bytes 56–67]
+                        (p.add(56) as *mut u32).write_unaligned(0);
+                        (p.add(60) as *mut u32).write_unaligned(8);
+                        0
+                    }
+                    FBIOGET_FSCREENINFO => unsafe {
+                        // struct fb_fix_screeninfo (68 bytes)
+                        let p = a3 as *mut u8;
+                        if p.is_null() { return 0; }
+                        core::ptr::write_bytes(p, 0, 68);
+                        let id = b"VESA VGA\0\0\0\0\0\0\0\0";
+                        core::ptr::copy_nonoverlapping(id.as_ptr(), p, 16);
+                        // smem_start at offset 16 (unsigned long = u64 on x86-64)
+                        (p.add(16) as *mut u64).write_unaligned(crate::fb::base() as u64);
+                        // smem_len at offset 24
+                        let fb_len = crate::fb::pitch() as u64 * crate::fb::height() as u64;
+                        (p.add(24) as *mut u32).write_unaligned(fb_len as u32);
+                        // visual=FB_VISUAL_TRUECOLOR(2) at offset 36
+                        (p.add(36) as *mut u32).write_unaligned(2);
+                        // line_length at offset 48
+                        (p.add(48) as *mut u32).write_unaligned(crate::fb::pitch());
+                        0
+                    }
+                    _ => 0,
+                }
+            } else { 0 }
+        }
         // arch_prctl(code, addr): set the FS base for TLS.
         158 => unsafe {
             if a1 == ARCH_SET_FS { wrmsr(IA32_FS_BASE, a2); 0 } else { errno(ENOSYS) }
@@ -486,14 +599,19 @@ pub fn syscall(nr: u64, a1: u64, a2: u64, a3: u64) -> u64 {
         // waitpid / wait4 → ECHILD (no children).
         61 | 247 => errno(-10),
 
-        // exit / exit_group → end the process.
+        // exit / exit_group → restart desktop-metal when launched via sys_exec_linux,
+        // otherwise halt (e.g. the old `linuxtest` boot mode).
         60 | 231 => {
-            vga::write_str("\n  [linux] process exited, code=", vga::Color::Green);
-            vga::write_i32(a1 as i32);
-            vga::write_byte(b'\n', vga::Color::White);
             serial::write_str("\n  [linux] exit code=");
             serial::write_byte(b'0' + ((a1 % 10) as u8));
             serial::write_byte(b'\n');
+            if unsafe { RESTART_DESKTOP } {
+                reset();
+                crate::restart_desktop();
+            }
+            vga::write_str("\n  [linux] process exited, code=", vga::Color::Green);
+            vga::write_i32(a1 as i32);
+            vga::write_byte(b'\n', vga::Color::White);
             loop { unsafe { core::arch::asm!("hlt", options(nostack)); } }
         }
         // Unimplemented — report it on serial so the next brick knows what's missing.
@@ -523,6 +641,15 @@ pub fn syscall(nr: u64, a1: u64, a2: u64, a3: u64) -> u64 {
 pub fn enter(elf: &[u8]) -> ! {
     // Linux brk/mmap arenas live up to 256 MiB — make sure they're mapped.
     crate::vmm::extend_identity_map(256);
+
+    // Map the physical framebuffer so /dev/fb0 mmap works. The FB lives above
+    // the identity-mapped range (e.g. 0xFD000000 in QEMU), so we need 4 KiB
+    // page mappings covering it before ring-3 tries to write pixels.
+    let fb_base = crate::fb::base() as u64;
+    if fb_base != 0 {
+        let fb_size = crate::fb::pitch() as u64 * crate::fb::height() as u64 + 4096;
+        crate::vmm::map_mmio_range(fb_base, fb_size);
+    }
 
     // Dynamic linker base (ET_DYN). 8 MiB: above the program (~4 MiB), below the
     // relocated initrd (40 MiB). The interpreter is small (~0.25 MiB).

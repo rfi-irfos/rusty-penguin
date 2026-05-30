@@ -419,6 +419,34 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
     }
 }
 
+/// Re-enter the desktop-metal ring-3 process after a Linux binary exits.
+/// Called by linux::syscall exit_group when RESTART_DESKTOP is set.
+pub fn restart_desktop() -> ! {
+    let elf = crate::ramfs::find(b"bin/desktop")
+        .expect("bin/desktop not in initrd");
+    let entry = crate::elf::load(elf).expect("desktop ELF reload failed");
+    if crate::fb::is_live() {
+        crate::fb::fill(0, 0, crate::fb::width(), crate::fb::height(), 0x000000);
+    }
+    unsafe {
+        let user_rsp: u64 = crate::vmm::USER_STACK_TOP - 8;
+        core::arch::asm!(
+            "push 0x1B",
+            "push r9",
+            "pushfq",
+            "pop rax",
+            "or  rax, 0x202",
+            "push rax",
+            "push 0x23",
+            "push r8",
+            "iretq",
+            in("r8") entry,
+            in("r9") user_rsp,
+            options(noreturn),
+        );
+    }
+}
+
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     // VGA — on-screen banner for direct console viewing.

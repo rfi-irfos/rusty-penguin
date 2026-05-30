@@ -519,6 +519,22 @@ pub extern "C" fn syscall_handler(nr: u64, arg1: u64, arg2: u64, arg3: u64) -> u
                 None    => u64::MAX,
             }
         }
+        28 => {
+            // sys_exec_linux(path_ptr, path_len)
+            // Suspend the native desktop and run a Linux ELF from the initrd.
+            // Sets RESTART_DESKTOP so exit_group restarts the desktop when done.
+            // Never returns on success (kernel IRETs into the Linux binary).
+            let path_ptr = arg1 as *const u8;
+            let path_len = (arg2 as usize).min(256);
+            if path_ptr.is_null() || path_len == 0 { return u64::MAX; }
+            let path = unsafe { core::slice::from_raw_parts(path_ptr, path_len) };
+            let p = if path.starts_with(b"/") { &path[1..] } else { path };
+            if let Some(elf) = crate::ramfs::find(p) {
+                unsafe { crate::linux::RESTART_DESKTOP = true; }
+                crate::linux::enter(elf);
+            }
+            u64::MAX // only reached if binary not found
+        }
         39 => {
             // sys_getpid → current PID
             crate::sched::current_pid()
