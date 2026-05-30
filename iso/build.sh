@@ -338,6 +338,25 @@ if [ -f "$DESKTOP_METAL_ELF" ]; then
     cp "$DESKTOP_METAL_ELF" "$BARE_INITRAMFS_DIR/bin/desktop"
     echo "[build]   + bin/desktop (desktop-metal)"
 fi
+# Bundle fbDOOM + shared libs so the bare-metal kernel can run real DOOM
+# from the desktop dock (Linux ABI exec path, no GRUB reboot required).
+DOOM_ASSETS="$ISO_DIR/doom-assets"
+if [ -f "$DOOM_ASSETS/fbdoom" ] && [ -f "$DOOM_ASSETS/doom1.wad" ]; then
+    cp "$DOOM_ASSETS/fbdoom"    "$BARE_INITRAMFS_DIR/bin/fbdoom"
+    cp "$DOOM_ASSETS/doom1.wad" "$BARE_INITRAMFS_DIR/doom1.wad"
+    # Dynamic linker + libc — source from the host system (same version used
+    # when fbdoom was built; known present on any standard x86-64 Linux host).
+    mkdir -p "$BARE_INITRAMFS_DIR/lib64"
+    mkdir -p "$BARE_INITRAMFS_DIR/lib/x86_64-linux-gnu"
+    for LD in /lib64/ld-linux-x86-64.so.2 /usr/lib64/ld-linux-x86-64.so.2; do
+        [ -f "$LD" ] && cp "$LD" "$BARE_INITRAMFS_DIR/lib64/ld-linux-x86-64.so.2" && break
+    done
+    for LIBC in /lib/x86_64-linux-gnu/libc.so.6 /usr/lib/x86_64-linux-gnu/libc.so.6; do
+        [ -f "$LIBC" ] && cp "$LIBC" "$BARE_INITRAMFS_DIR/lib/x86_64-linux-gnu/libc.so.6" && break
+    done
+    echo "[build]   + bin/fbdoom + doom1.wad + ld.so + libc (real DOOM, desktop-launchable)"
+fi
+
 BARE_INITRD="$ISO_DIR/initrd-bare.img"
 (cd "$BARE_INITRAMFS_DIR" && find . | cpio -o -H newc 2>/dev/null > "$BARE_INITRD")
 echo "[build] initrd-bare.img: $(du -sh "$BARE_INITRD" | cut -f1)"

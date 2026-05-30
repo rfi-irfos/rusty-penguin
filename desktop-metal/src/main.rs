@@ -158,7 +158,7 @@ const TRIT_POS:  u32 = 0x6FE18B;  // ternary +1
 const PANEL_MARGIN: i32 = 14;   // inset from screen left/right
 const PANEL_BOTTOM: i32 = 12;   // gap below the panel
 const PANEL_H:      i32 = 54;   // panel height
-const MENU_BTN_W:   i32 = 72;   // "Menu" button width
+const MENU_BTN_W:   i32 = 88;   // "Menu" button width
 const FAV_TILE:     i32 = 40;   // favourite icon tile
 const FAV_GAP:      i32 = 8;    // gap between favourites
 const PANEL_SOLID:  u32 = 0x333D38;  // dock body — warm stone, lighter than the wall so it floats
@@ -493,19 +493,17 @@ fn draw_scene_static_v(fb: &mut Framebuffer, variant: u8) {
     draw_round_border(fb, px, ptop, pw, PANEL_H, PANEL_R, PANEL_EDGE);
     fb.fill_rect_s(px + PANEL_R, ptop + 1, pw - 2 * PANEL_R, 1, 0x66726A);
 
-    // Menu button — proper bordered button, dingir + "Menu", green accent UNDER text.
+    // Menu button — clean layout: large dingir left, "Menu" right, no permanent underline.
+    // The green active-indicator underline is drawn per-frame only when start_menu_open=true.
     let (mbx, mby, mbw, _mbh) = menu_btn_rect(h);
-    // Button body: slightly raised stone, 1px border
-    fb.fill_rounded_rect(mbx, mby, mbw, 40, 10, 0x2E3834);
-    fb.fill_rounded_rect(mbx + 1, mby + 1, mbw - 2, 38, 9, 0x3A4640);
-    // Top sheen line (like Ubuntu's active panel buttons)
-    fb.fill_rect_s(mbx + 10, mby + 1, mbw - 20, 1, 0x5A6860);
-    // Dingir star (vertically centered, left side)
-    fb.draw_star8(mbx + 16, mby + 20, 9, ACCENT_CREAM);
-    // "Menu" label, vertically centered
-    fb.draw_aa(mbx + 31, mby + 13, "Menu", GREEN, crate::fb::AA_S);
-    // Green underline accent BELOW the label — Ubuntu-style active indicator
-    fb.fill_rect_s(mbx + 28, mby + 34, mbw - 36, 2, GREEN);
+    // Subtle button body (blends with dock, stands out slightly on hover/open)
+    fb.fill_rounded_rect(mbx, mby, mbw, PANEL_H - 14, 10, 0x3A4640);
+    // Dingir star: larger radius so it reads cleanly at dock size
+    let star_cy = mby + (PANEL_H - 14) / 2;
+    fb.draw_star8(mbx + 19, star_cy, 13, ACCENT_CREAM);
+    // "Menu" label: AA font, vertically centered, generous left pad
+    let label_y = star_cy - 6;
+    fb.draw_aa(mbx + 38, label_y, "Menu", 0xD8E4DC, crate::fb::AA_S);
     // separator
     fb.fill_rect_s(mbx + mbw + 7, ptop + 14, 1, PANEL_H - 28, PANEL_EDGE);
 
@@ -1619,6 +1617,18 @@ fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, 
         fb.snapshot_bg();
     }
     draw_taskbar_win_btns(fb, wins);
+    // Menu button active indicator: green underline + brightened bg when open.
+    // Drawn per-frame (not in the cached bg) so it only appears on state change.
+    if start_menu {
+        let (mbx, mby, mbw, _) = menu_btn_rect(fb.height);
+        let bh = PANEL_H - 14;
+        fb.fill_rounded_rect(mbx, mby, mbw, bh, 10, 0x4A5A50);
+        let star_cy = mby + bh / 2;
+        fb.draw_star8(mbx + 19, star_cy, 13, ACCENT_CREAM);
+        fb.draw_aa(mbx + 38, star_cy - 6, "Menu", GREEN, crate::fb::AA_S);
+        // Active indicator: solid green line at very bottom of button
+        fb.fill_rect_s(mbx + 14, mby + bh - 3, mbw - 28, 3, GREEN);
+    }
     let up = rtc_str();
     let n = wins.len();
     for (i, tw) in wins.iter_mut().enumerate() {
