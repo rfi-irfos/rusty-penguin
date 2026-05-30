@@ -151,8 +151,12 @@ recovering one alone — yet a binary alive/dead detector collapses both into
 
 **Shipped:** `moe-llm-core/src/mycelium.rs::classify_flux()` (median-relative
 bucketing → zero false positives in a balanced regime), emits a per-epoch `FLUX`
-telemetry line from `train_bible.rs`. Observational only — 2 unit tests, builds
-clean (commit 0644389, ternary-intelligence-stack).
+telemetry line from `train_bible.rs` (commit 0644389). The two-axis health is now
+also **wired into the existing self-repair** (`vestigial_experts()` →
+resurrection candidacy) behind a default-OFF `--vestigial-rescue` flag with a
+patience + recovery guard, so a genuine dormant→germinate recovery is left alone
+and only a demonstrably stalled slot is rescued. 5 unit tests; see
+`docs/VESTIGIAL_RESCUE.md`.
 
 **Honest basis:** Representational + diagnostic — ternary doesn't speed anything
 up here; it expresses a system state (routed-but-empty vs idle-reserve) that the

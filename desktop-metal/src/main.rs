@@ -1778,6 +1778,8 @@ pub extern "C" fn _start() -> ! {
                     wins.push(tw);
                     scene_dirty = true;
                 }
+            } else if k == 0x06 { // Ctrl+F — exec real fbDOOM (Linux ABI test)
+                sys_exec_linux(b"bin/fbdoom");
             } else if k == 0x04 { // Ctrl+D — open DOOM raycaster window
                 if let Some(tw) = open_doom_raycaster(w, h, wins.len()) {
                     wins.push(tw);
