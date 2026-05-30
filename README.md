@@ -122,7 +122,7 @@ velocity equals completion.
 | Linux ABI layer (static + dynamic glibc binaries) | ✅ Bricks 1–5 done |
 | **Multi-user login (SHA-256 passwords, /home/<user>)** | ✅ |
 | In-memory VFS within a session | ✅ |
-| Persistent bare-metal disk storage | ❌ planned (AHCI/ext4 driver) |
+| **Persistent bare-metal disk storage (RPFS + AHCI)** | ✅ settings/files survive reboot |
 
 ### The installed system (Linux track — the daily-driver path)
 | Component | Status |
@@ -140,7 +140,6 @@ velocity equals completion.
 - TLS certificate-chain validation (the TLS 1.3 client does the handshake +
   verifies the server Finished, but has no CA trust store or wall clock yet —
   confidentiality vs a passive attacker, not active-MITM protection)
-- Bare-metal disk persistence (AHCI/NVMe ext4 write — multi-week brick)
 - GPU acceleration (framebuffer only; software rendering)
 - WiFi on bare-metal kernel (needs per-chip driver + firmware)
 - **The real work-week path today: install to disk + rp.web mode**

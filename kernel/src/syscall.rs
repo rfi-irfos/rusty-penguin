@@ -488,6 +488,37 @@ pub extern "C" fn syscall_handler(nr: u64, arg1: u64, arg2: u64, arg3: u64) -> u
             }
             if crate::idt::layout_is_de() { 1 } else { 0 }
         }
+        25 => {
+            // sys_disk_write(name_ptr, name_len|(data_len<<16), data_ptr) → 0 on success, MAX on error
+            // Persists a named file to the RPFS on-disk filesystem via the AHCI driver.
+            let name_ptr  = arg1 as *const u8;
+            let name_len  = (arg2 & 0xFF) as usize;
+            let data_len  = ((arg2 >> 16) & 0xFFFF) as usize;
+            let data_ptr  = arg3 as *const u8;
+            if name_len == 0 || name_len > 51 || data_len > 65536 || name_ptr.is_null() || data_ptr.is_null() {
+                return u64::MAX;
+            }
+            let name = unsafe { core::slice::from_raw_parts(name_ptr, name_len) };
+            let data = unsafe { core::slice::from_raw_parts(data_ptr, data_len) };
+            if crate::diskfs::write_file(name, data) { 0 } else { u64::MAX }
+        }
+        26 => {
+            // sys_disk_read(name_ptr, name_len|(out_max<<16), out_ptr) → bytes_read or MAX on error
+            // Reads a named file from the RPFS on-disk filesystem.
+            let name_ptr  = arg1 as *const u8;
+            let name_len  = (arg2 & 0xFF) as usize;
+            let out_max   = ((arg2 >> 16) & 0xFFFF) as usize;
+            let out_ptr   = arg3 as *mut u8;
+            if name_len == 0 || name_len > 51 || out_max == 0 || name_ptr.is_null() || out_ptr.is_null() {
+                return u64::MAX;
+            }
+            let name = unsafe { core::slice::from_raw_parts(name_ptr, name_len) };
+            let out  = unsafe { core::slice::from_raw_parts_mut(out_ptr, out_max) };
+            match crate::diskfs::read_file(name, out) {
+                Some(n) => n as u64,
+                None    => u64::MAX,
+            }
+        }
         39 => {
             // sys_getpid → current PID
             crate::sched::current_pid()

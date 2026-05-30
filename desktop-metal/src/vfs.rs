@@ -1,8 +1,53 @@
-// In-memory flat filesystem. Single-threaded bare-metal — no locking needed.
+// In-memory flat filesystem with RPFS-backed persistence for .config/ paths.
 // Files are stored as raw byte Vecs. Directories are marker entries only.
+// On write: any path under .config/ is also written to the on-disk RPFS via
+// syscall 25 (sys_disk_write). On Vfs::new(): .config/ files are reloaded
+// from disk via syscall 26 (sys_disk_read) so settings survive reboots.
 
 use alloc::vec::Vec;
 use alloc::string::String;
+
+// ── Syscall 25/26: RPFS disk persistence ─────────────────────────────────────
+// name_len and data_len are packed into rsi:  low 8 bits = name_len,
+// bits 16-31 = data_len / out_max.  Mirrors the sys_http_get packing pattern.
+
+fn persist_write(name: &str, data: &[u8]) -> bool {
+    if name.is_empty() || name.len() > 51 || data.is_empty() { return false; }
+    let nb  = name.as_bytes();
+    let ret: u64;
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            inout("rax") 25u64 => ret,
+            in("rdi") nb.as_ptr() as u64,
+            in("rsi") (nb.len() as u64) | ((data.len() as u64) << 16),
+            in("rdx") data.as_ptr() as u64,
+            out("rcx") _,
+            out("r11") _,
+            options(nostack),
+        );
+    }
+    ret == 0
+}
+
+fn persist_read(name: &str, out: &mut [u8]) -> usize {
+    if name.is_empty() || name.len() > 51 || out.is_empty() { return 0; }
+    let nb  = name.as_bytes();
+    let ret: u64;
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            inout("rax") 26u64 => ret,
+            in("rdi") nb.as_ptr() as u64,
+            in("rsi") (nb.len() as u64) | ((out.len() as u64) << 16),
+            in("rdx") out.as_mut_ptr() as u64,
+            out("rcx") _,
+            out("r11") _,
+            options(nostack),
+        );
+    }
+    if ret == u64::MAX { 0 } else { ret as usize }
+}
 
 pub struct VfsEntry {
     pub name:   String,
@@ -102,6 +147,8 @@ impl Vfs {
               ai 8\n\
               echo \"\"\n\
               echo \"\x1b[1;32m=== Demo Complete ===\"\x1b[0m\n");
+        // Reload any persisted .config/ files from disk so settings survive reboots.
+        v.load_persisted();
         v
     }
 
@@ -109,7 +156,9 @@ impl Vfs {
         self.entries.iter().any(|e| e.name == name)
     }
 
-    pub fn write(&mut self, name: &str, data: &[u8]) {
+    // Write to in-memory VFS only (no disk flush). Used internally to avoid
+    // re-persisting data that was just read back from disk.
+    fn write_mem(&mut self, name: &str, data: &[u8]) {
         if let Some(e) = self.entries.iter_mut().find(|e| e.name == name && !e.is_dir) {
             e.data.clear();
             e.data.extend_from_slice(data);
@@ -119,6 +168,31 @@ impl Vfs {
                 data:   data.to_vec(),
                 is_dir: false,
             });
+        }
+    }
+
+    pub fn write(&mut self, name: &str, data: &[u8]) {
+        self.write_mem(name, data);
+        // Persist any .config/ path to the on-disk RPFS so it survives reboots.
+        if name.starts_with(".config/") {
+            persist_write(name, data);
+        }
+    }
+
+    // Load persisted .config/ files from the RPFS on-disk store into the
+    // in-memory VFS. Called once at init so Settings::load_from_disk() finds
+    // the correct data without needing to know about the disk layer.
+    fn load_persisted(&mut self) {
+        let mut buf = [0u8; 4096];
+        let n = persist_read(".config/rusty-penguin/settings.ini", &mut buf);
+        if n > 0 {
+            if !self.exists(".config") {
+                self.entries.push(VfsEntry { name: String::from(".config"), data: Vec::new(), is_dir: true });
+            }
+            if !self.exists(".config/rusty-penguin") {
+                self.entries.push(VfsEntry { name: String::from(".config/rusty-penguin"), data: Vec::new(), is_dir: true });
+            }
+            self.write_mem(".config/rusty-penguin/settings.ini", &buf[..n]);
         }
     }
 
