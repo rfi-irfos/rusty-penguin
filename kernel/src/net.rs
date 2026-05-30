@@ -536,6 +536,129 @@ fn tcp_http_get(next_mac: &[u8; 6], dst_ip: [u8; 4], dport: u16, host: &str,
     }
 }
 
+// ── Stateful TCP connection (for the TLS client) ────────────────────────────
+// The one-shot tcp_http_get above can't drive a multi-flight protocol. TcpConn
+// holds the sequence/ack state so tls.rs can send and receive records across
+// several round trips. SLIRP is lossless + in-order, so reassembly stays simple.
+
+const TCP_MSS: usize = 1460;
+
+pub struct TcpConn {
+    gw_mac: [u8; 6],
+    our_mac: [u8; 6],
+    dst_ip: [u8; 4],
+    dport: u16,
+    snd: u32,        // our next sequence number
+    rcv: u32,        // next sequence we expect from the peer
+    pending_fin: bool,
+    pub closed: bool,
+}
+
+impl TcpConn {
+    /// Open a connection to dst_ip:dport via the cached gateway. Performs the
+    /// SYN / SYN-ACK / ACK handshake. Returns None on timeout or refusal.
+    pub fn connect(dst_ip: [u8; 4], dport: u16) -> Option<Self> {
+        let gw = unsafe { if !NET_UP { return None; } GW_MAC? };
+        let nic = nic()?;
+        let our_mac = nic.mac;
+        let mut f = [0u8; 1600];
+        let mut rx = [0u8; 1600];
+        let isn: u32 = 0x00C0_FFEE;
+        let n = build_tcp(&mut f, &gw, &our_mac, &OUR_IP, &dst_ip, dport, isn, 0, TCP_SYN, &[]);
+        nic.send(&f[..n]);
+        let mut their_seq = 0u32;
+        let mut ok = false;
+        for _ in 0..15_000_000u32 {
+            if let Some(l) = nic.poll_rx(&mut rx) {
+                if let Some((seq, ackn, flags, _, _)) = parse_tcp(&rx, l) {
+                    if flags & TCP_RST != 0 { return None; }
+                    if flags & TCP_SYN != 0 && flags & TCP_ACK != 0 && ackn == isn.wrapping_add(1) {
+                        their_seq = seq; ok = true; break;
+                    }
+                }
+            }
+        }
+        if !ok { return None; }
+        let rcv = their_seq.wrapping_add(1);
+        let snd = isn.wrapping_add(1);
+        let n = build_tcp(&mut f, &gw, &our_mac, &OUR_IP, &dst_ip, dport, snd, rcv, TCP_ACK, &[]);
+        nic.send(&f[..n]);
+        Some(TcpConn { gw_mac: gw, our_mac, dst_ip, dport, snd, rcv, pending_fin: false, closed: false })
+    }
+
+    /// Send `data`, segmenting at the MSS. Returns false if the NIC is gone.
+    pub fn send(&mut self, data: &[u8]) -> bool {
+        let nic = match nic() { Some(n) => n, None => return false };
+        let mut f = [0u8; 1600];
+        let mut off = 0;
+        while off < data.len() {
+            let take = (data.len() - off).min(TCP_MSS);
+            let n = build_tcp(&mut f, &self.gw_mac, &self.our_mac, &OUR_IP, &self.dst_ip,
+                              self.dport, self.snd, self.rcv, TCP_PSH | TCP_ACK, &data[off..off+take]);
+            nic.send(&f[..n]);
+            self.snd = self.snd.wrapping_add(take as u32);
+            off += take;
+        }
+        true
+    }
+
+    /// Receive in-order bytes into `buf`. Returns Some(n>0) on data, Some(0) on
+    /// peer FIN (connection closing), or None on timeout. ACKs in-order data.
+    pub fn recv(&mut self, buf: &mut [u8]) -> Option<usize> {
+        if self.pending_fin { self.pending_fin = false; self.closed = true; return Some(0); }
+        let nic = nic()?;
+        let mut f = [0u8; 1600];
+        let mut rx = [0u8; 1600];
+        for _ in 0..20_000_000u32 {
+            if let Some(l) = nic.poll_rx(&mut rx) {
+                if let Some((seq, _ackn, flags, poff, plen)) = parse_tcp(&rx, l) {
+                    if flags & TCP_RST != 0 { self.closed = true; return Some(0); }
+                    if plen > 0 && seq == self.rcv {
+                        let take = plen.min(buf.len());
+                        buf[..take].copy_from_slice(&rx[poff..poff+take]);
+                        self.rcv = self.rcv.wrapping_add(plen as u32);
+                        // ACK the data (and note a piggybacked FIN for next call).
+                        if flags & TCP_FIN != 0 { self.rcv = self.rcv.wrapping_add(1); self.pending_fin = true; }
+                        let n = build_tcp(&mut f, &self.gw_mac, &self.our_mac, &OUR_IP, &self.dst_ip,
+                                          self.dport, self.snd, self.rcv, TCP_ACK, &[]);
+                        nic.send(&f[..n]);
+                        return Some(take);
+                    }
+                    if flags & TCP_FIN != 0 && seq == self.rcv {
+                        self.rcv = self.rcv.wrapping_add(1);
+                        let n = build_tcp(&mut f, &self.gw_mac, &self.our_mac, &OUR_IP, &self.dst_ip,
+                                          self.dport, self.snd, self.rcv, TCP_ACK, &[]);
+                        nic.send(&f[..n]);
+                        self.closed = true;
+                        return Some(0);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Close our side (FIN/ACK). Best-effort; does not wait for the peer's FIN.
+    pub fn close(&mut self) {
+        if self.closed { return; }
+        if let Some(nic) = nic() {
+            let mut f = [0u8; 1600];
+            let n = build_tcp(&mut f, &self.gw_mac, &self.our_mac, &OUR_IP, &self.dst_ip,
+                              self.dport, self.snd, self.rcv, TCP_FIN | TCP_ACK, &[]);
+            nic.send(&f[..n]);
+            self.snd = self.snd.wrapping_add(1);
+        }
+        self.closed = true;
+    }
+}
+
+/// Resolve a hostname to IPv4 using the cached DNS server MAC. Public so the
+/// TLS path can resolve https hosts the same way http_get does.
+pub fn resolve_host(host: &str) -> Option<[u8; 4]> {
+    let dns = unsafe { if !NET_UP { return None; } DNS_MAC? };
+    dns_resolve(&dns, host)
+}
+
 // ── UDP transport + DNS ─────────────────────────────────────────────────────
 // Brick 5: resolve a hostname to an IPv4 address over UDP/53. SLIRP runs a DNS
 // proxy at 10.0.2.3 that forwards to the host's resolver, so a real-domain
@@ -694,19 +817,37 @@ static mut NET_UP:  bool            = false;
 /// writing the raw response (headers+body, truncated) into `out`. Returns the
 /// number of bytes written, or `None` if the network is down or the fetch fails.
 /// Backs the `sys_http_get` syscall (brick 6 — the OS lets programs hit the web).
-pub fn http_get(host: &str, out: &mut [u8]) -> Option<usize> {
+pub fn http_get(target: &str, out: &mut [u8]) -> Option<usize> {
     let (gw, dns) = unsafe {
         if !NET_UP { return None; }
         (GW_MAC?, DNS_MAC?)
     };
+    // Parse an optional scheme. https:// goes straight to the TLS client.
+    let (is_https, rest) = if starts_with_ci(target.as_bytes(), b"https://") {
+        (true, &target[8..])
+    } else if starts_with_ci(target.as_bytes(), b"http://") {
+        (false, &target[7..])
+    } else {
+        (false, target)
+    };
+    // Split host / path on the first '/'.
+    let (in_host, in_path) = match rest.find('/') {
+        Some(i) => (&rest[..i], &rest[i..]),
+        None => (rest, "/"),
+    };
+    if is_https {
+        return crate::tls::https_get(in_host, in_path, out);
+    }
     // Current target host + path; follow up to MAX_REDIR plain-HTTP 3xx hops.
     let mut hostbuf = [0u8; 128];
     let mut pathbuf = [0u8; 256];
-    let hl = host.len().min(hostbuf.len());
-    hostbuf[..hl].copy_from_slice(&host.as_bytes()[..hl]);
+    let hl = in_host.len().min(hostbuf.len());
+    hostbuf[..hl].copy_from_slice(&in_host.as_bytes()[..hl]);
     let mut host_len = hl;
-    pathbuf[0] = b'/';
-    let mut path_len = 1usize;
+    let pl0 = in_path.len().min(pathbuf.len());
+    pathbuf[..pl0].copy_from_slice(&in_path.as_bytes()[..pl0]);
+    let mut path_len = pl0.max(1);
+    if pl0 == 0 { pathbuf[0] = b'/'; }
 
     const MAX_REDIR: usize = 5;
     for hop in 0..=MAX_REDIR {
@@ -723,8 +864,15 @@ pub fn http_get(host: &str, out: &mut [u8]) -> Option<usize> {
                 let mut nh = [0u8; 128];
                 let mut np = [0u8; 256];
                 match parse_location(resp, &mut nh, &mut np) {
-                    Some((true /* https */, _, _)) => {
-                        return Some(write_https_notice(cur_host, out));
+                    Some((true /* https */, nhl, npl)) => {
+                        // Redirect upgraded us to TLS — hand off to the https client.
+                        let nh_host = if nhl == 0 { cur_host } else {
+                            core::str::from_utf8(&nh[..nhl]).unwrap_or(cur_host)
+                        };
+                        let npl = npl.max(1);
+                        let nh_path = core::str::from_utf8(&np[..npl]).unwrap_or("/");
+                        crate::serial::write_str("  [net] redirect -> https, switching to TLS\n");
+                        return crate::tls::https_get(nh_host, nh_path, out);
                     }
                     Some((false, nhl, npl)) => {
                         hostbuf[..nhl].copy_from_slice(&nh[..nhl]);
@@ -826,24 +974,6 @@ fn starts_with_ci(hay: &[u8], needle: &[u8]) -> bool {
     true
 }
 
-/// When a site redirects to https:// and we have no TLS on this path, write a
-/// short, honest HTML-ish notice into `out` so the browser shows something
-/// readable instead of a raw "301 Moved" body.
-fn write_https_notice(host: &str, out: &mut [u8]) -> usize {
-    let mut w = 0usize;
-    for part in [
-        b"HTTP/1.0 200 OK\r\nContent-Type: text/html\r\n\r\n".as_slice(),
-        b"<h1>HTTPS required</h1><p>".as_slice(),
-        host.as_bytes(),
-        b" redirects to https://. Secure TLS browsing is handled by the dedicated TLS path.</p>".as_slice(),
-    ] {
-        let take = part.len().min(out.len() - w);
-        out[w..w + take].copy_from_slice(&part[..take]);
-        w += take;
-        if w >= out.len() { break; }
-    }
-    w
-}
 
 /// Bring up the NIC, ARP the gateway, then ping it. Ternary result:
 /// Pos = ping round-trip OK, Zero = NIC up but ARP/ping failed, Neg = no NIC.
@@ -883,6 +1013,21 @@ pub fn init() -> ternary_core::Trit {
             crate::serial::write_str("  [net] http_get(\"example.com\") -> ");
             log_dec(n as u32);
             crate::serial::write_str(" bytes (userspace fetch path OK)\n");
+        }
+        // Brick 7 proof: real TLS 1.3 handshake + HTTPS GET against the live web.
+        let mut tlsbuf = [0u8; 2048];
+        if let Some(n) = crate::tls::https_get("example.com", "/", &mut tlsbuf) {
+            crate::serial::write_str("  [net] https_get(\"example.com\") -> ");
+            log_dec(n as u32);
+            crate::serial::write_str(" bytes decrypted (TLS 1.3 path OK)\n");
+            // Log the HTTP status line from inside the encrypted channel.
+            let mut end = 0;
+            while end + 1 < n && !(tlsbuf[end] == b'\r' && tlsbuf[end+1] == b'\n') { end += 1; }
+            crate::serial::write_str("  [net] <- ");
+            crate::serial::write_str(core::str::from_utf8(&tlsbuf[..end]).unwrap_or("?"));
+            crate::serial::write_str("\n");
+        } else {
+            crate::serial::write_str("  [net] https_get(\"example.com\") failed\n");
         }
     }
     // Local loopback proof: TCP + HTTP from the host via SLIRP (10.0.2.2:8088).

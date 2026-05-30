@@ -1462,16 +1462,14 @@ impl Browser {
             self.dirty = true;
             return;
         }
-        // Strip leading http:// if present.
-        let host = if url.starts_with(b"http://") { &url[7..] } else { url };
-        // Strip trailing path (keep only the host part for the syscall).
-        let host = if let Some(p) = host.iter().position(|&b| b == b'/') { &host[..p] } else { host };
-        if host.is_empty() { return; }
+        // Pass the full URL (scheme + host + path) to the kernel, which parses
+        // http:// vs https:// and routes to the TCP or TLS path accordingly.
+        if url.is_empty() { return; }
         // Fetch.
         self.mode = BrMode::Loading;
         self.dirty = true;
         let mut buf = alloc::vec![0u8; FETCH_BUF];
-        let n = unsafe { sys_http_get_raw(host, &mut buf) };
+        let n = unsafe { sys_http_get_raw(url, &mut buf) };
         if n == 0 {
             self.mode = BrMode::Err;
             self.dirty = true;

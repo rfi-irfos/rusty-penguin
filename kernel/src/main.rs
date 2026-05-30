@@ -32,6 +32,8 @@ mod e1000;
 mod r8169;
 mod net;
 mod usb;
+mod crypto;
+mod tls;
 
 use ternary_core::{Trit, Tryte};
 use mathematics::{mul_tryte, consensus, scale};
@@ -282,6 +284,13 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
         Trit::Pos  => vga::write_str("  [net: DHCP lease OK]\n", vga::Color::Green),
         Trit::Zero => vga::write_str("  [net: NIC up, no lease]\n", vga::Color::Amber),
         Trit::Neg  => vga::write_str("  [net: no NIC]\n", vga::Color::Red),
+    }
+
+    // TLS crypto self-test (SHA-256, X25519, ChaCha20-Poly1305, HKDF) vs RFC vectors.
+    if crypto::selftest() {
+        vga::write_str("  [crypto: TLS primitives OK]\n", vga::Color::Green);
+    } else {
+        vga::write_str("  [crypto: SELF-TEST FAILED]\n", vga::Color::Red);
     }
 
     // Ternary math demo
