@@ -109,52 +109,70 @@ velocity equals completion.
 ### The OS (bare-metal pure-Rust kernel — the product)
 | Component | Status |
 |---|---|
-| Boot → long mode, memory mgmt, interrupts, syscalls, ring-3 | ✅ Working |
-| Framebuffer 1920×1080, PS/2 keyboard + mouse | ✅ Working |
-| Intel HDA audio (440 Hz tone verified) | ✅ Working |
-| Window manager, floating dock, start menu, arrow cursor | ✅ Working |
-| Ternary-CSS engine (sparse node invalidation, flex layout, frosted panels) | ✅ Working |
-| Sparse dirty-rect compositor (only the changed band hits VRAM) | ✅ Working |
-| Apps: terminal, files, editor, calculator, monitor, settings, TIS console | ✅ Working |
-| Games: Snake, Minesweeper, pure-Rust raycaster | ✅ Working |
-| In-memory VFS + settings persistence | ✅ Working |
-| Linux ABI layer (static + dynamic glibc binaries) | 🔄 Bricks 1–5 done |
-| Persistent disk storage on bare-metal | ❌ Planned |
-| Networking on bare-metal (NIC driver + TCP/IP) | ❌ Planned |
-| Real web browser (rides the Linux ABI layer) | ❌ Long horizon |
-| Audio mixing / multi-user login | ❌ Planned |
+| Boot → long mode, memory mgmt, interrupts, syscalls, ring-3 | ✅ |
+| Framebuffer 1920×1080, PS/2 keyboard + mouse | ✅ |
+| **USB xHCI HID — keyboard + mouse on modern laptops** | ✅ QEMU verified |
+| Intel HDA audio + Sound mixer app | ✅ |
+| Window manager, floating dock, start menu, arrow cursor | ✅ |
+| Apps: terminal, files, editor, calculator, monitor, settings, TIS console | ✅ |
+| **NIC drivers: RTL8139, Intel e1000/i219, Realtek r8169** | ✅ ~95% laptop coverage |
+| **TCP/IP stack: ARP/ICMP/UDP/DHCP/DNS/TCP/HTTP** | ✅ fetches real internet |
+| **Live web browser — type host → real page** | ✅ google.com default |
+| `fetch`, `wget` terminal commands | ✅ |
+| Linux ABI layer (static + dynamic glibc binaries) | ✅ Bricks 1–5 done |
+| **Multi-user login (SHA-256 passwords, /home/<user>)** | ✅ |
+| In-memory VFS within a session | ✅ |
+| Persistent bare-metal disk storage | ❌ planned (AHCI/ext4 driver) |
 
-### Daily-driver gaps to close before "replace Ubuntu"
-Installer-to-disk, persistence, networking, a browser, audio and a Wayland-class
-compositor on the bare-metal kernel are the honest remaining work. The
-[`docs/`](docs/) folder tracks the roadmap (`LINUX_ABI.md`, `BROWSER_PLAN.md`).
+### The installed system (Linux track — the daily-driver path)
+| Component | Status |
+|---|---|
+| Install to disk (`rp-install /dev/nvme0n1`) | ✅ UEFI/GPT |
+| Standalone boot from disk (no ISO) | ✅ |
+| Persistent `/home` (ext4) | ✅ survives reboots |
+| Package manager (`rpm install <url>`) | ✅ with SHA-256 + ed25519 signing |
+| **WiFi: wpa_supplicant + iw bundled** | ✅ auto-assoc on boot |
+| **wifi-setup command** (console: `wifi-setup <SSID> <pass>`) | ✅ |
+| Chrome / Firefox on X11 | ✅ |
+| Recovery console | ✅ |
+
+### Remaining gaps for "replace Ubuntu" daily driving
+- Bare-metal disk persistence (AHCI/NVMe ext4 write — multi-week brick)
+- GPU acceleration (framebuffer only; software rendering)
+- WiFi on bare-metal kernel (needs per-chip driver + firmware)
+- **The real work-week path today: install to disk + rp.web mode**
 
 ---
 
 ## Boot it
 
-> **UEFI recommended.** The framebuffer comes from the EFI GOP. In QEMU, boot
-> with OVMF.
-
+### On a real laptop (recommended path for daily driving)
 ```bash
-# Build the ISO
-bash iso/build.sh
+# Flash to USB (replace /dev/sdX with your USB drive)
+sudo dd if=rusty-penguin.iso of=/dev/sdX bs=4M status=progress && sync
 
-# Run in QEMU (UEFI)
-cp /usr/share/OVMF/OVMF_VARS_4M.fd /tmp/ovmf_vars.fd
-qemu-system-x86_64 \
-  -drive if=pflash,format=raw,unit=0,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \
-  -drive if=pflash,format=raw,unit=1,file=/tmp/ovmf_vars.fd \
-  -machine q35 -cdrom rusty-penguin.iso -m 512M \
-  -device intel-hda -device hda-duplex \
-  -display sdl
+# Boot from USB → GRUB menu:
+#   "Rusty Penguin (bare metal)"  — pure-Rust kernel + desktop
+#   "Rusty Penguin -- Web (X11)"  — Linux kernel + Chrome/Firefox
+#
+# First time: pick "Console / Install to disk", then:
+#   rp-install /dev/nvme0n1       (or your disk)
+#   wifi-setup MyNetwork MyPass   (if WiFi only)
+```
 
-# Or just:
+### In QEMU
+```bash
 bash launch.sh
+# Or with Intel e1000 NIC (real laptop test):
+qemu-system-x86_64 -machine q35 -cdrom rusty-penguin.iso -m 512M \
+  -netdev user,id=n0 -device e1000,netdev=n0 \
+  -device qemu-xhci,id=xhci -device usb-kbd,bus=xhci.0 \
+  -display sdl
 ```
 
 The preselected GRUB entry, **Rusty Penguin (bare metal)**, boots the pure-Rust
-kernel into the desktop. That is the OS.
+kernel. For a full work week (browser, persistence, Git), use the
+**Web (X11)** entry after installing to disk.
 
 ### It runs DOOM
 
