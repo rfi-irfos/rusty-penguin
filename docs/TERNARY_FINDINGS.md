@@ -119,3 +119,43 @@ manifest under `@network`.
 
 **Honest basis:** Representational — ternary eliminates an ambiguous boolean edge
 case. Functionally verified across bricks 1–5 (commit chain 5a1b218 → b14408e).
+
+## F9 — Two-axis ternary health detects a "vestigial" state binary liveness is blind to (2026-05-30)
+
+**Finding:** In albert. (the MoE LLM), an expert's liveness was tracked on a
+single binary-flavoured axis — TLIGHT routing/gradient pressure: is current
+flowing to this slot? Under LB-off training + ternary-STE weight pruning a real
+failure mode appeared that this axis *structurally cannot see*: an expert still
+**routed** (~8% uniform share) whose MLP weights have been driven into the
+ternary-`0` state. It is **weight-dead** yet never goes routing-dead, so the
+self-repair (resurrection) trigger never fires. One axis has no value that
+encodes "connected but empty."
+
+Modelling health as the **composition of two independent ternary axes** closes
+the gap:
+
+```
+substance ∈ {-1 starved, 0 thin, +1 dense}   — mean |weight| of the expert
+flow      ∈ {-1 unrouted, 0 trickle, +1 busy} — routing mass to the expert
+
+healthy   ⟺ (+1, +1)
+vestigial ⟺ (-1, flow ≥ 0)   ← routed but starved — the missed state
+dormant   ⟺ (-1, -1)         ← idle on both axes — viable seed-bank reserve
+```
+
+The decisive move is the **second axis plus the middle `0`**: "vestigial"
+(substance −1, flow 0/+1) and "dormant" (substance −1, flow −1) are *different
+diagnoses with opposite correct responses* — resurrect the stuck one, leave the
+recovering one alone — yet a binary alive/dead detector collapses both into
+"alive" (it's still routed). Ternary keeps them distinct for free.
+
+**Shipped:** `moe-llm-core/src/mycelium.rs::classify_flux()` (median-relative
+bucketing → zero false positives in a balanced regime), emits a per-epoch `FLUX`
+telemetry line from `train_bible.rs`. Observational only — 2 unit tests, builds
+clean (commit 0644389, ternary-intelligence-stack).
+
+**Honest basis:** Representational + diagnostic — ternary doesn't speed anything
+up here; it expresses a system state (routed-but-empty vs idle-reserve) that the
+one-axis binary detector could not represent at all. Confirmed live: SEM/CTX read
+weight-0% while routing stayed ~uniform; CTX then self-recovered to 2% (the
+dormant→germinate path), validating that the two states needed distinguishing.
