@@ -351,6 +351,16 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
     vga::write_i32(pct as i32);
     vga::write_str("% dormancy\n\n", vga::Color::White);
 
+    // ── Scheduler brick (Increment 1) ────────────────────────────────────────
+    // Boot with `schedtest` on the cmdline to run the cooperative context-switch
+    // self-test (kernel tasks, serial output) instead of the desktop. Gated so it
+    // can never disturb the working desktop boot. See docs/SCHEDULER.md.
+    if unsafe { mb2_cmdline_contains(mb2, b"schedtest") } {
+        sched::selftest();
+        serial::write_str("[sched] self-test returned to boot thread; halting.\n");
+        loop { unsafe { core::arch::asm!("hlt"); } }
+    }
+
     // ── Linux-ABI brick 1 ─────────────────────────────────────────────────────
     // Boot with `linuxtest` on the cmdline to run an unmodified static Linux
     // x86-64 ELF through the Linux ABI layer instead of the desktop.
