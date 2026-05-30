@@ -2,7 +2,7 @@
 
 [![Language: Rust](https://img.shields.io/badge/Language-Rust-ce422b?logo=rust)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green)](LICENSE)
-[![Version: 2.3.0](https://img.shields.io/badge/Version-2.3.0-blue)](https://github.com/rfi-irfos/rusty-penguin)
+[![Version: 2.5.0](https://img.shields.io/badge/Version-2.5.0-blue)](https://github.com/rfi-irfos/rusty-penguin)
 [![Platform: x86_64](https://img.shields.io/badge/Platform-x86__64-333)](https://en.wikipedia.org/wiki/X86-64)
 [![Kernel: Pure Rust](https://img.shields.io/badge/Kernel-Pure%20Rust%2C%20no%20libc-purple)](https://github.com/rfi-irfos/rusty-penguin)
 [![Status: Active Development](https://img.shields.io/badge/Status-Active%20Development-brightgreen)](https://github.com/rfi-irfos/rusty-penguin/pulse)
@@ -121,6 +121,8 @@ velocity equals completion.
 | **Live web browser — type host → real page** | ✅ http + https, follows redirects |
 | `fetch`, `wget` terminal commands | ✅ |
 | Linux ABI layer (static + dynamic glibc binaries) | ✅ Bricks 1–5 done |
+| **id Software's real DOOM (fbDOOM) on the pure-Rust kernel via the Linux ABI** | ✅ boots + renders, QEMU-verified |
+| **Preemptive multitasking + per-process address spaces (CR3) + ring-3 isolation** | ✅ scheduler foundation, QEMU-verified |
 | **Multi-user login (SHA-256 passwords, /home/<user>)** | ✅ |
 | In-memory VFS within a session | ✅ |
 | **Persistent bare-metal disk storage (RPFS + AHCI)** | ✅ settings/files survive reboot |
@@ -206,16 +208,27 @@ The preselected GRUB entry, **Rusty Penguin (bare metal)**, boots the pure-Rust
 kernel. For a full work week (browser, persistence, Git), use the
 **Web (X11)** entry after installing to disk.
 
-### It runs DOOM
+### It runs the real DOOM — on our own kernel
 
-Click the **Doom** icon in the dock. The kernel suspends the desktop, hands the
-raw framebuffer to id Software's 1993 shareware DOOM (E1M1) via fbDOOM, and
-restarts the desktop when you quit. No X, no Wayland, no SDL:
+id Software's actual 1993 DOOM (fbDOOM, an **unmodified, dynamically-linked
+glibc binary**) boots and renders on the **pure-Rust kernel** through the Linux
+ABI layer — no Linux kernel underneath. The dynamic linker (`ld.so`) loads it
+against `libc.so.6` (relocation, RELRO, TLS), then `D_DoomMain → W_Init` (loads
+the WAD) `→ R_Init → I_InitGraphics` renders into our framebuffer. Verified
+end-to-end via serial trace. Build it with `bash iso/build-real-doom.sh`.
 
 ![DOOM running on Rusty Penguin](docs/doom-on-rusty-penguin.png)
 
 A separate GRUB entry, **`Rusty Penguin -- DOOM (demoable)`**, boots straight
 into DOOM without the desktop at all (for maximum performance demo).
+
+**In progress:** running DOOM *windowed, next to the browser*. The kernel now
+has preemptive multitasking, per-process address spaces (CR3) and ring-3
+process isolation (the scheduler foundation, all QEMU-verified — see
+`docs/SCHEDULER.md`). Remaining: a higher-half-kernel VMM migration
+(`docs/VMM_HIGHER_HALF.md`), a virtual `/dev/fb0`, and window compositing.
+Honest status: real DOOM runs fullscreen as a standalone process today; the
+side-by-side windowed form is the next multi-step build.
 
 ---
 
