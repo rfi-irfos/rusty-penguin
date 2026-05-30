@@ -535,6 +535,27 @@ pub extern "C" fn syscall_handler(nr: u64, arg1: u64, arg2: u64, arg3: u64) -> u
             }
             u64::MAX // only reached if binary not found
         }
+        29 => {
+            // sys_initrd_read(path_ptr, path_len, out_ptr|(out_len<<32)) → bytes or MAX
+            // arg3 packs: low 32 bits = out_ptr, high 32 bits = out_len (max 32 MiB).
+            let path_ptr = arg1 as *const u8;
+            let path_len = (arg2 as usize).min(256);
+            let out_ptr  = (arg3 & 0xFFFF_FFFF) as *mut u8;
+            let out_len  = ((arg3 >> 32) as usize).min(32 * 1024 * 1024);
+            if path_ptr.is_null() || out_ptr.is_null() || path_len == 0 || out_len == 0 {
+                return u64::MAX;
+            }
+            let path = unsafe { core::slice::from_raw_parts(path_ptr, path_len) };
+            let p = if path.starts_with(b"/") { &path[1..] } else { path };
+            match crate::ramfs::find(p) {
+                Some(data) => {
+                    let n = data.len().min(out_len);
+                    unsafe { core::ptr::copy_nonoverlapping(data.as_ptr(), out_ptr, n); }
+                    n as u64
+                }
+                None => u64::MAX,
+            }
+        }
         39 => {
             // sys_getpid → current PID
             crate::sched::current_pid()

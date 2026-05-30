@@ -22,9 +22,10 @@ Preinstalled: `albert` · `ternlang` · `albert-cli` · `ternlang-mcp`
 ![Rusty Penguin desktop v2.3](docs/rusty-penguin-desktop-v2.3.png)
 
 *Live multitasking on bare metal at 1920×1080: browser fetching google.com/search
-over TLS 1.3 from scratch (clickable results rendered in our own HTML engine) running
-alongside the DOOM raycaster — two windows, two taskbar entries, no X11, no Wayland,
-no libc, no Linux kernel.*
+over our own TLS 1.3 stack — real search results rendered with our HTML engine
+(clickable links including "rusty-penguin - crates.io: Rust Package Registry") running
+alongside DOOM — two windows, two taskbar entries, no X11, no Wayland, no libc, no
+Linux kernel.*
 
 ---
 

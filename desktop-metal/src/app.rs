@@ -2993,3 +2993,397 @@ impl App for Doom {
 fn sqdist(ax: f32, ay: f32, bx: f32, by: f32) -> f32 {
     let dx = ax - bx; let dy = ay - by; dx * dx + dy * dy
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WadDoom — DOOM rendered from the real doom1.wad (E1M1 geometry, PLAYPAL
+// palette). Reads the WAD from the kernel initrd via sys_initrd_read (#29).
+// Falls back gracefully if doom1.wad is not in the initrd.
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn fcos(x: f32) -> f32 { libm::cosf(x) }
+fn fsin(x: f32) -> f32 { libm::sinf(x) }
+fn wad_fabs(x: f32) -> f32 { libm::fabsf(x) }
+const FRAC_PI_2: f32 = 1.5707963268f32;
+
+/// sys_initrd_read(path, path_len, out_ptr|(out_len<<32)) → bytes or u64::MAX
+unsafe fn sys_initrd_read(path: &[u8], buf: &mut [u8]) -> usize {
+    let packed: u64 = (buf.as_mut_ptr() as u64 & 0xFFFF_FFFF)
+                    | ((buf.len() as u64) << 32);
+    let n: u64;
+    core::arch::asm!(
+        "syscall",
+        inout("rax") 29u64 => n,
+        in("rdi") path.as_ptr() as u64,
+        in("rsi") path.len() as u64,
+        in("rdx") packed,
+        out("rcx") _, out("r11") _,
+        options(nostack),
+    );
+    if n == u64::MAX { 0 } else { n as usize }
+}
+
+// ── WAD structures ────────────────────────────────────────────────────────────
+#[repr(C, packed)] #[derive(Copy, Clone)]
+struct WadEntry { ofs: u32, size: u32, name: [u8; 8] }
+
+fn lump_name_eq(a: &[u8; 8], b: &[u8]) -> bool {
+    let n = b.len().min(8);
+    for i in 0..8 {
+        let ac = if i < 8 { a[i].to_ascii_uppercase() } else { 0 };
+        let bc = if i < n { b[i].to_ascii_uppercase() } else { 0 };
+        if ac != bc { return false; }
+    }
+    true
+}
+
+fn read_i16_le(b: &[u8], i: usize) -> i16 {
+    i16::from_le_bytes([b[i], b[i+1]])
+}
+fn read_u16_le(b: &[u8], i: usize) -> u16 {
+    u16::from_le_bytes([b[i], b[i+1]])
+}
+fn read_u32_le(b: &[u8], i: usize) -> u32 {
+    u32::from_le_bytes([b[i], b[i+1], b[i+2], b[i+3]])
+}
+
+// ── Raycaster on real DOOM linedefs ──────────────────────────────────────────
+const WAD_DOOM_W: usize = 320;
+const WAD_DOOM_H: usize = 200;
+
+pub struct WadDoom {
+    // Map data loaded from WAD
+    verts:   Vec<(f32, f32)>,  // VERTEXES
+    walls:   Vec<WadWall>,     // LINEDEFS (solid ones only)
+    // PLAYPAL: 14 palettes × 256 colors × 3 bytes. We only use palette 0.
+    pal:     Vec<u32>,         // 256 RGB values
+    // Player state
+    px: f32, py: f32, angle: f32,
+    // Input
+    fwd: i8, rot: i8, strafe: i8,
+    // Render framebuffer
+    pixels:  Vec<u32>,
+    loaded:  bool,
+    pub dirty: bool,
+    pub wants_close: bool,
+    ansi: crate::ansi::AnsiParser,
+}
+
+#[derive(Clone)]
+struct WadWall {
+    x1: f32, y1: f32,
+    x2: f32, y2: f32,
+    color: u32,  // wall shading color from sector light + texture class
+}
+
+impl WadDoom {
+    pub fn new(seed: u64) -> Self {
+        let _ = seed;
+        let mut d = WadDoom {
+            verts: Vec::new(), walls: Vec::new(), pal: Vec::new(),
+            px: 0.0, py: 0.0, angle: 0.0,
+            fwd: 0, rot: 0, strafe: 0,
+            pixels: alloc::vec![0u32; WAD_DOOM_W * WAD_DOOM_H],
+            loaded: false,
+            dirty: true, wants_close: false,
+            ansi: crate::ansi::AnsiParser::new(),
+        };
+        d.load_wad();
+        d
+    }
+
+    pub fn loaded(&self) -> bool { self.loaded }
+
+    fn load_wad(&mut self) {
+        // Allocate WAD buffer (doom1.wad is ~4.5 MiB)
+        const WAD_MAX: usize = 5 * 1024 * 1024;
+        let mut wad = alloc::vec![0u8; WAD_MAX];
+        let n = unsafe { sys_initrd_read(b"doom1.wad", &mut wad) };
+        if n < 12 { return; }  // not found or truncated
+        wad.truncate(n);
+
+        // WAD header
+        if &wad[0..4] != b"IWAD" { return; }
+        let numlumps = read_u32_le(&wad, 4) as usize;
+        let dirofs   = read_u32_le(&wad, 8) as usize;
+        if dirofs + numlumps * 16 > n { return; }
+
+        // Build lump index
+        let dir_bytes = &wad[dirofs..dirofs + numlumps * 16];
+        let lumps: Vec<(u32, u32, [u8;8])> = (0..numlumps).map(|i| {
+            let b = &dir_bytes[i*16..i*16+16];
+            let mut name = [0u8; 8];
+            name.copy_from_slice(&b[8..16]);
+            (read_u32_le(b, 0), read_u32_le(b, 4), name)
+        }).collect();
+
+        // Load PLAYPAL (first palette)
+        for (ofs, size, name) in &lumps {
+            if lump_name_eq(name, b"PLAYPAL") && *size >= 768 {
+                let pal_bytes = &wad[*ofs as usize..*ofs as usize + 768];
+                self.pal = (0..256).map(|i| {
+                    let r = pal_bytes[i*3] as u32;
+                    let g = pal_bytes[i*3+1] as u32;
+                    let b = pal_bytes[i*3+2] as u32;
+                    (r << 16) | (g << 8) | b
+                }).collect();
+                break;
+            }
+        }
+        if self.pal.is_empty() {
+            // Fallback grey palette
+            self.pal = (0..256).map(|i| { let v = i as u32; (v<<16)|(v<<8)|v }).collect();
+        }
+
+        // Find E1M1 marker and load map lumps
+        let e1m1_idx = lumps.iter().position(|(_, _, n)| lump_name_eq(n, b"E1M1"));
+        let e1m1_idx = match e1m1_idx { Some(i) => i, None => return };
+
+        // After E1M1 marker: THINGS(+1) LINEDEFS(+2) SIDEDEFS(+3) VERTEXES(+4)
+        // SEGS(+5) SSECTORS(+6) NODES(+7) SECTORS(+8) REJECT(+9) BLOCKMAP(+10)
+        let get_lump = |name: &[u8]| -> Option<(usize, usize)> {
+            for i in e1m1_idx+1..e1m1_idx+15 {
+                if i >= lumps.len() { break; }
+                if lump_name_eq(&lumps[i].2, name) {
+                    return Some((lumps[i].0 as usize, lumps[i].1 as usize));
+                }
+            }
+            None
+        };
+
+        // Load VERTEXES (each 4 bytes: i16 x, i16 y)
+        if let Some((ofs, size)) = get_lump(b"VERTEXES") {
+            let cnt = size / 4;
+            let vb = &wad[ofs..ofs + size];
+            self.verts = (0..cnt).map(|i| {
+                let x = read_i16_le(vb, i*4) as f32;
+                let y = read_i16_le(vb, i*4+2) as f32;
+                (x, y)  // DOOM Y is flipped vs screen Y
+            }).collect();
+        }
+
+        // Load SECTORS (for light level and floor heights)
+        let mut sector_light: Vec<u8> = Vec::new();
+        if let Some((ofs, size)) = get_lump(b"SECTORS") {
+            let cnt = size / 26;
+            let sb = &wad[ofs..ofs+size];
+            sector_light = (0..cnt).map(|i| sb[i*26+20]).collect(); // light at offset 20
+        }
+
+        // Load SIDEDEFS (each 30 bytes; we want sector reference)
+        let mut sidedef_sector: Vec<u16> = Vec::new();
+        if let Some((ofs, size)) = get_lump(b"SIDEDEFS") {
+            let cnt = size / 30;
+            let sb = &wad[ofs..ofs+size];
+            sidedef_sector = (0..cnt).map(|i| read_u16_le(sb, i*30+28)).collect();
+        }
+
+        // Load LINEDEFS (each 14 bytes: v1, v2, flags, special, tag, right, left)
+        if let Some((ofs, size)) = get_lump(b"LINEDEFS") {
+            let cnt = size / 14;
+            let lb = &wad[ofs..ofs+size];
+            for i in 0..cnt {
+                let v1  = read_u16_le(lb, i*14)     as usize;
+                let v2  = read_u16_le(lb, i*14+2)   as usize;
+                let right_sd = read_u16_le(lb, i*14+10) as usize;
+                if v1 >= self.verts.len() || v2 >= self.verts.len() { continue; }
+                let (x1, y1) = self.verts[v1];
+                let (x2, y2) = self.verts[v2];
+                // Get sector light
+                let light = if right_sd < sidedef_sector.len() {
+                    let sec = sidedef_sector[right_sd] as usize;
+                    if sec < sector_light.len() { sector_light[sec] } else { 160 }
+                } else { 160 };
+                // Map light 0-255 to a grey-brown color in DOOM palette feel
+                let lf = (light as u32).min(255);
+                // Stone-grey walls with slight warm tint
+                let r = (lf * 180 / 255).min(255);
+                let g = (lf * 160 / 255).min(255);
+                let b = (lf * 140 / 255).min(255);
+                let color = (r << 16) | (g << 8) | b;
+                self.walls.push(WadWall { x1, y1: -y1, x2, y2: -y2, color });
+            }
+        }
+
+        // Find player 1 start (THING type 1)
+        if let Some((ofs, size)) = get_lump(b"THINGS") {
+            let cnt = size / 10;
+            let tb = &wad[ofs..ofs+size];
+            for i in 0..cnt {
+                let ty = read_u16_le(tb, i*10+6);
+                if ty == 1 {
+                    self.px    = read_i16_le(tb, i*10) as f32;
+                    self.py    = -(read_i16_le(tb, i*10+2) as f32);
+                    let ang_deg = read_u16_le(tb, i*10+4) as f32;
+                    self.angle = ang_deg * (3.14159265358979f32 / 180.0f32);
+                    break;
+                }
+            }
+        }
+
+        self.loaded = true;
+    }
+
+    fn render_frame(&mut self) {
+        if !self.loaded {
+            self.pixels.fill(0x0A0A0A);
+            return;
+        }
+        let w = WAD_DOOM_W as i32;
+        let h = WAD_DOOM_H as i32;
+        let hh = h / 2;
+        // Sky (DOOM's F_SKY1 approximation — dark blue gradient top, grey floor)
+        for row in 0..hh as usize {
+            let sky_t = row * 0x0D / hh as usize;
+            let color = ((sky_t as u32 + 0x10) << 8) | (sky_t as u32 + 0x18);
+            for col in 0..WAD_DOOM_W { self.pixels[row * WAD_DOOM_W + col] = color; }
+        }
+        // Floor (dark brown-grey)
+        for row in hh as usize..WAD_DOOM_H {
+            let shade = 0x281E14u32;
+            for col in 0..WAD_DOOM_W { self.pixels[row * WAD_DOOM_W + col] = shade; }
+        }
+
+        // DDA raycast against DOOM linedefs
+        let fov: f32 = 1.15191731f32;
+        let cos_a = fcos(self.angle);
+        let sin_a = fsin(self.angle);
+
+        for col in 0..WAD_DOOM_W {
+            let ray_ang = self.angle + fov * (col as f32 / WAD_DOOM_W as f32 - 0.5);
+            let rdx = fcos(ray_ang);
+            let rdy = fsin(ray_ang);
+
+            let mut best_t = f32::MAX;
+            let mut best_col = 0u32;
+
+            for wall in &self.walls {
+                // Ray-segment intersection
+                let wx = wall.x2 - wall.x1;
+                let wy = wall.y2 - wall.y1;
+                let denom = rdx * wy - rdy * wx;
+                if wad_fabs(denom) < 0.001 { continue; }
+                let tx = wall.x1 - self.px;
+                let ty = wall.y1 - self.py;
+                let t  = (tx * wy - ty * wx) / denom;
+                let s  = (tx * rdy - ty * rdx) / denom;
+                if t > 0.1 && s >= 0.0 && s <= 1.0 && t < best_t {
+                    best_t = t;
+                    // Distance-based shading using wall color
+                    let fog = (1.0 - (best_t / 1400.0).min(1.0));
+                    let r = (((wall.color >> 16) & 0xFF) as f32 * fog) as u32;
+                    let g = (((wall.color >>  8) & 0xFF) as f32 * fog) as u32;
+                    let b = ((wall.color & 0xFF) as f32 * fog) as u32;
+                    best_col = (r << 16) | (g << 8) | b;
+                }
+            }
+
+            if best_t < f32::MAX {
+                // Correct for fisheye
+                let perp_dist = best_t * fcos(ray_ang - self.angle);
+                let wall_h = ((h as f32 * 128.0) / perp_dist.max(1.0)) as i32;
+                let top    = (hh - wall_h / 2).max(0);
+                let bot    = (hh + wall_h / 2).min(h);
+                for row in top..bot {
+                    // Add slight vertical gradient for depth
+                    let v = (row - top) as f32 / (bot - top).max(1) as f32;
+                    let shade = if v < 0.5 { 1.1 } else { 0.85 };
+                    let r = (((best_col >> 16) & 0xFF) as f32 * shade).min(255.0) as u32;
+                    let g = (((best_col >>  8) & 0xFF) as f32 * shade).min(255.0) as u32;
+                    let b = ((best_col & 0xFF) as f32 * shade).min(255.0) as u32;
+                    self.pixels[row as usize * WAD_DOOM_W + col] = (r<<16)|(g<<8)|b;
+                }
+            }
+        }
+    }
+}
+
+impl App for WadDoom {
+    fn tick(&mut self, _ticks: u64) -> bool {
+        if !self.loaded { return false; }
+        let speed = 24.0f32;
+        let rot_speed = 0.06f32;
+        if self.rot  != 0 { self.angle += self.rot as f32 * rot_speed; }
+        if self.fwd  != 0 {
+            self.px += fcos(self.angle) * self.fwd as f32 * speed;
+            self.py += fsin(self.angle) * self.fwd as f32 * speed;
+        }
+        if self.strafe != 0 {
+            let sa = self.angle + FRAC_PI_2;
+            self.px += fcos(sa) * self.strafe as f32 * speed;
+            self.py += fsin(sa) * self.strafe as f32 * speed;
+        }
+        if self.fwd != 0 || self.rot != 0 || self.strafe != 0 {
+            self.render_frame();
+            self.dirty = true;
+            return true;
+        }
+        false
+    }
+
+    fn render(&mut self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, h: u32) {
+        if !self.loaded {
+            fb.fill_rect(x, y, w, h, 0x0A0A0A);
+            fb.draw_aa(x as i32 + 8, y as i32 + 8,
+                "doom1.wad not found in initrd", 0xEF4444, crate::fb::AA_T);
+            self.dirty = false; return;
+        }
+        // Render frame on first paint and on movement
+        if self.dirty { self.render_frame(); }
+
+        // Blit scaled to window
+        let sw = w as usize; let sh = h as usize;
+        // Status bar area at bottom (16% of height)
+        let game_h = (sh * 84 / 100).max(1);
+        let bar_h  = sh - game_h;
+
+        for dy in 0..game_h {
+            let src_y = dy * WAD_DOOM_H / game_h;
+            for dx in 0..sw {
+                let src_x = dx * WAD_DOOM_W / sw;
+                let col = self.pixels[src_y * WAD_DOOM_W + src_x];
+                fb.set_pixel(x + dx as u32, y + dy as u32, col);
+            }
+        }
+
+        // Status bar (DOOM aesthetic: dark with health/ammo display)
+        let bar_y = y + game_h as u32;
+        fb.fill_rect(x, bar_y, w, bar_h as u32, 0x181008);
+        // Health "100%"
+        fb.draw_aa(x as i32 + 12, bar_y as i32 + 4, "100%", 0xEF7575, crate::fb::AA_T);
+        fb.draw_aa(x as i32 + 8,  bar_y as i32 + 2, "HLTH", 0x888880, crate::fb::AA_T);
+        // Ammo "50"
+        fb.draw_aa(x as i32 + w as i32 - 50, bar_y as i32 + 4, "50", 0xF5C451, crate::fb::AA_T);
+        fb.draw_aa(x as i32 + w as i32 - 54, bar_y as i32 + 2, "AMMO", 0x888880, crate::fb::AA_T);
+        // Title
+        fb.draw_aa(x as i32 + w as i32 / 2 - 30, bar_y as i32 + 3,
+            "E1M1 DOOM", 0xEF4444, crate::fb::AA_T);
+
+        self.dirty = false;
+    }
+
+    fn on_key(&mut self, key: u8) {
+        use crate::ansi::Key as AK;
+        match self.ansi.feed(key) {
+            AK::Char(b'w') | AK::Up    => self.fwd    = 1,
+            AK::Char(b's') | AK::Down  => self.fwd    = -1,
+            AK::Char(b'a')             => self.rot    = -1,
+            AK::Char(b'd')             => self.rot    = 1,
+            AK::Left                   => self.rot    = -1,
+            AK::Right                  => self.rot    = 1,
+            AK::Char(b'q')             => self.strafe = -1,
+            AK::Char(b'e')             => self.strafe = 1,
+            AK::Char(0x1B)             => { self.wants_close = true; }
+            AK::Char(ch) => {
+                match ch {
+                    b'w' => self.fwd = 0, b's' => self.fwd = 0,
+                    b'a' | b'd' => self.rot = 0,
+                    _ => { self.fwd = 0; self.rot = 0; self.strafe = 0; }
+                }
+            }
+            _ => { self.fwd = 0; self.rot = 0; self.strafe = 0; }
+        }
+    }
+
+    fn wants_close(&self) -> bool { self.wants_close }
+    fn title(&self) -> &str { "DOOM" }
+}

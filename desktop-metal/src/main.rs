@@ -1574,7 +1574,14 @@ fn open_snake(w: i32, h: i32, n: usize) -> Option<TermWin> {
 fn open_doom_raycaster(w: i32, h: i32, n: usize) -> Option<TermWin> {
     match term::Terminal::spawn() {
         Ok(t) => {
-            let game = alloc::boxed::Box::new(app::Doom::new(sys_ticks()));
+            // Use WAD-based DOOM renderer (real E1M1 geometry from doom1.wad)
+            // when available; fall back to pure-Rust raycaster otherwise.
+            let wad = alloc::boxed::Box::new(app::WadDoom::new(sys_ticks()));
+            let game: alloc::boxed::Box<dyn app::App> = if wad.loaded() {
+                wad
+            } else {
+                alloc::boxed::Box::new(app::Doom::new(sys_ticks()))
+            };
             let off = n as i32 * 20;
             let left_margin = 75;
             let wx = ((w - left_margin - wm::WINDOW_W) / 2 + left_margin + off)

@@ -13,6 +13,9 @@ path = "src/main.rs"
 panic = "abort"
 opt-level = 2
 
+[dependencies]
+libm = { version = "0.2", default-features = false }
+
 [profile.release]
 panic = "abort"
 strip = false
