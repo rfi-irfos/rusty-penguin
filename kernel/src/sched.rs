@@ -295,6 +295,53 @@ extern "C" fn ptask_b() -> ! {
     loop { crate::serial::write_str("[sched]   PREEMPT task B\n"); busy_spin(); }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Increment 3a: per-process ADDRESS SPACES. The desktop and fbDOOM use the same
+// fixed virtual addresses (4/16 MiB code, 63 MiB stack, …) so they cannot share
+// one page table. Each process needs its own CR3 where identical virtual
+// addresses map to different physical frames. This self-test proves the VMM
+// machinery: two address spaces, the SAME virtual address, DIFFERENT memory.
+// Gated behind `schedtest3`.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Increment-3a self-test: build a second address space, map a private page at a
+/// high virtual address (≥512 GiB, in PML4[1] so it doesn't touch the shared
+/// kernel half) in BOTH spaces to different frames, then switch CR3 between them
+/// and confirm the same pointer reads different values.
+pub fn selftest_vmm() -> ! {
+    use crate::serial::{write_str, write_hex_u64};
+    write_str("\n[sched] === Increment 3a: per-process address-space self-test ===\n");
+    // Make sure the PMM's frames are identity-accessible while we poke them.
+    crate::vmm::extend_identity_map(512);
+    const PRIV: u64 = 0x80_0000_0000; // 512 GiB — first address in PML4[1]
+    unsafe {
+        let kpml4 = crate::vmm::current_cr3();
+        let as2 = match crate::vmm::new_address_space() {
+            Some(p) => p, None => { write_str("[sched] new_address_space failed\n"); halt(); }
+        };
+        let fa = crate::pmm::alloc_frame().unwrap_or(0);
+        let fb = crate::pmm::alloc_frame().unwrap_or(0);
+        *(fa as *mut u64) = 0xAAAA_AAAA; // frame backing PRIV in as2
+        *(fb as *mut u64) = 0xBBBB_BBBB; // frame backing PRIV in the kernel AS
+        let fl = crate::vmm::PTE_PRESENT | crate::vmm::PTE_WRITABLE | crate::vmm::PTE_USER;
+        crate::vmm::map_page_in(as2,   PRIV, fa, fl);
+        crate::vmm::map_page_in(kpml4, PRIV, fb, fl);
+        crate::vmm::switch_address_space(kpml4);
+        write_str("[sched]  in kernel AS, *[512GiB] = "); write_hex_u64(*(PRIV as *const u64));
+        write_str(" (expect 0xbbbbbbbb)\n");
+        crate::vmm::switch_address_space(as2);
+        write_str("[sched]  in AS #2,    *[512GiB] = "); write_hex_u64(*(PRIV as *const u64));
+        write_str(" (expect 0xaaaaaaaa)\n");
+        crate::vmm::switch_address_space(kpml4);
+        write_str("[sched]  back in kernel AS, *[512GiB] = "); write_hex_u64(*(PRIV as *const u64));
+        write_str(" (expect 0xbbbbbbbb)\n");
+    }
+    write_str("[sched] === if the values differ, per-process VMM works ===\n");
+    halt();
+}
+
+fn halt() -> ! { loop { unsafe { core::arch::asm!("hlt"); } } }
+
 /// Fill `buf` with packed 32-byte PsRecord entries.
 /// Layout per record: [u64 pid][u8 state][7 pad][16 name]
 /// Returns number of records written.

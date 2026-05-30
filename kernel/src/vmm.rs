@@ -79,6 +79,43 @@ pub fn map_mmio_range(phys_start: u64, size: u64) {
     }
 }
 
+/// Read the current CR3 (physical base of the active PML4). Public for the
+/// scheduler, which records each task's address space.
+pub fn current_cr3() -> u64 { cr3() }
+
+/// Switch the active address space by loading `pml4_phys` into CR3. The new PML4
+/// MUST map the kernel (code/stack/data) and any MMIO the kernel touches, or the
+/// next instruction faults. `new_address_space` guarantees this by sharing the
+/// kernel's low 512 GiB (PML4[0]).
+pub unsafe fn switch_address_space(pml4_phys: u64) {
+    core::arch::asm!("mov cr3, {}", in(reg) pml4_phys & !0xFFF, options(nostack));
+}
+
+/// Create a fresh address space (PML4) for a new process. It SHARES the kernel's
+/// entire low 512 GiB (PML4[0] — identity map, framebuffer, kernel code/stack),
+/// so the kernel keeps running after a CR3 switch. Private per-process mappings
+/// go in PML4[1..] (virtual addresses ≥ 512 GiB) so they don't disturb the
+/// shared kernel region. Returns the new PML4's physical address.
+pub unsafe fn new_address_space() -> Option<u64> {
+    let pml4 = crate::pmm::alloc_frame()?;
+    core::ptr::write_bytes(pml4 as *mut u8, 0, 4096);
+    let kpml4 = cr3();
+    write64(pml4, 0, read64(kpml4, 0)); // share kernel low half (PML4[0])
+    Some(pml4)
+}
+
+/// Map one 4 KiB page into a SPECIFIC address space (`pml4_phys`), rather than
+/// the active one. Used to populate a process's private region before switching
+/// to it. All intermediate tables get USER|WRITABLE|PRESENT.
+pub unsafe fn map_page_in(pml4_phys: u64, virt: u64, phys: u64, flags: u64) -> bool {
+    let fi = PTE_PRESENT | PTE_WRITABLE | PTE_USER;
+    let pdpt = match descend(pml4_phys, pml4_idx(virt), fi) { Some(a) => a, None => return false };
+    let pd   = match descend(pdpt,      pdpt_idx(virt), fi) { Some(a) => a, None => return false };
+    let pt   = match descend(pd,        pd_idx(virt),   fi) { Some(a) => a, None => return false };
+    write64(pt, pt_idx(virt), phys | flags | PTE_PRESENT);
+    true
+}
+
 /// Extend the boot identity map from 2 MiB up to `limit_mib` MiB (max 1022).
 /// Boot.s sets PML4[0]/PDPT[0]/PD[0] with only PRESENT|WRITABLE — no USER bit.
 /// The x86 page table walk checks U/S at EVERY level, so all three levels must

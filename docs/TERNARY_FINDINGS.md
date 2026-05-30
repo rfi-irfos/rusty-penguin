@@ -155,8 +155,9 @@ telemetry line from `train_bible.rs` (commit 0644389). The two-axis health is no
 also **wired into the existing self-repair** (`vestigial_experts()` →
 resurrection candidacy) behind a default-OFF `--vestigial-rescue` flag with a
 patience + recovery guard, so a genuine dormant→germinate recovery is left alone
-and only a demonstrably stalled slot is rescued. 5 unit tests; see
-`docs/VESTIGIAL_RESCUE.md`.
+and only a demonstrably stalled slot is rescued. **Default ON** in the albert
+trainer as of 2026-05-30 (opt out with `--no-vestigial-rescue`). 5 unit tests;
+see `docs/VESTIGIAL_RESCUE.md`.
 
 **Honest basis:** Representational + diagnostic — ternary doesn't speed anything
 up here; it expresses a system state (routed-but-empty vs idle-reserve) that the
