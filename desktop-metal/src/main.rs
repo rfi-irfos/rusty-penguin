@@ -1772,6 +1772,11 @@ pub extern "C" fn _start() -> ! {
                     wins.push(tw);
                     scene_dirty = true;
                 }
+            } else if k == 0x02 { // Ctrl+B — open browser
+                if let Some(tw) = open_browser(w, h, wins.len()) {
+                    wins.push(tw);
+                    scene_dirty = true;
+                }
             } else if k == 0x17 { // Ctrl+W
                 if !wins.is_empty() {
                     wins.pop();

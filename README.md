@@ -19,12 +19,13 @@ Built by [RFI-IRFOS](https://github.com/rfi-irfos) as part of the
 [Ternary Intelligence Stack](https://ternlang.com).
 Preinstalled: `albert` · `ternlang` · `albert-cli` · `ternlang-mcp`
 
-![Rusty Penguin desktop v2.1](docs/rusty-penguin-desktop-v2.1.png)
+![Rusty Penguin desktop v2.3](docs/rusty-penguin-desktop-v2.3.png)
 
-*Bare-metal Rust desktop at 1920×1080: floating dock (Terminal · Files · Browser ·
-Editor · Calculator · TIS · DOOM), warm stone-green Aero palette, live web browser,
-audio, multi-user login, RPFS persistent filesystem — all rendered by Rusty Penguin's
-own framebuffer, font and CSS engine. No X11, no Wayland, no libc.*
+*Bare-metal Rust desktop at 1920×1080: deep midnight-blue wallpaper, floating dock
+(Terminal · Files · Browser · Editor · Calculator · TIS · DOOM), live web browser
+(TCP/IP + TLS 1.3 from scratch), multi-user login, RPFS persistent filesystem — all
+rendered by Rusty Penguin's own framebuffer, font and CSS engine. No X11, no Wayland,
+no libc.*
 
 ---
 
