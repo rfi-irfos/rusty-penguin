@@ -58,6 +58,14 @@ static mut GDT: Gdt = Gdt { entries: [
 static mut TSS:    Tss    = Tss::new();
 static mut KSTACK: [u8; 65536] = [0; 65536];  // ring-0 interrupt stack
 
+/// Set TSS.rsp0 — the kernel stack the CPU loads on a ring-3→ring-0 interrupt.
+/// The scheduler updates this on every switch so a preempted RING-3 task lands
+/// its interrupt frame on its OWN kernel stack (else concurrent ring-3 tasks
+/// would clobber a single shared stack).
+pub fn set_rsp0(top: u64) {
+    unsafe { TSS.rsp0 = top; }
+}
+
 pub fn init() {
     unsafe {
         TSS.rsp0 = core::ptr::addr_of!(KSTACK) as u64 + 65536;

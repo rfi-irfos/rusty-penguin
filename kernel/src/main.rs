@@ -355,6 +355,9 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
     // Boot with `schedtest` on the cmdline to run the cooperative context-switch
     // self-test (kernel tasks, serial output) instead of the desktop. Gated so it
     // can never disturb the working desktop boot. See docs/SCHEDULER.md.
+    if unsafe { mb2_cmdline_contains(mb2, b"schedtest5") } {
+        sched::selftest_ring3(); // ring-3 task in a private address space
+    }
     if unsafe { mb2_cmdline_contains(mb2, b"schedtest4") } {
         sched::selftest_cr3_sched(); // per-task CR3 switching under preemption
     }

@@ -190,6 +190,15 @@ pub extern "C" fn syscall_handler(nr: u64, arg1: u64, arg2: u64, arg3: u64) -> u
         return crate::linux::syscall(nr, arg1, arg2, arg3);
     }
     match nr {
+        // Scheduler Increment-3c proof: a ring-3 task running in its own address
+        // space calls syscall(0x1337) so the kernel can log that it reached
+        // ring 3 and trapped back. arg1 is a tag the task passes (its id).
+        0x1337 => {
+            crate::serial::write_str("[sched]   ring-3 syscall reached kernel, tag=");
+            crate::serial::write_hex_u64(arg1);
+            crate::serial::write_byte(b'\n');
+            0
+        }
         0 => {
             // sys_read(fd, buf, len)
             let fd  = arg1;

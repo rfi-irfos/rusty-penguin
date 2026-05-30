@@ -240,8 +240,17 @@ extern "C" fn preempt_tick(cur_rsp: u64) -> u64 {
         if TASKS[nxt].cr3 != 0 {
             crate::vmm::switch_address_space(TASKS[nxt].cr3);
         }
+        // Point TSS.rsp0 at the next task's kernel stack, so if it's a RING-3
+        // task and the timer interrupts it, the CPU lands the frame on that
+        // task's own kernel stack (Increment 3c). Harmless for ring-0 tasks.
+        crate::gdt::set_rsp0(kstack_top(nxt));
         TASKS[nxt].rsp
     }
+}
+
+/// Top (highest address, 16-aligned) of task `i`'s kernel stack.
+fn kstack_top(i: usize) -> u64 {
+    unsafe { ((core::ptr::addr_of!(KSTACKS[i]) as u64) + KSTACK_SIZE as u64) & !0xF }
 }
 
 /// Like `spawn_preempt`, but the task runs in its OWN address space (its own
@@ -406,6 +415,98 @@ extern "C" fn catask_b() -> ! {
         crate::serial::write_str("[sched]   task B cr3=");
         crate::serial::write_hex_u64(read_cr3());
         crate::serial::write_byte(b'\n');
+        busy_spin();
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Increment 3c: a RING-3 task in its own address space. Until now tasks ran in
+// ring 0; a real process (desktop, fbDOOM) runs in ring 3. This loads a tiny
+// position-independent ring-3 stub into a private AS, runs it at ring 3 with a
+// user stack, and the stub syscalls back into the kernel (logged). Combined
+// with per-task TSS.rsp0 (set in preempt_tick), the timer can preempt the
+// ring-3 task and hand control to the boot thread.  Gated behind `schedtest5`.
+//
+// ⚠️ UNVERIFIED at commit time (built while the user was asleep; QEMU is blocked
+// in the sandbox). Verify with `schedtest5` before relying on it.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Private (PML4[1], ≥512 GiB) virtual addresses for the ring-3 stub — NOT in the
+// shared kernel low half, so each process can map them independently.
+const R3_CODE_VA:   u64 = 0x80_0000_0000;
+const R3_STACK_VA:  u64 = 0x80_0010_0000;
+const R3_STACK_TOP: u64 = R3_STACK_VA + 0x1000;
+
+// Position-independent ring-3 stub:
+//   loop { rdi = 0x55; rax = 0x1337; syscall; for(ecx=0x01000000) {}; }
+// Only immediates + relative jumps, so it runs correctly at any address.
+static R3_STUB: [u8; 23] = [
+    0xbf, 0x55, 0x00, 0x00, 0x00,       // mov edi, 0x55      (syscall arg1 = tag)
+    0xb8, 0x37, 0x13, 0x00, 0x00,       // mov eax, 0x1337    (syscall nr)
+    0x0f, 0x05,                         // syscall
+    0xb9, 0x00, 0x00, 0x00, 0x01,       // mov ecx, 0x01000000 (delay count)
+    0xff, 0xc9,                         // dec ecx
+    0x75, 0xfc,                         // jnz -4  (delay loop)
+    0xeb, 0xe9,                         // jmp -23 (back to start)
+];
+
+/// Spawn a ring-3 task running `stub` in a fresh private address space.
+fn spawn_ring3(stub: &[u8]) -> usize {
+    unsafe {
+        for i in 1..MAX_TASKS {
+            if !TASKS[i].used {
+                let as_ = match crate::vmm::new_address_space() { Some(p) => p, None => return 0 };
+                let pf = crate::vmm::PTE_PRESENT | crate::vmm::PTE_USER;
+                let pfw = pf | crate::vmm::PTE_WRITABLE;
+                // Code page (user, executable — no NX here): copy the stub in.
+                let code = crate::pmm::alloc_frame().unwrap_or(0);
+                core::ptr::write_bytes(code as *mut u8, 0, 4096);
+                core::ptr::copy_nonoverlapping(stub.as_ptr(), code as *mut u8, stub.len());
+                crate::vmm::map_page_in(as_, R3_CODE_VA, code, pf);
+                // User stack page.
+                let stk = crate::pmm::alloc_frame().unwrap_or(0);
+                core::ptr::write_bytes(stk as *mut u8, 0, 4096);
+                crate::vmm::map_page_in(as_, R3_STACK_VA, stk, pfw);
+                // Prime this task's kernel stack with a RING-3 iret frame + GPRs.
+                let base = core::ptr::addr_of_mut!(KSTACKS[i]) as *mut u8;
+                let ktop = ((base.add(KSTACK_SIZE) as u64) & !0xF) as u64;
+                let mut sp = ktop;
+                let push = |sp: &mut u64, v: u64| { *sp -= 8; *(*sp as *mut u64) = v; };
+                push(&mut sp, 0x1b);          // ss     = user data | RPL3
+                push(&mut sp, R3_STACK_TOP);  // user rsp
+                push(&mut sp, 0x202);         // rflags  IF=1
+                push(&mut sp, 0x23);          // cs     = user code | RPL3
+                push(&mut sp, R3_CODE_VA);    // rip    = stub entry
+                for _ in 0..15 { push(&mut sp, 0); } // 15 GPRs = 0
+                TASKS[i] = Task { rsp: sp, used: true, alive: true, cr3: as_ };
+                return i;
+            }
+        }
+        0
+    }
+}
+
+/// Increment-3c self-test (cmdline `schedtest5`): one ring-3 task in a private
+/// address space + the boot thread (ring 0). If the ring-3 stub's syscall is
+/// logged AND interleaves with the boot thread, then: ring-3 entry, private-AS
+/// execution, the user→kernel syscall round-trip, per-task TSS.rsp0, and timer
+/// preemption of ring-3 code all work.
+pub fn selftest_ring3() -> ! {
+    use crate::serial::write_str;
+    write_str("\n[sched] === Increment 3c: ring-3 task in a private address space ===\n");
+    crate::vmm::extend_identity_map(512);
+    unsafe {
+        core::arch::asm!("cli");
+        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3() };
+        CUR_TASK = 0;
+    }
+    let r3 = spawn_ring3(&R3_STUB);
+    if r3 == 0 { write_str("[sched] spawn_ring3 failed\n"); halt(); }
+    write_str("[sched] ring-3 task spawned; enabling preemption\n");
+    crate::idt::set_timer_vector(irq_timer_preempt as *const () as u64);
+    unsafe { core::arch::asm!("sti"); }
+    loop {
+        write_str("[sched] boot (kernel ring-0)\n");
         busy_spin();
     }
 }
