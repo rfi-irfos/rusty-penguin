@@ -10,23 +10,35 @@ lacks. This is the multi-year "threads/processes" brick, built in small,
 Each increment is gated behind a kernel cmdline flag so it can never break the
 working `bin/desktop` boot until it's proven.
 
-## Increment 1 — context-switch primitive  (flag: `schedtest`)  ← IN PROGRESS
+## Increment 1 — context-switch primitive  (flag: `schedtest`)  ✅ DONE (2e88425)
 Cooperative switching between two **kernel-mode** tasks (same address space,
 separate kernel stacks). Proves `context_switch` (save/restore callee-saved +
-rsp swap) works. Verified by interleaved serial output. Risk: pure kernel, does
-not touch the desktop.
+rsp swap) works. Verified: boot/A/B interleave 3 cycles, clean exit.
 
-## Increment 2 — timer preemption
-Drive the switch from the 100 Hz timer IRQ instead of explicit `yield`. fbDOOM's
-game loop never yields, so preemption is mandatory. Switch stacks from inside
-the IRQ handler. Verified: two non-yielding kernel loops still interleave.
+## Increment 2 — timer preemption  (flag: `schedtest2`)  ✅ DONE (90ab9c1)
+100 Hz timer IRQ switches tasks (full GPR + iret-frame save/restore in a naked
+stub) — fbDOOM's loop never yields, so preemption is mandatory. Verified: two
+NON-yielding kernel loops + boot thread, 42 prints each, interleaved, no fault.
 
-## Increment 3 — ring-3 tasks + per-process address spaces (VMM)
-Each task gets its own CR3 (page tables). Switch CR3 on context switch. Lets the
-desktop (loads at 4 MiB + 24 MiB heap) and fbDOOM (16 MiB + brk 112 MiB + mmap
-128–256 MiB) use overlapping/fixed virtual addresses without colliding —
-otherwise their memory regions overlap in one address space. Verified: desktop
-runs as task 0, a second trivial ring-3 ELF as task 1.
+## Increment 3a — per-process address spaces (VMM)  (flag: `schedtest3`)  ✅ DONE (ac57559)
+`new_address_space` (PML4 sharing the kernel low half), `map_page_in`,
+`switch_address_space`. Verified: same vaddr (512 GiB) reads 0xbbbb in the
+kernel AS, 0xaaaa in a second AS, no fault on CR3 switch.
+
+## Increment 3b — per-task CR3 switching under preemption  (flag: `schedtest4`)  ✅ DONE (0010f99)
+`preempt_tick` swaps CR3 per task; `spawn_preempt_as` spawns into a fresh AS.
+Verified: boot/A/B each print a distinct live CR3 (0x22f000 / 0x238000 /
+0x239000), interleaved, no fault. **Foundation complete: preemptive multitasking
++ per-process isolation.**
+
+## Increment 3c — ring-3 task in a private address space  ← NEXT
+So far tasks run in ring 0. A real process (desktop, fbDOOM) runs in ring 3.
+Needs: load an ELF into a private AS (PMM frames mapped USER at its vaddrs),
+a user stack, a ring-3 iret frame (cs=0x23/ss=0x1b), AND **per-task TSS.rsp0**
+— when the timer interrupts a ring-3 task, the CPU loads the kernel stack from
+TSS.rsp0, so `preempt_tick` must update rsp0 to the next task's kernel stack on
+every switch (else a ring-3 preemption corrupts state). Verify: a ring-3 stub
+makes a syscall the kernel logs, preempted alongside the boot thread.
 
 ## Increment 4 — virtual `/dev/fb0`
 When a Linux process opens `/dev/fb0`, hand it an **offscreen** buffer (not the
