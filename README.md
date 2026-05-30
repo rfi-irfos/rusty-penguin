@@ -112,6 +112,7 @@ velocity equals completion.
 | **USB xHCI HID — keyboard + mouse on modern laptops** | ✅ QEMU verified |
 | Intel HDA audio + Sound mixer app | ✅ |
 | Window manager, floating dock, start menu, arrow cursor | ✅ |
+| **Quick Settings panel (Wi-Fi/BT/dark/volume tiles, tray-anchored)** | ✅ GNOME-style |
 | Apps: terminal, files, editor, calculator, monitor, settings, TIS console | ✅ |
 | **NIC drivers: RTL8139, Intel e1000/i219, Realtek r8169** | ✅ ~95% laptop coverage |
 | **TCP/IP stack: ARP/ICMP/UDP/DHCP/DNS/TCP/HTTP** | ✅ fetches real internet |
