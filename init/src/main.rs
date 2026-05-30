@@ -57,6 +57,14 @@ fn main() {
         // rp.web — boot the X11 web session (Xorg on /dev/fb0 + a real GUI app)
         // instead of the bespoke desktop. The path to running Firefox/Chrome.
         eprintln!("[init] web mode (rp.web) — starting X11 session...");
+        // If network is down and this is an installed system, guide the user
+        // through WiFi setup before starting X (better than a browser with no net).
+        if net != Trit::Pos && storage == Trit::Pos {
+            eprintln!("[init] No network. To configure WiFi:");
+            eprintln!("[init]   wifi-setup <SSID> <password>");
+            eprintln!("[init] Starting desktop in 3s... (run wifi-setup in terminal after)");
+            std::thread::sleep(std::time::Duration::from_secs(3));
+        }
         load_input_modules();
         launch_x_session()
     } else if console {
@@ -130,12 +138,25 @@ fn launch_shell() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn setup_environment() {
-    // Set basic environment variables
-    std::env::set_var("PATH", "/opt/rusty-penguin/bin:/bin:/usr/local/bin:/usr/bin");
+    std::env::set_var("PATH", "/opt/rusty-penguin/bin:/bin:/usr/local/bin:/usr/bin:/usr/sbin:/sbin");
     std::env::set_var("HOME", "/home/rusty-penguin");
-    std::env::set_var("SHELL", "/bin/psh");
+    std::env::set_var("SHELL", "/bin/sh");
     std::env::set_var("TERM", "xterm");
-
+    // Install wifi-setup helper script (idempotent — just overwrites).
+    let wifi_script = b"#!/bin/sh
+SSID=\"$1\"; PASS=\"$2\"
+[ -z \"$SSID\" ] && { echo 'usage: wifi-setup <SSID> [password]'; exit 1; }
+mkdir -p /persist
+if [ -z \"$PASS\" ]; then
+  printf 'network={\n  ssid=\"%s\"\n  key_mgmt=NONE\n}\n' \"$SSID\" > /persist/wifi.conf
+else
+  /bin/wpa_passphrase \"$SSID\" \"$PASS\" > /persist/wifi.conf
+fi
+echo \"WiFi config saved. Run: wpa_supplicant -B -i wlan0 -c /persist/wifi.conf\"
+echo \"Then: udhcpc -i wlan0\"
+";
+    let _ = fs::write("/usr/local/bin/wifi-setup", wifi_script);
+    let _ = Command::new("chmod").args(["+x", "/usr/local/bin/wifi-setup"]).status();
     println!("[init] Environment initialized");
 }
 
