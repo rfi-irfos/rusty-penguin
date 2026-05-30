@@ -138,7 +138,7 @@ fn launch_shell() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn setup_environment() {
-    std::env::set_var("PATH", "/opt/rusty-penguin/bin:/bin:/usr/local/bin:/usr/bin:/usr/sbin:/sbin");
+    std::env::set_var("PATH", "/opt/tis/bin:/opt/rusty-penguin/bin:/bin:/usr/local/bin:/usr/bin:/usr/sbin:/sbin");
     std::env::set_var("HOME", "/home/rusty-penguin");
     std::env::set_var("SHELL", "/bin/sh");
     std::env::set_var("TERM", "xterm");

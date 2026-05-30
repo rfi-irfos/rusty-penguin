@@ -179,11 +179,33 @@ if ls /lib/firmware/rtw89 >/dev/null 2>&1; then
 fi
 
 # Developer tools: git, nano, ssh — essential for a real work week.
-# git is the main reason; nano for terminal editing; ssh for remote access.
 bundle_with_libs "$(command -v git    || echo /usr/bin/git)"    git
 bundle_with_libs "$(command -v nano   || echo /usr/bin/nano)"   nano
 bundle_with_libs "$(command -v ssh    || echo /usr/bin/ssh)"    ssh
 bundle_with_libs "$(command -v rsync  || echo /usr/bin/rsync)"  rsync
+
+# Ternary Intelligence Stack — preinstalled on Rusty Penguin (this IS the TIS OS).
+# Bundle the compiled crates.io binaries from the host's ~/.cargo/bin.
+# They only need libgcc/libm/libc which are already in the initramfs.
+mkdir -p "$INITRAMFS_DIR/opt/tis/bin"
+TIS_BINS=(
+    "$HOME/.cargo/bin/albert"
+    "$HOME/.cargo/bin/albert-cli"
+    "$HOME/.cargo/bin/ternlang"
+    "$HOME/.cargo/bin/ternlang-mcp"
+    "$HOME/.cargo/bin/ternpkg"
+)
+for bin in "${TIS_BINS[@]}"; do
+    [ -x "$bin" ] || continue
+    name=$(basename "$bin")
+    cp "$bin" "$INITRAMFS_DIR/opt/tis/bin/$name"
+    # Also symlink into /bin so they're on PATH without a prefix.
+    ln -sf "/opt/tis/bin/$name" "$INITRAMFS_DIR/bin/$name"
+    echo "[build] bundled TIS: $name ($(du -h "$bin" | cut -f1))"
+done
+# Create the TIS marker file so the desktop TIS Console app knows it's native.
+echo "tis_version=1.5.0" > "$INITRAMFS_DIR/opt/tis/VERSION"
+echo "built=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$INITRAMFS_DIR/opt/tis/VERSION"
 # Also bundle git-related scripts that live in /usr/lib/git-core
 if [ -d /usr/lib/git-core ]; then
     mkdir -p "$INITRAMFS_DIR/usr/lib/git-core"
