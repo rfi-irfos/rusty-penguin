@@ -2,30 +2,28 @@
 
 [![Language: Rust](https://img.shields.io/badge/Language-Rust-ce422b?logo=rust)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green)](LICENSE)
-[![Version: 2.0.0-bm](https://img.shields.io/badge/Version-2.0.0--bare--metal-blue)](https://github.com/rfi-irfos/rusty-penguin)
+[![Version: 2.1.0](https://img.shields.io/badge/Version-2.1.0-blue)](https://github.com/rfi-irfos/rusty-penguin)
 [![Platform: x86_64](https://img.shields.io/badge/Platform-x86__64-333)](https://en.wikipedia.org/wiki/X86-64)
 [![Kernel: Pure Rust](https://img.shields.io/badge/Kernel-Pure%20Rust%2C%20no%20libc-purple)](https://github.com/rfi-irfos/rusty-penguin)
 [![Status: Active Development](https://img.shields.io/badge/Status-Active%20Development-brightgreen)](https://github.com/rfi-irfos/rusty-penguin/pulse)
 
 > "Binary hardware. Ternary mind."
 
-**Rusty Penguin is a complete operating system, written from scratch in pure Rust
-— its own bootloader, kernel, drivers, window manager and apps, with no Linux
-kernel and no libc underneath. The goal is plain: a daily-driver desktop OS you
-can install in place of Ubuntu. Ternary logic (`-1 / 0 / +1`) is a first-class
-primitive at every layer, from the scheduler to the AI runtime.**
-
-This is one OS, not a kit. When you boot the ISO, the preselected entry boots
-the bare-metal Rust kernel straight into the Rusty Penguin desktop. Everything
-— the look, the logic, the updates — lives in that one system.
+**Rusty Penguin is a complete operating system written from scratch in pure Rust —
+its own bootloader, kernel, drivers, window manager and apps, with no Linux kernel
+and no libc underneath. The goal: a daily-driver desktop OS you can install in
+place of Ubuntu. Ternary logic (`-1 / 0 / +1`) is a first-class primitive at
+every layer, from the scheduler to the AI runtime.**
 
 Built by [RFI-IRFOS](https://github.com/rfi-irfos) as part of the
 [Ternary Intelligence Stack](https://ternlang.com).
+Preinstalled: `albert` · `ternlang` · `albert-cli` · `ternlang-mcp`
 
-![Rusty Penguin desktop — start menu and the native browser](docs/rusty-penguin-desktop-v2.png)
+![Rusty Penguin desktop — start menu and native browser](docs/rusty-penguin-desktop-v2.png)
 
-*The bare-metal Rust desktop: floating dock, start menu, and the native browser —
-all rendered by Rusty Penguin's own framebuffer, anti-aliased font and CSS engine.*
+*Bare-metal Rust desktop at 1920×1080: floating dock, Aero glass panels, live web
+browser, Sound mixer, Kernel Manager, terminal with git/wget/fetch — all rendered
+by Rusty Penguin's own framebuffer, font and CSS engine. No X11, no Wayland.*
 
 ---
 
