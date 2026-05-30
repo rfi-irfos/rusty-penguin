@@ -148,6 +148,36 @@ if command -v wpa_passphrase >/dev/null 2>&1; then
     echo "[build] bundled wpa_passphrase"
 fi
 
+# WiFi firmware — WITHOUT firmware blobs, Intel WiFi cards won't initialize
+# even with wpa_supplicant present. Copy all iwlwifi .ucode.zst files (168
+# files, ~14 MB compressed). The kernel decompresses them transparently.
+# Also copy Realtek (rtw88/rtw89) and Qualcomm (ath10k/ath11k) for broader coverage.
+FWDIR="$INITRAMFS_DIR/lib/firmware"
+mkdir -p "$FWDIR/intel/iwlwifi"
+# Bundle modern Intel WiFi firmware (2013–present chips: 7260/7265/8265/9260/
+# Qu/Ty/so/cc/bz — covers most laptops sold since ~2013). Older chips omitted.
+# Use .zst files directly; Linux kernel decompresses them transparently.
+for pat in "7260" "7265" "8000" "8265" "9000" "9260" "Qu" "Ty" "so-" "cc-" "bz-"; do
+    for f in /lib/firmware/intel/iwlwifi/iwlwifi-${pat}*.ucode.zst; do
+        [ -f "$f" ] && cp "$f" "$FWDIR/intel/iwlwifi/"
+    done
+done
+n_fw=$(ls "$FWDIR/intel/iwlwifi/" 2>/dev/null | wc -l)
+if [ "$n_fw" -gt 0 ]; then
+    # Symlink compat paths.
+    (cd "$FWDIR" && for f in intel/iwlwifi/*.ucode.zst; do
+        base=$(basename "$f"); [ ! -e "$base" ] && ln -s "$f" "$base"
+    done)
+    echo "[build] bundled $n_fw Intel iwlwifi firmware files"
+fi
+# Realtek WiFi firmware (rtw89 covers RTL8852/8922/8851 — many 2020+ laptops).
+# Files are .bin.zst — copy all of them (kernel decompresses transparently).
+if ls /lib/firmware/rtw89 >/dev/null 2>&1; then
+    mkdir -p "$FWDIR/rtw89" && cp /lib/firmware/rtw89/*.bin.zst "$FWDIR/rtw89/" 2>/dev/null
+    n_rtw=$(ls "$FWDIR/rtw89/" 2>/dev/null | wc -l)
+    [ "$n_rtw" -gt 0 ] && echo "[build] bundled $n_rtw rtw89 firmware files"
+fi
+
 # Developer tools: git, nano, ssh — essential for a real work week.
 # git is the main reason; nano for terminal editing; ssh for remote access.
 bundle_with_libs "$(command -v git    || echo /usr/bin/git)"    git
