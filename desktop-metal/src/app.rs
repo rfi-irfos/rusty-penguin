@@ -1598,7 +1598,7 @@ impl App for Browser {
         let bg_back = if can_back { 0x39443E } else { 0x232C28 };
         let fg_back = if can_back { 0x6FE18B } else { 0x6B756D };
         fb.fill_rounded_rect(x as i32 + 6, by, 22, 22, 6, bg_back);
-        fb.draw_str(x + 14, y + 12, "<", fg_back, bg_back);
+        fb.draw_aa(x as i32 + 13, by + 3, "<", fg_back, crate::fb::AA_S);
         // Address bar
         let ax = x + 6 + 3 * 26 + 6;
         let aw = (x + w).saturating_sub(ax + 8);

@@ -534,29 +534,43 @@ fn draw_topbar(fb: &mut Framebuffer, time: &str, s: &SysStats, ticks: u64) {
         cx += 15;
     }
 
-    // Clock — right-aligned wall-clock string.
-    let clk_y = (ty + 14) as u32;
-    let clk_x = (pr - 10 - time.len() as i32 * 8).max(trx + 90) as u32;
-    fb.draw_str(clk_x, clk_y, time, WHITE, PANEL_SOLID);
+    // Anti-aliased tray text, baseline-aligned to the ternary bus cells so the
+    // clock/MEM/BAT read as one crisp row (no more bitmap "roboto" look).
+    let txt_top = cyy - 1; // AA_T ascent 13 → baseline sits centred on the 12px cells
+    const TRAY_GAP: i32 = 16; // space between each tray group
+
+    // Clock — right-aligned wall-clock string, drawn last so it owns the edge.
+    let clk_w = Framebuffer::aa_w(time, crate::fb::AA_T);
+    let clk_x = (pr - 12 - clk_w).max(trx + 90);
+    fb.draw_aa(clk_x, txt_top, time, WHITE, crate::fb::AA_T);
 
     // Memory % to the left of the clock.
     let mem_col = if s.mem_pct > 80 { TRIT_NEG } else if s.mem_pct > 60 { AMBER } else { GREEN };
     let mut mp = Strbuf::new(); mp.push_u64(s.mem_pct as u64); mp.push(b'%');
     let mp_s = mp.as_str();
-    let lbl_x = (clk_x as i32 - (4 + mp_s.len() as i32) * 8 - 16).max(trx as i32 + 90) as u32;
-    fb.draw_str(lbl_x, clk_y, "MEM", DIM, PANEL_SOLID);
-    fb.draw_str(lbl_x + 32, clk_y, mp_s, mem_col, PANEL_SOLID);
+    let mem_lbl_w = Framebuffer::aa_w("MEM ", crate::fb::AA_T);
+    let mem_val_w = Framebuffer::aa_w(mp_s, crate::fb::AA_T);
+    let mem_x = (clk_x - TRAY_GAP - mem_lbl_w - mem_val_w).max(trx + 90);
+    fb.draw_aa(mem_x, txt_top, "MEM", DIM, crate::fb::AA_T);
+    fb.draw_aa(mem_x + mem_lbl_w, txt_top, mp_s, mem_col, crate::fb::AA_T);
 
-    // Battery indicator — read from ACPI via sys_battery (#20).
-    // Returns 0xFF if not available (no ACPI EC or desktop). Shows "BAT xx%"
-    // or "AC" (plugged in, no battery info) or nothing on desktop PCs.
+    // Battery indicator — read from ACPI via sys_battery (#20). Returns 0xFF if
+    // unavailable; on QEMU/desktop with no EC we show a static "AC" pill so the
+    // user always sees a power state in the tray rather than a blank gap.
     let batt = unsafe { sys_battery_pct() };
+    let bat_lbl_w = Framebuffer::aa_w("BAT ", crate::fb::AA_T);
     if batt <= 100 {
         let bat_col = if batt < 15 { TRIT_NEG } else if batt < 30 { AMBER } else { GREEN };
         let mut bb = Strbuf::new(); bb.push_u64(batt as u64); bb.push(b'%');
-        let bat_x = (lbl_x as i32 - (4 + bb.as_str().len() as i32) * 8 - 16).max(trx as i32 + 90) as u32;
-        fb.draw_str(bat_x, clk_y, "BAT", DIM, PANEL_SOLID);
-        fb.draw_str(bat_x + 32, clk_y, bb.as_str(), bat_col, PANEL_SOLID);
+        let bs = bb.as_str();
+        let bat_val_w = Framebuffer::aa_w(bs, crate::fb::AA_T);
+        let bat_x = (mem_x - TRAY_GAP - bat_lbl_w - bat_val_w).max(trx + 90);
+        fb.draw_aa(bat_x, txt_top, "BAT", DIM, crate::fb::AA_T);
+        fb.draw_aa(bat_x + bat_lbl_w, txt_top, bs, bat_col, crate::fb::AA_T);
+    } else {
+        let ac_w = Framebuffer::aa_w("AC", crate::fb::AA_T);
+        let ac_x = (mem_x - TRAY_GAP - ac_w).max(trx + 90);
+        fb.draw_aa(ac_x, txt_top, "AC", 0x6FE18B, crate::fb::AA_T);
     }
     let _ = ticks;
 }
@@ -672,7 +686,7 @@ fn draw_taskbar_win_btns(fb: &mut Framebuffer, term_wins: &[TermWin]) {
         let short = title.find(" - ").map(|i| &title[..i]).unwrap_or(title);
         let max_chars = ((w - 28) / 8).max(0) as usize;
         let lbl = &short[..max_chars.min(short.len())];
-        fb.draw_str((x + 22) as u32, (y + 14) as u32, lbl, txt, bg);
+        fb.draw_aa(x + 22, y + 12, lbl, txt, crate::fb::AA_T);
         // focus underline
         if is_focused { fb.fill_rect_s(x + 9, y + h - 5, w - 18, 2, GREEN); }
     }
@@ -935,8 +949,7 @@ fn draw_ctx_menu_hover(fb: &mut Framebuffer, mx: i32, my: i32, hover: Option<usi
                 fb.fill_rect_s(x + 4, cy + 5, 3, CTX_ITEM_H - 10, *color);
             }
             // Label text
-            let ty = (cy + (CTX_ITEM_H - 8) / 2) as u32;
-            fb.draw_str((x + 14) as u32, ty, label, *color, bg);
+            fb.draw_aa(x + 14, cy + (CTX_ITEM_H - Framebuffer::aa_line(crate::fb::AA_S)) / 2, label, *color, crate::fb::AA_S);
             cy += CTX_ITEM_H;
         }
     }

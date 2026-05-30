@@ -427,7 +427,7 @@ fn parse_tcp(rx: &[u8], len: usize) -> Option<(u32, u32, u8, usize, usize)> {
 /// number of bytes captured, or `None` on failure. `next_mac` is the on-link
 /// next hop — the SLIRP gateway for any remote (off-link) destination.
 fn tcp_http_get(next_mac: &[u8; 6], dst_ip: [u8; 4], dport: u16, host: &str,
-                out: &mut [u8]) -> Option<usize> {
+                path: &str, out: &mut [u8]) -> Option<usize> {
     let gw_mac = next_mac;
     let nic = match nic() { Some(n) => n, None => return None };
     let mac = nic.mac;
@@ -468,11 +468,13 @@ fn tcp_http_get(next_mac: &[u8; 6], dst_ip: [u8; 4], dport: u16, host: &str,
     // ACK the handshake, then PSH the HTTP request.
     let n = build_tcp(&mut f, gw_mac, &mac, &OUR_IP, &dst_ip, dport, snd, rcv_nxt, TCP_ACK, &[]);
     nic.send(&f[..n]);
-    // Build "GET / HTTP/1.0\r\nHost: <host>\r\nConnection: close\r\n\r\n".
-    let mut reqbuf = [0u8; 160];
+    // Build "GET <path> HTTP/1.0\r\nHost: <host>\r\nConnection: close\r\n\r\n".
+    let mut reqbuf = [0u8; 384];
     let mut rl = 0;
-    for part in [b"GET / HTTP/1.0\r\nHost: ".as_slice(), host.as_bytes(),
-                 b"\r\nConnection: close\r\n\r\n".as_slice()] {
+    let safe_path = if path.is_empty() { "/" } else { path };
+    for part in [b"GET ".as_slice(), safe_path.as_bytes(),
+                 b" HTTP/1.0\r\nHost: ".as_slice(), host.as_bytes(),
+                 b"\r\nUser-Agent: RustyPenguin/2.1\r\nConnection: close\r\n\r\n".as_slice()] {
         let take = part.len().min(reqbuf.len() - rl);
         reqbuf[rl..rl + take].copy_from_slice(&part[..take]);
         rl += take;
@@ -480,7 +482,7 @@ fn tcp_http_get(next_mac: &[u8; 6], dst_ip: [u8; 4], dport: u16, host: &str,
     let req = &reqbuf[..rl];
     let n = build_tcp(&mut f, gw_mac, &mac, &OUR_IP, &dst_ip, dport, snd, rcv_nxt, TCP_PSH | TCP_ACK, req);
     nic.send(&f[..n]);
-    crate::serial::write_str("  [net] HTTP GET / sent\n");
+    crate::serial::write_str("  [net] HTTP GET sent\n");
 
     // Receive the response stream; ACK in-order data, log the status line.
     let mut total = 0usize;
@@ -697,8 +699,150 @@ pub fn http_get(host: &str, out: &mut [u8]) -> Option<usize> {
         if !NET_UP { return None; }
         (GW_MAC?, DNS_MAC?)
     };
-    let ip = dns_resolve(&dns, host)?;
-    tcp_http_get(&gw, ip, 80, host, out)
+    // Current target host + path; follow up to MAX_REDIR plain-HTTP 3xx hops.
+    let mut hostbuf = [0u8; 128];
+    let mut pathbuf = [0u8; 256];
+    let hl = host.len().min(hostbuf.len());
+    hostbuf[..hl].copy_from_slice(&host.as_bytes()[..hl]);
+    let mut host_len = hl;
+    pathbuf[0] = b'/';
+    let mut path_len = 1usize;
+
+    const MAX_REDIR: usize = 5;
+    for hop in 0..=MAX_REDIR {
+        let cur_host = core::str::from_utf8(&hostbuf[..host_len]).ok()?;
+        let cur_path = core::str::from_utf8(&pathbuf[..path_len]).unwrap_or("/");
+        let ip = dns_resolve(&dns, cur_host)?;
+        let n = tcp_http_get(&gw, ip, 80, cur_host, cur_path, out)?;
+        let resp = &out[..n];
+        match http_status(resp) {
+            Some(code) if (301..=308).contains(&code) && code != 304 && hop < MAX_REDIR => {
+                // Follow the Location header. On plain http:// we re-fetch; on
+                // https:// we cannot (no TLS in the HTTP path) — write an honest
+                // notice into `out` and stop following.
+                let mut nh = [0u8; 128];
+                let mut np = [0u8; 256];
+                match parse_location(resp, &mut nh, &mut np) {
+                    Some((true /* https */, _, _)) => {
+                        return Some(write_https_notice(cur_host, out));
+                    }
+                    Some((false, nhl, npl)) => {
+                        hostbuf[..nhl].copy_from_slice(&nh[..nhl]);
+                        host_len = nhl;
+                        let npl = npl.max(1);
+                        pathbuf[..npl].copy_from_slice(&np[..npl]);
+                        path_len = npl;
+                        crate::serial::write_str("  [net] redirect -> ");
+                        crate::serial::write_str(core::str::from_utf8(&hostbuf[..host_len]).unwrap_or("?"));
+                        crate::serial::write_str("\n");
+                        continue;
+                    }
+                    None => return Some(n), // no parseable Location → show what we got
+                }
+            }
+            _ => return Some(n),
+        }
+    }
+    None
+}
+
+/// Parse the numeric HTTP status code from a response's status line
+/// ("HTTP/1.1 301 ..." -> 301). Returns None if it doesn't look like HTTP.
+fn http_status(resp: &[u8]) -> Option<u16> {
+    if !resp.starts_with(b"HTTP/") { return None; }
+    // status line: HTTP/x.y SP code SP reason
+    let sp = resp.iter().position(|&b| b == b' ')?;
+    let rest = &resp[sp + 1..];
+    let mut code = 0u16;
+    let mut any = false;
+    for &b in rest {
+        if b.is_ascii_digit() { code = code.wrapping_mul(10) + (b - b'0') as u16; any = true; }
+        else { break; }
+    }
+    if any { Some(code) } else { None }
+}
+
+/// Extract the `Location:` header target into (host, path) buffers.
+/// Returns (is_https, host_len, path_len). Handles absolute URLs
+/// (`http://host/path`) and bare paths (`/path`, relative to current host=unchanged).
+fn parse_location(resp: &[u8], host_out: &mut [u8], path_out: &mut [u8]) -> Option<(bool, usize, usize)> {
+    // Find "\nlocation:" case-insensitively.
+    let loc = find_header(resp, b"location:")?;
+    // loc points just past the colon; skip spaces.
+    let mut i = 0;
+    while i < loc.len() && (loc[i] == b' ' || loc[i] == b'\t') { i += 1; }
+    let val = &loc[i..];
+    // value ends at CR or LF
+    let end = val.iter().position(|&b| b == b'\r' || b == b'\n').unwrap_or(val.len());
+    let val = &val[..end];
+    if val.is_empty() { return None; }
+
+    let (is_https, after_scheme) = if starts_with_ci(val, b"https://") {
+        (true, &val[8..])
+    } else if starts_with_ci(val, b"http://") {
+        (false, &val[7..])
+    } else {
+        // Relative path: keep host (signal by host_len 0), copy path.
+        let pl = val.len().min(path_out.len());
+        path_out[..pl].copy_from_slice(&val[..pl]);
+        return Some((false, 0, pl));
+    };
+    // host runs until '/', '?', or end; path is the remainder (default "/").
+    let hsep = after_scheme.iter().position(|&b| b == b'/' || b == b'?').unwrap_or(after_scheme.len());
+    let host = &after_scheme[..hsep];
+    let path = &after_scheme[hsep..];
+    let hl = host.len().min(host_out.len());
+    host_out[..hl].copy_from_slice(&host[..hl]);
+    if path.is_empty() {
+        path_out[0] = b'/';
+        Some((is_https, hl, 1))
+    } else {
+        let pl = path.len().min(path_out.len());
+        path_out[..pl].copy_from_slice(&path[..pl]);
+        Some((is_https, hl, pl))
+    }
+}
+
+/// Case-insensitive search for a header line; returns the slice just after the
+/// header name + ':' (the value, still including leading spaces and CRLF).
+fn find_header<'a>(resp: &'a [u8], name_colon: &[u8]) -> Option<&'a [u8]> {
+    let mut i = 0;
+    while i + name_colon.len() <= resp.len() {
+        // header starts at line beginning (after a \n) or at buffer start
+        let at_line_start = i == 0 || resp[i - 1] == b'\n';
+        if at_line_start && starts_with_ci(&resp[i..], name_colon) {
+            return Some(&resp[i + name_colon.len()..]);
+        }
+        i += 1;
+    }
+    None
+}
+
+fn starts_with_ci(hay: &[u8], needle: &[u8]) -> bool {
+    if hay.len() < needle.len() { return false; }
+    for (a, b) in hay.iter().zip(needle.iter()) {
+        if a.to_ascii_lowercase() != b.to_ascii_lowercase() { return false; }
+    }
+    true
+}
+
+/// When a site redirects to https:// and we have no TLS on this path, write a
+/// short, honest HTML-ish notice into `out` so the browser shows something
+/// readable instead of a raw "301 Moved" body.
+fn write_https_notice(host: &str, out: &mut [u8]) -> usize {
+    let mut w = 0usize;
+    for part in [
+        b"HTTP/1.0 200 OK\r\nContent-Type: text/html\r\n\r\n".as_slice(),
+        b"<h1>HTTPS required</h1><p>".as_slice(),
+        host.as_bytes(),
+        b" redirects to https://. Secure TLS browsing is handled by the dedicated TLS path.</p>".as_slice(),
+    ] {
+        let take = part.len().min(out.len() - w);
+        out[w..w + take].copy_from_slice(&part[..take]);
+        w += take;
+        if w >= out.len() { break; }
+    }
+    w
 }
 
 /// Bring up the NIC, ARP the gateway, then ping it. Ternary result:
@@ -744,7 +888,7 @@ pub fn init() -> ternary_core::Trit {
     // Local loopback proof: TCP + HTTP from the host via SLIRP (10.0.2.2:8088).
     // Logged; fails fast with RST if no server is listening, so it never stalls.
     let mut scratch = [0u8; 256];
-    let _ = tcp_http_get(&gw, GW_IP, 8088, "10.0.2.2:8088", &mut scratch);
+    let _ = tcp_http_get(&gw, GW_IP, 8088, "10.0.2.2:8088", "/", &mut scratch);
     match lease {
         Some(_) => Trit::Pos, // full DHCP lease — the strongest proof
         None    => Trit::Zero,
