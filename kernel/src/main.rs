@@ -34,6 +34,7 @@ mod net;
 mod usb;
 mod crypto;
 mod tls;
+mod ahci;
 
 use ternary_core::{Trit, Tryte};
 use mathematics::{mul_tryte, consensus, scale};
@@ -291,6 +292,17 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
         vga::write_str("  [crypto: TLS primitives OK]\n", vga::Color::Green);
     } else {
         vga::write_str("  [crypto: SELF-TEST FAILED]\n", vga::Color::Red);
+    }
+
+    // AHCI/SATA disk — the persistence brick. Probe + write/read self-test.
+    if ahci::init() {
+        if ahci::selftest() {
+            vga::write_str("  [disk: AHCI SATA read/write OK]\n", vga::Color::Green);
+        } else {
+            vga::write_str("  [disk: AHCI present, self-test failed]\n", vga::Color::Amber);
+        }
+    } else {
+        vga::write_str("  [disk: no AHCI disk]\n", vga::Color::Amber);
     }
 
     // Ternary math demo
