@@ -478,6 +478,16 @@ pub extern "C" fn syscall_handler(nr: u64, arg1: u64, arg2: u64, arg3: u64) -> u
             // Not all ACPI ECs are at these ports — returns 0xFF if not responsive.
             unsafe { acpi_battery_pct() as u64 }
         }
+        21 => {
+            // sys_kbd_layout(arg1): 0 = query, 1 = set EN (QWERTY), 2 = set DE (QWERTZ).
+            // Returns the current layout afterward: 0 = EN, 1 = DE.
+            match arg1 {
+                1 => crate::idt::set_layout_de(false),
+                2 => crate::idt::set_layout_de(true),
+                _ => {}
+            }
+            if crate::idt::layout_is_de() { 1 } else { 0 }
+        }
         39 => {
             // sys_getpid → current PID
             crate::sched::current_pid()

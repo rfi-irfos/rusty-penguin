@@ -234,9 +234,79 @@ extern "x86-interrupt" fn irq_keyboard(_f: InterruptFrame) {
     unsafe { pic::eoi(1); }
 }
 
+// Keyboard layout: true = German QWERTZ (default), false = US English QWERTY.
+// Toggled at runtime via sys_kbd_layout (#21) from the desktop tray.
+static mut KBD_DE: bool = true;
+pub fn set_layout_de(de: bool) { unsafe { KBD_DE = de; } }
+pub fn layout_is_de() -> bool { unsafe { KBD_DE } }
+
+fn sc_to_char(sc: u8, shift: bool, altgr: bool, caps: bool) -> Option<u8> {
+    if unsafe { KBD_DE } { sc_to_char_de(sc, shift, altgr, caps) }
+    else { sc_to_char_en(sc, shift, caps) }
+}
+
+// US English QWERTY layout (plain ASCII).
+fn sc_to_char_en(sc: u8, shift: bool, caps: bool) -> Option<u8> {
+    if sc & 0x80 != 0 { return None; }
+    let up = caps ^ shift;
+    Some(match sc {
+        0x02 => if shift { b'!' } else { b'1' },
+        0x03 => if shift { b'@' } else { b'2' },
+        0x04 => if shift { b'#' } else { b'3' },
+        0x05 => if shift { b'$' } else { b'4' },
+        0x06 => if shift { b'%' } else { b'5' },
+        0x07 => if shift { b'^' } else { b'6' },
+        0x08 => if shift { b'&' } else { b'7' },
+        0x09 => if shift { b'*' } else { b'8' },
+        0x0A => if shift { b'(' } else { b'9' },
+        0x0B => if shift { b')' } else { b'0' },
+        0x0C => if shift { b'_' } else { b'-' },
+        0x0D => if shift { b'+' } else { b'=' },
+        0x10 => if up { b'Q' } else { b'q' },
+        0x11 => if up { b'W' } else { b'w' },
+        0x12 => if up { b'E' } else { b'e' },
+        0x13 => if up { b'R' } else { b'r' },
+        0x14 => if up { b'T' } else { b't' },
+        0x15 => if up { b'Y' } else { b'y' },
+        0x16 => if up { b'U' } else { b'u' },
+        0x17 => if up { b'I' } else { b'i' },
+        0x18 => if up { b'O' } else { b'o' },
+        0x19 => if up { b'P' } else { b'p' },
+        0x1A => if shift { b'{' } else { b'[' },
+        0x1B => if shift { b'}' } else { b']' },
+        0x1C => b'\n',
+        0x1E => if up { b'A' } else { b'a' },
+        0x1F => if up { b'S' } else { b's' },
+        0x20 => if up { b'D' } else { b'd' },
+        0x21 => if up { b'F' } else { b'f' },
+        0x22 => if up { b'G' } else { b'g' },
+        0x23 => if up { b'H' } else { b'h' },
+        0x24 => if up { b'J' } else { b'j' },
+        0x25 => if up { b'K' } else { b'k' },
+        0x26 => if up { b'L' } else { b'l' },
+        0x27 => if shift { b':' } else { b';' },
+        0x28 => if shift { b'"' } else { b'\'' },
+        0x29 => if shift { b'~' } else { b'`' },
+        0x2B => if shift { b'|' } else { b'\\' },
+        0x2C => if up { b'Z' } else { b'z' },
+        0x2D => if up { b'X' } else { b'x' },
+        0x2E => if up { b'C' } else { b'c' },
+        0x2F => if up { b'V' } else { b'v' },
+        0x30 => if up { b'B' } else { b'b' },
+        0x31 => if up { b'N' } else { b'n' },
+        0x32 => if up { b'M' } else { b'm' },
+        0x33 => if shift { b'<' } else { b',' },
+        0x34 => if shift { b'>' } else { b'.' },
+        0x35 => if shift { b'?' } else { b'/' },
+        0x39 => b' ',
+        0x56 => if shift { b'>' } else { b'<' },
+        _ => return None,
+    })
+}
+
 // Full QWERTZ DE layout. German umlauts use CP437 encoding (VGA text mode).
 // ä=0x84  Ä=0x8E  ö=0x94  Ö=0x99  ü=0x81  Ü=0x9A  ß=0xE1  °=0xF8
-fn sc_to_char(sc: u8, shift: bool, altgr: bool, caps: bool) -> Option<u8> {
+fn sc_to_char_de(sc: u8, shift: bool, altgr: bool, caps: bool) -> Option<u8> {
     if sc & 0x80 != 0 { return None; }
     let up = caps ^ shift;  // true = uppercase letter
     Some(match sc {

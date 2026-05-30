@@ -54,6 +54,19 @@ unsafe fn sys_battery_pct() -> u32 {
     (n & 0xFF) as u32
 }
 
+/// sys_kbd_layout (#21): op 0 = query, 1 = set EN, 2 = set DE. Returns 0=EN, 1=DE.
+unsafe fn sys_kbd_layout(op: u64) -> u64 {
+    let n: u64;
+    core::arch::asm!(
+        "syscall",
+        inout("rax") 21u64 => n,
+        in("rdi") op,
+        out("rcx") _, out("r11") _,
+        options(nostack),
+    );
+    n
+}
+
 fn sys_meminfo() -> (u32, u32) {
     let n: u64;
     unsafe {
@@ -511,67 +524,100 @@ fn trit_indicator(ticks: u64) -> [u8; 7] {
     out
 }
 
+// Clickable bounds of the keyboard-layout pill, recorded each draw so the click
+// handler can toggle EN/DE without opening the quick-settings panel.
+static mut KBD_PILL: (i32, i32, i32, i32) = (0, 0, 0, 0);
+fn kbd_pill_rect() -> (i32, i32, i32, i32) { unsafe { KBD_PILL } }
+fn kbd_pill_hit(cx: i32, cy: i32) -> bool {
+    let (x, y, w, hh) = kbd_pill_rect();
+    w > 0 && cx >= x && cx < x + w && cy >= y && cy < y + hh
+}
+
+// Battery glyph: outline body + nub + a fill bar proportional to charge. When on
+// AC (no battery) we draw a small bolt instead of a fill — a real "how full" symbol.
+fn draw_battery_glyph(fb: &mut Framebuffer, x: i32, y: i32, pct: u32, has_batt: bool, fill: u32) {
+    let bw = 20; let bh = 11; let out = 0x9AA49C;
+    fb.fill_rect_s(x, y, bw, 1, out);
+    fb.fill_rect_s(x, y + bh - 1, bw, 1, out);
+    fb.fill_rect_s(x, y, 1, bh, out);
+    fb.fill_rect_s(x + bw - 1, y, 1, bh, out);
+    fb.fill_rect_s(x + bw, y + 3, 2, 5, out);              // positive terminal nub
+    if has_batt {
+        let fw = ((bw - 4) * pct as i32 / 100).max(0).min(bw - 4);
+        fb.fill_rect_s(x + 2, y + 2, fw, bh - 4, fill);
+    } else {
+        // lightning bolt for AC power
+        fb.fill_rect_s(x + 9, y + 2, 2, 4, 0x6FE18B);
+        fb.fill_rect_s(x + 7, y + 5, 6, 1, 0x6FE18B);
+        fb.fill_rect_s(x + 9, y + 5, 2, 4, 0x6FE18B);
+    }
+}
+
+// Memory glyph: a little RAM-stick chip with contact pins.
+fn draw_mem_glyph(fb: &mut Framebuffer, x: i32, y: i32, col: u32) {
+    fb.fill_rect_s(x, y, 14, 9, 0x39443E);                 // chip body
+    fb.fill_rect_s(x + 2, y + 2, 10, 1, col);              // top trace
+    fb.fill_rect_s(x + 2, y + 4, 10, 1, 0x6F796F);
+    for i in 0..4 { fb.fill_rect_s(x + 2 + i * 3, y + 9, 2, 2, col); } // pins
+}
+
 fn draw_topbar(fb: &mut Framebuffer, time: &str, s: &SysStats, ticks: u64) {
-    // v2 form: this draws the bottom-panel TRAY (right side) each frame over the
-    // solid panel — ternary {-1,0,+1} bus + clock + memory. (Name kept so the
-    // existing per-frame call sites don't change.)
+    // Bottom-panel TRAY (right side): keyboard layout · memory · battery · clock.
+    // Real system stats with real symbols — no animated cells (the old ternary
+    // bus repainted every frame and made the desktop feel laggy). Static content
+    // means the tray only repaints when a value or the clock actually changes.
     let w = fb.width; let h = fb.height;
     let ptop = panel_top(h);
     let pr = PANEL_MARGIN + (w as i32 - 2 * PANEL_MARGIN); // panel right edge
     let ty = ptop + 7;
-    // Clear the tray region with the solid panel color (no cumulative glass).
-    let tray_w = 340;
+    let tray_w = 360;
     let trx = (pr - tray_w - 6).max(PANEL_MARGIN + 8);
     fb.fill_rect_s(trx, ty, pr - trx - 6, 40, PANEL_SOLID);
 
-    // Ternary {-1,0,+1} bus — 5 cells cycling neg/zero/pos.
-    let phase = ticks / 24;
-    let mut cx = trx + 6;
-    let cyy = ptop + (PANEL_H - 12) / 2;
-    for i in 0..5i64 {
-        let col = match (phase as i64 + i).rem_euclid(3) { 0 => TRIT_NEG, 1 => TRIT_ZERO, _ => TRIT_POS };
-        fb.fill_rounded_rect(cx, cyy, 11, 12, 3, col);
-        cx += 15;
-    }
+    let cyy = ptop + (PANEL_H - 12) / 2;          // vertical centre of the 12px row
+    let txt_top = cyy - 1;                         // AA_T baseline sits on that row
+    const GAP: i32 = 14;
 
-    // Anti-aliased tray text, baseline-aligned to the ternary bus cells so the
-    // clock/MEM/BAT read as one crisp row (no more bitmap "roboto" look).
-    let txt_top = cyy - 1; // AA_T ascent 13 → baseline sits centred on the 12px cells
-    const TRAY_GAP: i32 = 16; // space between each tray group
-
-    // Clock — right-aligned wall-clock string, drawn last so it owns the edge.
+    // Clock — right-aligned, owns the edge.
     let clk_w = Framebuffer::aa_w(time, crate::fb::AA_T);
-    let clk_x = (pr - 12 - clk_w).max(trx + 90);
+    let clk_x = (pr - 12 - clk_w).max(trx + 4);
     fb.draw_aa(clk_x, txt_top, time, WHITE, crate::fb::AA_T);
 
-    // Memory % to the left of the clock.
+    // Battery — icon with proportional fill + percentage (or AC bolt).
+    let batt = unsafe { sys_battery_pct() };
+    let has_batt = batt <= 100;
+    let bat_col = if !has_batt { 0x6FE18B }
+                  else if batt < 15 { TRIT_NEG } else if batt < 30 { AMBER } else { GREEN };
+    let mut bb = Strbuf::new();
+    if has_batt { bb.push_u64(batt as u64); bb.push(b'%'); } else { for c in b"AC" { bb.push(*c); } }
+    let bs = bb.as_str();
+    let bval_w = Framebuffer::aa_w(bs, crate::fb::AA_T);
+    let bat_group = 22 + 5 + bval_w;
+    let bat_x = (clk_x - GAP - bat_group).max(trx + 4);
+    draw_battery_glyph(fb, bat_x, cyy + 1, batt.min(100), has_batt, bat_col);
+    fb.draw_aa(bat_x + 22 + 5, txt_top, bs, bat_col, crate::fb::AA_T);
+
+    // Memory — chip icon + percentage.
     let mem_col = if s.mem_pct > 80 { TRIT_NEG } else if s.mem_pct > 60 { AMBER } else { GREEN };
     let mut mp = Strbuf::new(); mp.push_u64(s.mem_pct as u64); mp.push(b'%');
     let mp_s = mp.as_str();
-    let mem_lbl_w = Framebuffer::aa_w("MEM ", crate::fb::AA_T);
-    let mem_val_w = Framebuffer::aa_w(mp_s, crate::fb::AA_T);
-    let mem_x = (clk_x - TRAY_GAP - mem_lbl_w - mem_val_w).max(trx + 90);
-    fb.draw_aa(mem_x, txt_top, "MEM", DIM, crate::fb::AA_T);
-    fb.draw_aa(mem_x + mem_lbl_w, txt_top, mp_s, mem_col, crate::fb::AA_T);
+    let mval_w = Framebuffer::aa_w(mp_s, crate::fb::AA_T);
+    let mem_group = 14 + 5 + mval_w;
+    let mem_x = (bat_x - GAP - mem_group).max(trx + 4);
+    draw_mem_glyph(fb, mem_x, cyy + 1, mem_col);
+    fb.draw_aa(mem_x + 14 + 5, txt_top, mp_s, mem_col, crate::fb::AA_T);
 
-    // Battery indicator — read from ACPI via sys_battery (#20). Returns 0xFF if
-    // unavailable; on QEMU/desktop with no EC we show a static "AC" pill so the
-    // user always sees a power state in the tray rather than a blank gap.
-    let batt = unsafe { sys_battery_pct() };
-    let bat_lbl_w = Framebuffer::aa_w("BAT ", crate::fb::AA_T);
-    if batt <= 100 {
-        let bat_col = if batt < 15 { TRIT_NEG } else if batt < 30 { AMBER } else { GREEN };
-        let mut bb = Strbuf::new(); bb.push_u64(batt as u64); bb.push(b'%');
-        let bs = bb.as_str();
-        let bat_val_w = Framebuffer::aa_w(bs, crate::fb::AA_T);
-        let bat_x = (mem_x - TRAY_GAP - bat_lbl_w - bat_val_w).max(trx + 90);
-        fb.draw_aa(bat_x, txt_top, "BAT", DIM, crate::fb::AA_T);
-        fb.draw_aa(bat_x + bat_lbl_w, txt_top, bs, bat_col, crate::fb::AA_T);
-    } else {
-        let ac_w = Framebuffer::aa_w("AC", crate::fb::AA_T);
-        let ac_x = (mem_x - TRAY_GAP - ac_w).max(trx + 90);
-        fb.draw_aa(ac_x, txt_top, "AC", 0x6FE18B, crate::fb::AA_T);
-    }
+    // Keyboard layout pill (EN / DE) — clickable to toggle, leftmost in the tray.
+    let de = unsafe { sys_kbd_layout(0) } == 1;
+    let kbl = if de { "DE" } else { "EN" };
+    let kb_w = Framebuffer::aa_w(kbl, crate::fb::AA_T);
+    let pill_w = kb_w + 16;
+    let pill_x = (mem_x - GAP - pill_w).max(trx + 4);
+    fb.fill_rounded_rect(pill_x, cyy - 2, pill_w, 16, 5, 0x39443E);
+    fb.fill_rect_s(pill_x + 6, cyy - 1, pill_w - 12, 1, 0x5A6B5E);
+    fb.draw_aa(pill_x + 8, txt_top, kbl, 0xCFE6D6, crate::fb::AA_T);
+    unsafe { KBD_PILL = (pill_x, ptop, pill_w, PANEL_H); }
+
     let _ = ticks;
 }
 
@@ -1802,7 +1848,12 @@ pub extern "C" fn _start() -> ! {
 
         if left_edge {
             let qs_open = unsafe { QS_OPEN };
-            if tray_hit(w as u32, h as u32, cx, cy) {
+            if kbd_pill_hit(cx, cy) {
+                // Toggle keyboard layout EN <-> DE via the kernel (syscall #21).
+                let cur = unsafe { sys_kbd_layout(0) };
+                unsafe { sys_kbd_layout(if cur == 1 { 1 } else { 2 }); }
+                scene_dirty = true;
+            } else if tray_hit(w as u32, h as u32, cx, cy) {
                 // Toggle the quick-settings panel from the tray.
                 unsafe { QS_OPEN = !qs_open; }
                 ctx_menu = None; start_menu_open = false;
