@@ -1,6 +1,58 @@
 use crate::vga;
 use crate::gdt;
 
+// ── ACPI EC battery reader ────────────────────────────────────────────────────
+// ACPI Embedded Controller (EC) at I/O ports 0x62 (data) / 0x66 (command).
+// This is the standard ACPI EC used by virtually all laptops.
+// Returns battery percentage 0-100, or 0xFF if EC not present/not responsive.
+//
+// ACPI EC register map (common across most laptop BIOSes):
+//   0x2A = BFC high byte (full charge capacity, mAh or mWh)
+//   0x2B = BFC low byte
+//   0x44 = BRC high byte (remaining capacity)
+//   0x45 = BRC low byte
+//
+// Ternary lens: battery state is a Trit + percentage:
+//   +1 Charging/full, 0 Discharging (ok), -1 Critical (<15%)
+const EC_DATA:  u16 = 0x62;
+const EC_CMD:   u16 = 0x66;
+const EC_OBF:   u8  = 1;   // output buffer full (data ready to read)
+const EC_IBF:   u8  = 2;   // input buffer full (busy, not ready for cmd)
+const EC_READ:  u8  = 0x80; // EC read command
+
+unsafe fn ec_wait_ibf() -> bool {
+    let mut t = 0u32;
+    while crate::port::inb(EC_CMD) & EC_IBF != 0 && t < 100_000 { t += 1; }
+    t < 100_000
+}
+unsafe fn ec_wait_obf() -> bool {
+    let mut t = 0u32;
+    while crate::port::inb(EC_CMD) & EC_OBF == 0 && t < 100_000 { t += 1; }
+    t < 100_000
+}
+unsafe fn ec_read(reg: u8) -> Option<u8> {
+    if !ec_wait_ibf() { return None; }
+    crate::port::outb(EC_CMD, EC_READ);
+    if !ec_wait_ibf() { return None; }
+    crate::port::outb(EC_DATA, reg);
+    if !ec_wait_obf() { return None; }
+    Some(crate::port::inb(EC_DATA))
+}
+
+unsafe fn acpi_battery_pct() -> u8 {
+    // Can't use ? in non-Option context; inline the chain.
+    let status = crate::port::inb(EC_CMD);
+    if status == 0xFF { return 0xFF; }
+    let Some(brc_hi) = ec_read(0x44) else { return 0xFF; };
+    let Some(brc_lo) = ec_read(0x45) else { return 0xFF; };
+    let Some(bfc_hi) = ec_read(0x2A) else { return 0xFF; };
+    let Some(bfc_lo) = ec_read(0x2B) else { return 0xFF; };
+    let remaining = ((brc_hi as u32) << 8) | brc_lo as u32;
+    let full      = ((bfc_hi as u32) << 8) | bfc_lo as u32;
+    if full == 0 || remaining > full * 2 { return 0xFF; }
+    ((remaining * 100) / full).min(100) as u8
+}
+
 // ── MSR addresses ────────────────────────────────────────────────────────────
 const IA32_EFER:  u32 = 0xC000_0080;
 const IA32_STAR:  u32 = 0xC000_0081;
@@ -418,6 +470,13 @@ pub extern "C" fn syscall_handler(nr: u64, arg1: u64, arg2: u64, arg3: u64) -> u
             // sys_yield — cooperative yield (no-op: single process)
             crate::sched::yield_();
             0
+        }
+        20 => {
+            // sys_battery_pct → battery percentage 0-100, or 0xFF if unavailable.
+            // Reads ACPI EC battery capacity via I/O port 0x66 (EC command) / 0x62 (EC data).
+            // EC register 0x44 = remaining capacity (BRC), 0x2A = full charge capacity (BFC).
+            // Not all ACPI ECs are at these ports — returns 0xFF if not responsive.
+            unsafe { acpi_battery_pct() as u64 }
         }
         39 => {
             // sys_getpid → current PID

@@ -41,6 +41,19 @@ fn sys_ticks() -> u64 {
     n
 }
 
+/// sys_battery_pct (#20) → battery percentage 0-100, or 0xFF if unavailable.
+unsafe fn sys_battery_pct() -> u32 {
+    let n: u64;
+    core::arch::asm!(
+        "syscall",
+        inout("rax") 20u64 => n,
+        in("rdi") 0u64,
+        out("rcx") _, out("r11") _,
+        options(nostack),
+    );
+    (n & 0xFF) as u32
+}
+
 fn sys_meminfo() -> (u32, u32) {
     let n: u64;
     unsafe {
@@ -533,6 +546,18 @@ fn draw_topbar(fb: &mut Framebuffer, time: &str, s: &SysStats, ticks: u64) {
     let lbl_x = (clk_x as i32 - (4 + mp_s.len() as i32) * 8 - 16).max(trx as i32 + 90) as u32;
     fb.draw_str(lbl_x, clk_y, "MEM", DIM, PANEL_SOLID);
     fb.draw_str(lbl_x + 32, clk_y, mp_s, mem_col, PANEL_SOLID);
+
+    // Battery indicator — read from ACPI via sys_battery (#20).
+    // Returns 0xFF if not available (no ACPI EC or desktop). Shows "BAT xx%"
+    // or "AC" (plugged in, no battery info) or nothing on desktop PCs.
+    let batt = unsafe { sys_battery_pct() };
+    if batt <= 100 {
+        let bat_col = if batt < 15 { TRIT_NEG } else if batt < 30 { AMBER } else { GREEN };
+        let mut bb = Strbuf::new(); bb.push_u64(batt as u64); bb.push(b'%');
+        let bat_x = (lbl_x as i32 - (4 + bb.as_str().len() as i32) * 8 - 16).max(trx as i32 + 90) as u32;
+        fb.draw_str(bat_x, clk_y, "BAT", DIM, PANEL_SOLID);
+        fb.draw_str(bat_x + 32, clk_y, bb.as_str(), bat_col, PANEL_SOLID);
+    }
     let _ = ticks;
 }
 
