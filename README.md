@@ -21,11 +21,10 @@ Preinstalled: `albert` · `ternlang` · `albert-cli` · `ternlang-mcp`
 
 ![Rusty Penguin desktop v2.3](docs/rusty-penguin-desktop-v2.3.png)
 
-*Bare-metal Rust desktop at 1920×1080: deep midnight-blue wallpaper, floating dock
-(Terminal · Files · Browser · Editor · Calculator · TIS · DOOM), live web browser
-(TCP/IP + TLS 1.3 from scratch), multi-user login, RPFS persistent filesystem — all
-rendered by Rusty Penguin's own framebuffer, font and CSS engine. No X11, no Wayland,
-no libc.*
+*Live multitasking on bare metal at 1920×1080: browser fetching google.com/search
+over TLS 1.3 from scratch (clickable results rendered in our own HTML engine) running
+alongside the DOOM raycaster — two windows, two taskbar entries, no X11, no Wayland,
+no libc, no Linux kernel.*
 
 ---
 

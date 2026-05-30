@@ -1571,13 +1571,7 @@ fn open_snake(w: i32, h: i32, n: usize) -> Option<TermWin> {
     }
 }
 
-fn open_doom(w: i32, h: i32, n: usize) -> Option<TermWin> {
-    // Try real fbDOOM (Linux binary in initrd).  sys_exec_linux() hands control
-    // to the kernel which IRETs into fbDOOM; if that succeeds this line is never
-    // reached.  It only returns (u64::MAX) when fbdoom is absent from the initrd,
-    // in which case fall back to the pure-Rust raycaster.
-    sys_exec_linux(b"bin/fbdoom");
-    // --- fallback: pure-Rust raycaster ---
+fn open_doom_raycaster(w: i32, h: i32, n: usize) -> Option<TermWin> {
     match term::Terminal::spawn() {
         Ok(t) => {
             let game = alloc::boxed::Box::new(app::Doom::new(sys_ticks()));
@@ -1774,6 +1768,11 @@ pub extern "C" fn _start() -> ! {
                 }
             } else if k == 0x02 { // Ctrl+B — open browser
                 if let Some(tw) = open_browser(w, h, wins.len()) {
+                    wins.push(tw);
+                    scene_dirty = true;
+                }
+            } else if k == 0x04 { // Ctrl+D — open DOOM raycaster window
+                if let Some(tw) = open_doom_raycaster(w, h, wins.len()) {
                     wins.push(tw);
                     scene_dirty = true;
                 }
@@ -1981,7 +1980,7 @@ pub extern "C" fn _start() -> ! {
                             MenuLaunch::App(5)   => open_tis_console(w, h, wins.len()),
                             MenuLaunch::App(6)   => open_snake(w, h, wins.len()),
                             MenuLaunch::App(7)   => open_minesweeper(w, h, wins.len()),
-                            MenuLaunch::App(8)   => open_doom(w, h, wins.len()),
+                            MenuLaunch::App(8)   => open_doom_raycaster(w, h, wins.len()),
                             MenuLaunch::App(9)   => open_browser(w, h, wins.len()),
                             MenuLaunch::App(10)  => open_kernel_manager(w, h, wins.len()),
                             MenuLaunch::App(11)  => open_sound(w, h, wins.len()),
@@ -2072,7 +2071,7 @@ pub extern "C" fn _start() -> ! {
                             6 => open_tis_console(w, h, wins.len()),
                             7 => open_snake(w, h, wins.len()),
                             8 => open_minesweeper(w, h, wins.len()),
-                            9 => open_doom(w, h, wins.len()),
+                            9 => open_doom_raycaster(w, h, wins.len()),
                             10 => open_browser(w, h, wins.len()),
                             _ => None,
                         };

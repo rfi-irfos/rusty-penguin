@@ -64,6 +64,12 @@ extern "x86-interrupt" fn exc_double_fault(_f: InterruptFrame, _e: u64) -> ! {
 }
 
 extern "x86-interrupt" fn exc_gpf(f: InterruptFrame, err: u64) {
+    // Ring-3 fault (cs=0x23) during a Linux binary run → restart desktop.
+    if f.cs == 0x23 && unsafe { crate::linux::RESTART_DESKTOP } {
+        crate::serial::write_str("[idt] #GP in Linux binary — restarting desktop\n");
+        crate::linux::reset();
+        crate::restart_desktop();
+    }
     vga::write_str("\nEXCEPTION: #GP (err=0x", vga::Color::Red);
     vga::write_hex(err, vga::Color::Red);
     vga::write_str(" rip=0x", vga::Color::Red);
@@ -75,6 +81,12 @@ extern "x86-interrupt" fn exc_gpf(f: InterruptFrame, err: u64) {
 }
 
 extern "x86-interrupt" fn exc_page_fault(f: InterruptFrame, err: u64) {
+    // Ring-3 fault during Linux binary run → restart desktop.
+    if f.cs == 0x23 && unsafe { crate::linux::RESTART_DESKTOP } {
+        crate::serial::write_str("[idt] #PF in Linux binary — restarting desktop\n");
+        crate::linux::reset();
+        crate::restart_desktop();
+    }
     let cr2: u64;
     unsafe { core::arch::asm!("mov {}, cr2", out(reg) cr2, options(nomem, nostack)) };
     vga::write_str("\nEXCEPTION: #PF addr=0x", vga::Color::Red);
