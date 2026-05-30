@@ -83,6 +83,67 @@ pub fn map_mmio_range(phys_start: u64, size: u64) {
 /// scheduler, which records each task's address space.
 pub fn current_cr3() -> u64 { cr3() }
 
+// ── Higher-half kernel migration (docs/VMM_HIGHER_HALF.md), sub-step 1 ────────
+// Direct map of all physical RAM at PHYSMAP_BASE (PML4[256], kernel-only). Once
+// the low half becomes per-process, the kernel reaches page-table frames and
+// arbitrary physical memory through here instead of relying on the low identity
+// map. Additive — coexists with the existing identity map during migration.
+pub const PHYSMAP_BASE: u64 = 0xFFFF_8000_0000_0000;
+
+/// Translate a physical address to its higher-half physmap virtual address.
+#[inline]
+pub fn phys_to_virt(phys: u64) -> u64 { PHYSMAP_BASE + phys }
+
+/// Build the higher-half direct map: identity-style 2 MiB huge pages covering
+/// `limit_mib` MiB of physical RAM, based at PHYSMAP_BASE. Kernel-only (no USER
+/// bit), so it stays mapped in every process's address space but is unreachable
+/// from ring 3.
+pub unsafe fn build_physmap(limit_mib: usize) {
+    let pml4 = cr3();
+    let pdpt = match crate::pmm::alloc_frame() { Some(f) => f, None => return };
+    core::ptr::write_bytes(pdpt as *mut u8, 0, 4096);
+    write64(pml4, pml4_idx(PHYSMAP_BASE), pdpt | PTE_PRESENT | PTE_WRITABLE);
+
+    let huge_total = limit_mib / 2;            // # of 2 MiB pages
+    let mut mapped = 0usize;
+    let mut pdpt_i = pdpt_idx(PHYSMAP_BASE);   // 0
+    while mapped < huge_total && pdpt_i < 512 {
+        let pd = match crate::pmm::alloc_frame() { Some(f) => f, None => return };
+        core::ptr::write_bytes(pd as *mut u8, 0, 4096);
+        write64(pdpt, pdpt_i, pd | PTE_PRESENT | PTE_WRITABLE);
+        let mut pd_i = 0usize;
+        while pd_i < 512 && mapped < huge_total {
+            let phys = (mapped as u64) * 0x20_0000;
+            write64(pd, pd_i, phys | PTE_HUGE | PTE_PRESENT | PTE_WRITABLE);
+            pd_i += 1; mapped += 1;
+        }
+        pdpt_i += 1;
+    }
+    flush_tlb();
+}
+
+/// Sub-step 1a self-test: build the physmap and confirm a known physical
+/// location reads identically through the low identity map and the higher-half
+/// physmap. Boot flag `physmaptest`.
+pub fn selftest_physmap() -> ! {
+    use crate::serial::{write_str, write_hex_u64, write_byte};
+    write_str("\n[vmm] === higher-half physmap self-test ===\n");
+    unsafe {
+        build_physmap(1024); // 1 GiB
+        let p: u64 = 0x10_0000; // 1 MiB — kernel image region, known-mapped
+        let via_identity = *(p as *const u64);
+        let via_physmap   = *((phys_to_virt(p)) as *const u64);
+        write_str("[vmm]  phys 0x100000 via identity = "); write_hex_u64(via_identity); write_byte(b'\n');
+        write_str("[vmm]  phys 0x100000 via physmap  = "); write_hex_u64(via_physmap);  write_byte(b'\n');
+        if via_identity == via_physmap {
+            write_str("[vmm] === MATCH: higher-half physmap works ===\n");
+        } else {
+            write_str("[vmm] === MISMATCH: physmap is wrong ===\n");
+        }
+    }
+    loop { unsafe { core::arch::asm!("hlt"); } }
+}
+
 /// Switch the active address space by loading `pml4_phys` into CR3. The new PML4
 /// MUST map the kernel (code/stack/data) and any MMIO the kernel touches, or the
 /// next instruction faults. `new_address_space` guarantees this by sharing the
