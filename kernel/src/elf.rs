@@ -69,8 +69,14 @@ pub fn load_bias(elf: &[u8], bias: u64) -> Option<u64> {
         let filesz  = ph.p_filesz as usize;
         let foff    = ph.p_offset as usize;
 
-        // Zero entire region first (handles .bss)
-        unsafe { core::ptr::write_bytes(vaddr as *mut u8, 0, memsz); }
+        // Zero the segment up to the PAGE boundary, not just memsz. Real ELF
+        // loaders map full pages, so the bytes between memsz and the end of the
+        // last page are guaranteed zero — and glibc's ld.so relies on this: it
+        // places link_map / _rtld_global BSS structures in that page tail.
+        // Zeroing only [vaddr, vaddr+memsz) leaves the tail as stale RAM, which
+        // showed up as a non-canonical l_info pointer → #GP early in the linker.
+        let zero_len = ((vaddr + memsz + 0xFFF) & !0xFFF) - vaddr;
+        unsafe { core::ptr::write_bytes(vaddr as *mut u8, 0, zero_len); }
 
         // Copy file data
         if filesz > 0 {
@@ -88,6 +94,15 @@ pub fn load_bias(elf: &[u8], bias: u64) -> Option<u64> {
     }
 
     Some(ehdr.e_entry + bias)
+}
+
+/// True if the ELF is position-independent (ET_DYN) — a PIE executable or a
+/// shared object. Such images must be loaded at a non-zero bias (loading a PIE
+/// at vaddr 0 maps the null page and breaks glibc's dynamic-section parsing).
+pub fn is_dyn(elf: &[u8]) -> bool {
+    if elf.len() < size_of::<Elf64Ehdr>() { return false; }
+    let ehdr = unsafe { &*(elf.as_ptr() as *const Elf64Ehdr) };
+    &ehdr.e_ident[0..4] == ELF_MAGIC && ehdr.e_type == 3 // ET_DYN
 }
 
 /// Return the `PT_INTERP` path (dynamic linker), if the ELF is dynamically

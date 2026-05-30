@@ -63,10 +63,68 @@ extern "x86-interrupt" fn exc_double_fault(_f: InterruptFrame, _e: u64) -> ! {
     loop {}
 }
 
+// Full register snapshot at a #GP, captured by a naked entry stub so we can see
+// the faulting pointer registers (the x86-interrupt ABI hides the GPRs). Field
+// order matches the push order in `exc_gpf_naked` (r15 lowest, then the CPU-
+// pushed error code + iretq frame above the GPRs).
+#[repr(C)]
+struct GpRegs {
+    r15: u64, r14: u64, r13: u64, r12: u64, r11: u64, r10: u64, r9: u64, r8: u64,
+    rbp: u64, rdi: u64, rsi: u64, rdx: u64, rcx: u64, rbx: u64, rax: u64,
+    err: u64, rip: u64, cs: u64, rflags: u64, rsp: u64, ss: u64,
+}
+
+#[unsafe(naked)]
+extern "C" fn exc_gpf_naked() {
+    core::arch::naked_asm!(
+        "push rax", "push rbx", "push rcx", "push rdx",
+        "push rsi", "push rdi", "push rbp",
+        "push r8",  "push r9",  "push r10", "push r11",
+        "push r12", "push r13", "push r14", "push r15",
+        "mov rdi, rsp",          // rdi -> GpRegs (points at saved r15)
+        "call {dump}",           // does not return
+        "2: hlt", "jmp 2b",
+        dump = sym gpf_dump,
+    );
+}
+
+extern "C" fn gpf_dump(r: &GpRegs) -> ! {
+    crate::serial::write_str("\n[idt] #GP err="); crate::serial::write_hex_u64(r.err);
+    crate::serial::write_str(" rip=");  crate::serial::write_hex_u64(r.rip);
+    crate::serial::write_str(" cs=");   crate::serial::write_hex_u64(r.cs);
+    crate::serial::write_str("\n      rax="); crate::serial::write_hex_u64(r.rax);
+    crate::serial::write_str(" rbx="); crate::serial::write_hex_u64(r.rbx);
+    crate::serial::write_str(" rcx="); crate::serial::write_hex_u64(r.rcx);
+    crate::serial::write_str(" rdx="); crate::serial::write_hex_u64(r.rdx);
+    crate::serial::write_str("\n      rsi="); crate::serial::write_hex_u64(r.rsi);
+    crate::serial::write_str(" rdi="); crate::serial::write_hex_u64(r.rdi);
+    crate::serial::write_str(" rbp="); crate::serial::write_hex_u64(r.rbp);
+    crate::serial::write_str(" rsp="); crate::serial::write_hex_u64(r.rsp);
+    crate::serial::write_str("\n      r8="); crate::serial::write_hex_u64(r.r8);
+    crate::serial::write_str(" r12="); crate::serial::write_hex_u64(r.r12);
+    crate::serial::write_str(" r13="); crate::serial::write_hex_u64(r.r13);
+    crate::serial::write_str(" r15="); crate::serial::write_hex_u64(r.r15);
+    crate::serial::write_byte(b'\n');
+    // Ring-3 fault during a desktop-launched Linux binary → restart the desktop.
+    if r.cs == 0x23 && unsafe { crate::linux::RESTART_DESKTOP } {
+        crate::serial::write_str("[idt] #GP ring-3 — restarting desktop\n");
+        crate::linux::reset();
+        crate::restart_desktop();
+    }
+    vga::write_str("\nEXCEPTION: #GP (see serial for registers)\n", vga::Color::Red);
+    loop { unsafe { core::arch::asm!("hlt"); } }
+}
+
 extern "x86-interrupt" fn exc_gpf(f: InterruptFrame, err: u64) {
     // Ring-3 fault (cs=0x23) during a Linux binary run → restart desktop.
     if f.cs == 0x23 && unsafe { crate::linux::RESTART_DESKTOP } {
-        crate::serial::write_str("[idt] #GP in Linux binary — restarting desktop\n");
+        crate::serial::write_str("[idt] #GP ring-3 rip=0x");
+        crate::serial::write_hex_u32(f.ip as u32);
+        crate::serial::write_str(" sp=0x");
+        crate::serial::write_hex_u32(f.sp as u32);
+        crate::serial::write_str(" err=0x");
+        crate::serial::write_hex_u32(err as u32);
+        crate::serial::write_str(" — restarting desktop\n");
         crate::linux::reset();
         crate::restart_desktop();
     }
@@ -394,7 +452,7 @@ pub fn init() {
         IDT[0]  = IdtEntry::gate(exc_divide       as *const () as u64);
         IDT[3]  = IdtEntry::gate(exc_breakpoint   as *const () as u64);
         IDT[8]  = IdtEntry::gate(exc_double_fault as *const () as u64);
-        IDT[13] = IdtEntry::gate(exc_gpf          as *const () as u64);
+        IDT[13] = IdtEntry::gate(exc_gpf_naked    as *const () as u64);
         IDT[14] = IdtEntry::gate(exc_page_fault   as *const () as u64);
         IDT[32] = IdtEntry::gate(irq_timer        as *const () as u64);
         IDT[33] = IdtEntry::gate(irq_keyboard     as *const () as u64);

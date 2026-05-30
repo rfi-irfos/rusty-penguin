@@ -52,3 +52,12 @@ pub fn write_hex_u32(v: u32) {
         write_byte(if nibble < 10 { b'0' + nibble } else { b'a' + nibble - 10 });
     }
 }
+
+/// Write a u64 as 16 hex digits prefixed with "0x".
+pub fn write_hex_u64(v: u64) {
+    write_byte(b'0'); write_byte(b'x');
+    for i in (0..16).rev() {
+        let nibble = ((v >> (i * 4)) & 0xF) as u8;
+        write_byte(if nibble < 10 { b'0' + nibble } else { b'a' + nibble - 10 });
+    }
+}

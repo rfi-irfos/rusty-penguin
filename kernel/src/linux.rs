@@ -191,7 +191,7 @@ unsafe fn wstr(base: *mut u8, off: usize, s: &[u8]) {
 // ── The Linux syscall dispatcher ─────────────────────────────────────────────
 /// Returns the Linux ABI value for rax (>=0 success, <0 negated errno).
 /// Per-syscall serial trace toggle (debugging the ABI layer brick by brick).
-const TRACE: bool = false;
+const TRACE: bool = true;
 fn dbg_hex(tag: &str, v: u64) {
     serial::write_str(tag);
     let mut i = 60i32;
@@ -538,6 +538,13 @@ pub fn syscall(nr: u64, a1: u64, a2: u64, a3: u64) -> u64 {
                 _ => 0, // other ops: stub success
             }
         }
+        // mprotect(addr, len, prot) → no-op success. We use a flat RW identity
+        // map and don't enforce page permissions, so RELRO/GOT-hardening calls
+        // from ld.so just succeed. (Returning ENOSYS makes glibc abort on RELRO.)
+        10 => 0,
+        // munmap(addr, len) → no-op success. The mmap arena is a bump allocator
+        // that never reclaims; pretending the unmap worked is harmless.
+        11 => 0,
         // ── File descriptor ops ───────────────────────────────────────────────
         // poll(fds, nfds, timeout) → 0 (no events, non-blocking stub).
         7 => 0,
@@ -655,12 +662,20 @@ pub fn enter(elf: &[u8]) -> ! {
     // relocated initrd (40 MiB). The interpreter is small (~0.25 MiB).
     const INTERP_BASE: u64 = 0x0080_0000;
 
+    // PIE programs (ET_DYN) must NOT load at vaddr 0: that maps the null page and
+    // makes glibc misparse the dynamic section (non-canonical l_info → #GP early
+    // in ld.so). Real Linux always relocates a PIE to a high base. We place it in
+    // the free window between ld.so (8–10 MiB) and the initrd (40 MiB). ET_EXEC
+    // (static, fixed-address) keeps bias 0.
+    const PROG_BASE: u64 = 0x0100_0000; // 16 MiB
+    let prog_bias: u64 = if crate::elf::is_dyn(elf) { PROG_BASE } else { 0 };
+
     // If the program is dynamically linked, load the interpreter (ld.so) and
     // jump to IT; the program's own entry/phdrs go in the auxv (AT_ENTRY/AT_PHDR)
     // and ld.so relocates the program + maps shared libraries from the initrd.
     let (entry, at_base, at_entry) = match crate::elf::interp_path(elf) {
         Some(ipath) => {
-            let prog_entry = crate::elf::load(elf).expect("program load failed");
+            let prog_entry = crate::elf::load_bias(elf, prog_bias).expect("program load failed");
             let p = if ipath.starts_with(b"/") { &ipath[1..] } else { ipath };
             let interp_elf = crate::ramfs::find(p).expect("dynamic linker not in initrd");
             let interp_entry = crate::elf::load_bias(interp_elf, INTERP_BASE)
@@ -669,7 +684,7 @@ pub fn enter(elf: &[u8]) -> ! {
             (interp_entry, INTERP_BASE, prog_entry)
         }
         None => {
-            let e = crate::elf::load(elf).expect("linux ELF parse failed");
+            let e = crate::elf::load_bias(elf, prog_bias).expect("linux ELF parse failed");
             (e, 0, e)
         }
     };
@@ -679,7 +694,19 @@ pub fn enter(elf: &[u8]) -> ! {
     const AT_NULL: u64 = 0; const AT_PHDR: u64 = 3; const AT_PHENT: u64 = 4;
     const AT_PHNUM: u64 = 5; const AT_PAGESZ: u64 = 6; const AT_BASE: u64 = 7;
     const AT_ENTRY: u64 = 9; const AT_RANDOM: u64 = 25; const AT_EXECFN: u64 = 31;
-    let (phdr, phent, phnum) = crate::elf::phdr_info(elf).unwrap_or((0, 56, 0));
+    let (phdr, phent, phnum) = match crate::elf::phdr_info(elf) {
+        // AT_PHDR is the RUNTIME address of the program headers → add the bias
+        // the PIE was actually loaded at (0 for ET_EXEC).
+        Some((v, e, n)) => (v + prog_bias, e, n),
+        None => (0, 56, 0),
+    };
+    if TRACE {
+        dbg_hex("  [linux] auxv: AT_PHDR=", phdr); dbg_hex(" PHENT=", phent);
+        dbg_hex(" PHNUM=", phnum); serial::write_byte(b'\n');
+        dbg_hex("  [linux] prog_bias=", prog_bias); dbg_hex(" AT_ENTRY=", at_entry);
+        dbg_hex(" AT_BASE=", at_base); dbg_hex(" ld.so_entry=", entry);
+        serial::write_byte(b'\n');
+    }
 
     let top = crate::vmm::USER_STACK_TOP;
     // argv[0] string, then 16 random bytes (AT_RANDOM canary source).
