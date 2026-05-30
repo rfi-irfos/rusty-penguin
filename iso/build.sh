@@ -148,6 +148,19 @@ if command -v wpa_passphrase >/dev/null 2>&1; then
     echo "[build] bundled wpa_passphrase"
 fi
 
+# Developer tools: git, nano, ssh — essential for a real work week.
+# git is the main reason; nano for terminal editing; ssh for remote access.
+bundle_with_libs "$(command -v git    || echo /usr/bin/git)"    git
+bundle_with_libs "$(command -v nano   || echo /usr/bin/nano)"   nano
+bundle_with_libs "$(command -v ssh    || echo /usr/bin/ssh)"    ssh
+bundle_with_libs "$(command -v rsync  || echo /usr/bin/rsync)"  rsync
+# Also bundle git-related scripts that live in /usr/lib/git-core
+if [ -d /usr/lib/git-core ]; then
+    mkdir -p "$INITRAMFS_DIR/usr/lib/git-core"
+    for f in /usr/lib/git-core/git /usr/lib/git-core/git-remote-https /usr/lib/git-core/git-remote-http; do
+        [ -x "$f" ] && { bundle_with_libs "$f" "$(basename $f)"; cp "$f" "$INITRAMFS_DIR/usr/lib/git-core/$(basename $f)"; }
+    done
+fi
 # Kernel modules the installer loads (busybox insmod): isofs (read kernel/initrd
 # off the CD) and nls_iso8859-1 (vfat's default IO charset, needed to mount the
 # FAT ESP). Both decompressed from .zst to raw ELF.
