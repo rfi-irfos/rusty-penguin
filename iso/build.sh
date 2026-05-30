@@ -137,6 +137,16 @@ bundle_with_libs() {
 # sgdisk (GPT partitioning), mkfs.fat (ESP). mke2fs comes from busybox.
 bundle_with_libs "$(command -v sgdisk || echo /usr/sbin/sgdisk)" sgdisk
 bundle_with_libs "$(command -v mkfs.fat || echo /usr/sbin/mkfs.fat)" mkfs.fat
+# WiFi tools: iw (network management) and wpa_supplicant (WPA2 authentication).
+# Required for real laptops that only have WiFi (no ethernet port or dongle).
+bundle_with_libs "$(command -v iw || echo /usr/sbin/iw)" iw
+bundle_with_libs "$(command -v wpa_supplicant || echo /usr/sbin/wpa_supplicant)" wpa_supplicant
+# wpa_passphrase generates WPA config from SSID+password (offline, no libs needed).
+if command -v wpa_passphrase >/dev/null 2>&1; then
+    cp "$(command -v wpa_passphrase)" "$INITRAMFS_DIR/bin/wpa_passphrase"
+    chmod +x "$INITRAMFS_DIR/bin/wpa_passphrase"
+    echo "[build] bundled wpa_passphrase"
+fi
 
 # Kernel modules the installer loads (busybox insmod): isofs (read kernel/initrd
 # off the CD) and nls_iso8859-1 (vfat's default IO charset, needed to mount the

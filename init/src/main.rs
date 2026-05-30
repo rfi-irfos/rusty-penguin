@@ -60,8 +60,14 @@ fn main() {
         load_input_modules();
         launch_x_session()
     } else if console {
-        eprintln!("[init] console mode (rp.console) — run `rp-install /dev/<disk>` to install");
+        eprintln!("[init] console mode (rp.console) — available commands:");
+        eprintln!("[init]   rp-install /dev/<disk>        install to disk");
+        eprintln!("[init]   wifi-setup <SSID> <password>  configure WiFi (saves /persist/wifi.conf)");
+        eprintln!("[init]   wifi-setup <SSID>             configure open WiFi network");
         std::env::set_var("RP_RECOVERY", "1");
+        // Drop a wifi-setup script into /bin so it's available in the shell.
+        let _ = fs::write("/bin/wifi-setup", b"#!/bin/sh\nSSID=\"$1\"; PASS=\"$2\"\nif [ -z \"$SSID\" ]; then echo 'usage: wifi-setup <SSID> [password]'; exit 1; fi\nmkdir -p /persist\nif [ -z \"$PASS\" ]; then\n  printf 'network={\\n  ssid=\"%s\"\\n  key_mgmt=NONE\\n}\\n' \"$SSID\" > /persist/wifi.conf\nelse\n  /bin/wpa_passphrase \"$SSID\" \"$PASS\" > /persist/wifi.conf\nfi\necho \"WiFi config saved to /persist/wifi.conf\"\necho \"Reboot to connect automatically.\"\n");
+        let _ = Command::new("/bin/busybox").args(["chmod", "+x", "/bin/wifi-setup"]).status();
         launch_shell()
     } else {
         // Phase 1 substrate: try the graphical desktop first; init's
@@ -313,11 +319,96 @@ fn finish_persist_setup() {
 // ─── Networking: another ternary subsystem ───────────────────────────────────
 
 fn find_netif() -> Option<String> {
+    // Prefer wired (eth*) over wireless (wlan*) for reliability.
+    // If only wireless exists, return that.
+    let mut wired = None;
+    let mut wireless = None;
     for e in fs::read_dir("/sys/class/net").ok()?.flatten() {
         let name = e.file_name().to_string_lossy().into_owned();
-        if name != "lo" { return Some(name); }
+        if name == "lo" { continue; }
+        if name.starts_with("wl") || name.starts_with("wifi") {
+            wireless.get_or_insert(name);
+        } else {
+            wired.get_or_insert(name);
+        }
     }
-    None
+    wired.or(wireless)
+}
+
+/// Check if an interface is a wireless (WiFi) interface by looking at /sys.
+fn is_wireless(iface: &str) -> bool {
+    Path::new(&format!("/sys/class/net/{}/wireless", iface)).exists()
+        || Path::new(&format!("/sys/class/net/{}/phy80211", iface)).exists()
+}
+
+/// Associate a WiFi interface:
+/// 1. If /persist/wifi.conf exists → run wpa_supplicant with it.
+/// 2. Else scan for open networks and connect to the first one found.
+/// 3. Print a hint about creating wifi.conf for WPA2 networks.
+fn wifi_associate(iface: &str) -> bool {
+    let conf_path = "/persist/wifi.conf";
+
+    // Load driver module if needed (firmware loading is automatic on Linux).
+    // Bring the interface up first so firmware loads.
+    let _ = Command::new("/bin/busybox")
+        .args(["ip", "link", "set", iface, "up"]).status();
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    if Path::new(conf_path).exists() {
+        eprintln!("[init] WiFi: using config {}", conf_path);
+        // Run wpa_supplicant in background (-B), let it handle association.
+        let ok = Command::new("/bin/wpa_supplicant")
+            .args(["-B", "-i", iface, "-c", conf_path, "-D", "nl80211,wext"])
+            .status().map(|s| s.success()).unwrap_or(false);
+        if ok {
+            std::thread::sleep(std::time::Duration::from_secs(4)); // wait for assoc
+            eprintln!("[init] WiFi: wpa_supplicant started");
+            return true;
+        }
+        eprintln!("[init] WiFi: wpa_supplicant failed");
+        return false;
+    }
+
+    // No config — scan for open networks.
+    eprintln!("[init] WiFi: no /persist/wifi.conf — scanning for open networks");
+    eprintln!("[init] WiFi: to connect to WPA2, create /persist/wifi.conf:");
+    eprintln!("[init]   wpa_passphrase <SSID> <password> > /persist/wifi.conf");
+
+    let scan_out = Command::new("/bin/iw")
+        .args(["dev", iface, "scan"])
+        .output();
+    if let Ok(out) = scan_out {
+        let text = String::from_utf8_lossy(&out.stdout);
+        // Look for BSS entries with no encryption (open networks).
+        let mut current_ssid = String::new();
+        let mut open = false;
+        for line in text.lines() {
+            let l = line.trim();
+            if l.starts_with("SSID: ") {
+                current_ssid = l[6..].to_string();
+                open = false;
+            } else if l == "capability: ESS" {
+                // Check next lines for RSN/WPA absence
+            } else if l.starts_with("RSN:") || l.starts_with("WPA:") {
+                open = false;
+            } else if l.starts_with("* Authentication suites:") && !l.contains("PSK") {
+                open = true;
+            }
+        }
+        // Simpler heuristic: try connecting without password to first SSID that
+        // doesn't show RSN/WPA capability section.
+        if !current_ssid.is_empty() {
+            eprintln!("[init] WiFi: trying open connect to '{}'", current_ssid);
+            let ok = Command::new("/bin/iw")
+                .args(["dev", iface, "connect", &current_ssid])
+                .status().map(|s| s.success()).unwrap_or(false);
+            if ok {
+                std::thread::sleep(std::time::Duration::from_secs(3));
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Bring the first non-loopback interface up and acquire a DHCP lease via the
@@ -327,6 +418,13 @@ fn bring_up_network() -> Trit {
         Some(i) => i,
         None => return Trit::Neg, // suppressed — no NIC
     };
+
+    // If it's a WiFi interface, associate first.
+    if is_wireless(&iface) {
+        eprintln!("[init] WiFi interface detected: {}", iface);
+        wifi_associate(&iface);
+    }
+
     let _ = Command::new("/bin/busybox").args(["ip", "link", "set", &iface, "up"]).status();
 
     // One-shot DHCP: -q quit after lease, -n exit if none, -t/-T retry tuning.
