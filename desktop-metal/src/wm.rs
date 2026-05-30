@@ -28,10 +28,12 @@ pub const TRIT_NEG:     u32 = 0xEF7575;  // --neg
 pub const TRIT_ZERO:    u32 = 0x909A92;  // --zero
 pub const TRIT_POS:     u32 = 0x6FE18B;  // --pos
 
-// Traffic-light buttons on the RIGHT side of the titlebar.
-const BTN_R:      i32 = 6;   // radius in pixels
-const BTN_GAP:    i32 = 17;  // center-to-center spacing
-const BTN_MARGIN: i32 = 16;  // distance from window right edge to close button center
+// Ubuntu/Mint-style flat rectangular window buttons on the RIGHT side.
+// Standard theme. Toggle via Settings → Window buttons → Classic (macOS-style).
+const BTN_W:      i32 = 24;  // button width
+const BTN_H:      i32 = 20;  // button height
+const BTN_GAP:    i32 = 4;   // gap between buttons
+const BTN_MARGIN: i32 = 8;   // gap from window right edge to close button right edge
 
 // Minimum window size — can't resize below the default terminal dimensions.
 pub const WIN_MIN_W: i32 = WINDOW_W;
@@ -81,19 +83,19 @@ impl Window {
     }
 }
 
-fn btn_cy(win: &Window) -> i32   { win.y + TITLEBAR_H / 2 }
-fn close_cx(win: &Window) -> i32 { win.x + win.w - BTN_MARGIN }
-fn min_cx  (win: &Window) -> i32 { win.x + win.w - BTN_MARGIN - BTN_GAP }
-fn max_cx  (win: &Window) -> i32 { win.x + win.w - BTN_MARGIN - BTN_GAP * 2 }
+// Left edge of each button (close is rightmost).
+fn close_bx(win: &Window) -> i32 { win.x + win.w - BTN_MARGIN - BTN_W }
+fn max_bx  (win: &Window) -> i32 { close_bx(win) - BTN_GAP - BTN_W }
+fn min_bx  (win: &Window) -> i32 { max_bx(win)   - BTN_GAP - BTN_W }
+fn btn_by  (win: &Window) -> i32 { win.y + (TITLEBAR_H - BTN_H) / 2 }
 
-fn hit_btn(mx: i32, my: i32, cx: i32, cy: i32) -> bool {
-    let dx = mx - cx; let dy = my - cy;
-    dx * dx + dy * dy <= (BTN_R + 1) * (BTN_R + 1)
+fn hit_btn_rect(mx: i32, my: i32, bx: i32, by: i32) -> bool {
+    mx >= bx && mx < bx + BTN_W && my >= by && my < by + BTN_H
 }
 
-pub fn close_btn_hit(win: &Window, mx: i32, my: i32) -> bool { hit_btn(mx, my, close_cx(win), btn_cy(win)) }
-pub fn min_btn_hit  (win: &Window, mx: i32, my: i32) -> bool { hit_btn(mx, my, min_cx(win),   btn_cy(win)) }
-pub fn max_btn_hit  (win: &Window, mx: i32, my: i32) -> bool { hit_btn(mx, my, max_cx(win),   btn_cy(win)) }
+pub fn close_btn_hit(win: &Window, mx: i32, my: i32) -> bool { hit_btn_rect(mx, my, close_bx(win), btn_by(win)) }
+pub fn min_btn_hit  (win: &Window, mx: i32, my: i32) -> bool { hit_btn_rect(mx, my, min_bx(win),   btn_by(win)) }
+pub fn max_btn_hit  (win: &Window, mx: i32, my: i32) -> bool { hit_btn_rect(mx, my, max_bx(win),   btn_by(win)) }
 
 pub fn titlebar_hit(win: &Window, mx: i32, my: i32) -> bool {
     mx >= win.x && mx < win.x + win.w
@@ -122,24 +124,51 @@ pub fn content_origin(win: &Window) -> (i32, i32) {
     (win.x + 1, win.y + 1 + TITLEBAR_H)
 }
 
-fn darken(c: u32) -> u32 {
-    ((((c >> 16) & 0xFF) * 2 / 3) << 16)
-  | ((((c >>  8) & 0xFF) * 2 / 3) << 8)
-  |   (((c       & 0xFF) * 2 / 3))
-}
+// Ubuntu/Mint-style flat window button.
+// kind: 0=close (×), 1=min (−), 2=max (□)
+fn draw_btn_ubuntu(fb: &mut Framebuffer, bx: i32, by: i32, kind: u8, focused: bool) {
+    // Background: close gets a subtle red tint; min/max neutral stone.
+    let bg = match (kind, focused) {
+        (0, true)  => 0x4A2828,  // close focused: dark crimson
+        (0, false) => 0x2A1A1A,  // close unfocused: near-invisible dark red
+        (_, true)  => 0x333D38,  // min/max focused: dark stone
+        _          => 0x272F2A,  // min/max unfocused: very dim
+    };
+    fb.fill_rounded_rect(bx, by, BTN_W, BTN_H, 4, bg);
+    // 1-px inner top-edge sheen for depth.
+    let sheen = if focused { 0x5A6860 } else { 0x303838 };
+    fb.fill_rect_s(bx + 4, by + 1, BTN_W - 8, 1, sheen);
 
-fn draw_btn(fb: &mut Framebuffer, cx: i32, cy: i32, color: u32) {
-    if cx < BTN_R + 2 || cy < BTN_R + 2 { return; }
-    fb.fill_circle(cx, cy, BTN_R + 1, darken(color));
-    fb.fill_circle(cx, cy, BTN_R,     color);
-    // Soft highlight dot — top-left quadrant for 3D sphere look
-    let hi = (((color >> 16 & 0xFF).saturating_add(0x50).min(0xFF)) << 16)
-           | (((color >>  8 & 0xFF).saturating_add(0x50).min(0xFF)) << 8)
-           |   (color       & 0xFF).saturating_add(0x50).min(0xFF);
-    if cx >= 3 && cy >= 3 {
-        fb.set_pixel((cx as u32) - 2, (cy as u32) - 2, hi);
-        fb.set_pixel((cx as u32) - 1, (cy as u32) - 2, hi);
-        fb.set_pixel((cx as u32) - 2, (cy as u32) - 1, hi);
+    let icon_col = if focused { 0xCDD8D0 } else { 0x3A4540 };
+    let cx = bx + BTN_W / 2;
+    let cy = by + BTN_H / 2;
+    match kind {
+        0 => {
+            // × close icon — 5-pixel diagonal cross
+            let sp = |fb: &mut Framebuffer, x: i32, y: i32, c: u32| {
+                if x >= 0 && y >= 0 { fb.set_pixel(x as u32, y as u32, c); }
+            };
+            for d in -3i32..=3 {
+                sp(fb, cx + d, cy + d, icon_col);
+                sp(fb, cx + d, cy - d, icon_col);
+                sp(fb, cx + d + 1, cy + d, icon_col);
+                sp(fb, cx + d + 1, cy - d, icon_col);
+            }
+        }
+        1 => {
+            // − minimize icon — thin horizontal bar
+            fb.fill_rect_s(cx - 4, cy,     9, 1, icon_col);
+            fb.fill_rect_s(cx - 4, cy + 1, 9, 1, icon_col);
+        }
+        _ => {
+            // □ maximize icon — thin square outline
+            fb.fill_rect_s(cx - 4, cy - 4, 9, 1, icon_col);  // top
+            fb.fill_rect_s(cx - 4, cy + 4, 9, 1, icon_col);  // bottom
+            fb.fill_rect_s(cx - 4, cy - 4, 1, 9, icon_col);  // left
+            fb.fill_rect_s(cx + 4, cy - 4, 1, 9, icon_col);  // right
+            // double-line top for the title-bar convention
+            fb.fill_rect_s(cx - 4, cy - 3, 9, 1, icon_col);
+        }
     }
 }
 
@@ -213,7 +242,7 @@ pub fn draw_window(fb: &mut Framebuffer, win: &Window, focused: bool) {
     fb.draw_star8(mark_cx, mark_cy, 7, mark_col);
 
     let title_x = x + 30;
-    let right_reserved = BTN_MARGIN + BTN_GAP * 2 + BTN_R + 8;
+    let right_reserved = BTN_MARGIN + (BTN_W + BTN_GAP) * 3 + 4;
     let avail_w = (x + w - right_reserved - title_x).max(0);
     let max_chars = (avail_w / 8).max(0) as usize;
     let n_bytes = max_chars.min(win.title.len());
@@ -221,17 +250,11 @@ pub fn draw_window(fb: &mut Framebuffer, win: &Window, focused: bool) {
     let txt_col = if focused { TXT_ACT } else { TXT_DIM };
     fb.draw_aa(title_x, y + 9, title, txt_col, crate::fb::AA_S);
 
-    // ── Traffic-light buttons — dim when unfocused (Aero z-hierarchy convention).
-    let bcy = btn_cy(win);
-    if focused {
-        draw_btn(fb, close_cx(win), bcy, BTN_CLOSE);
-        draw_btn(fb, min_cx(win),   bcy, BTN_MIN);
-        draw_btn(fb, max_cx(win),   bcy, BTN_MAX);
-    } else {
-        draw_btn(fb, close_cx(win), bcy, 0x4A2020);
-        draw_btn(fb, min_cx(win),   bcy, 0x4A3808);
-        draw_btn(fb, max_cx(win),   bcy, 0x0F3A18);
-    }
+    // ── Ubuntu/Mint-style flat window buttons — right-aligned: min · max · close.
+    let by2 = btn_by(win);
+    draw_btn_ubuntu(fb, min_bx(win),   by2, 1, focused);
+    draw_btn_ubuntu(fb, max_bx(win),   by2, 2, focused);
+    draw_btn_ubuntu(fb, close_bx(win), by2, 0, focused);
 }
 
 /// Called AFTER the terminal renders so the grip is drawn on top of any content.

@@ -36,6 +36,7 @@ mod crypto;
 mod tls;
 mod ahci;
 mod diskfs;
+mod p256;
 
 use ternary_core::{Trit, Tryte};
 use mathematics::{mul_tryte, consensus, scale};

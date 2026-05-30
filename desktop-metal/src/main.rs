@@ -172,8 +172,8 @@ fn menu_btn_rect(h: u32) -> (i32, i32, i32, i32) { (PANEL_MARGIN + 8, panel_top(
 // Calculator); everything else lives in the start menu. Values index into
 // DESKTOP_ICONS so the existing click-handler match (keyed on that index) is
 // unchanged. Keeping the dock to 5 also avoids the 10-icon overflow regression.
-const N_FAV: usize = 6;
-const FAV_IDX: [usize; N_FAV] = [0, 1, 10, 2, 3, 6]; // Term, Files, Web, Edit, Calc, TIS
+const N_FAV: usize = 7;
+const FAV_IDX: [usize; N_FAV] = [0, 1, 10, 2, 3, 6, 9]; // Term, Files, Web, Edit, Calc, TIS, Doom
 
 // favourites_row: CSS FlexRow for the icon strip inside the dock.
 // Left edge starts after Menu button + separator gap.
@@ -493,12 +493,19 @@ fn draw_scene_static_v(fb: &mut Framebuffer, variant: u8) {
     draw_round_border(fb, px, ptop, pw, PANEL_H, PANEL_R, PANEL_EDGE);
     fb.fill_rect_s(px + PANEL_R, ptop + 1, pw - 2 * PANEL_R, 1, 0x66726A);
 
-    // Menu button (dingir + "Menu")
+    // Menu button — proper bordered button, dingir + "Menu", green accent UNDER text.
     let (mbx, mby, mbw, _mbh) = menu_btn_rect(h);
-    fb.fill_rounded_rect(mbx, mby, mbw, 40, 10, 0x323C37);
-    fb.fill_rect_s(mbx + 8, mby, mbw - 16, 2, GREEN);  // green top accent
-    fb.draw_star8(mbx + 15, mby + 20, 9, ACCENT_CREAM);
-    fb.draw_aa(mbx + 30, mby + 11, "Menu", GREEN, crate::fb::AA_S);
+    // Button body: slightly raised stone, 1px border
+    fb.fill_rounded_rect(mbx, mby, mbw, 40, 10, 0x2E3834);
+    fb.fill_rounded_rect(mbx + 1, mby + 1, mbw - 2, 38, 9, 0x3A4640);
+    // Top sheen line (like Ubuntu's active panel buttons)
+    fb.fill_rect_s(mbx + 10, mby + 1, mbw - 20, 1, 0x5A6860);
+    // Dingir star (vertically centered, left side)
+    fb.draw_star8(mbx + 16, mby + 20, 9, ACCENT_CREAM);
+    // "Menu" label, vertically centered
+    fb.draw_aa(mbx + 31, mby + 13, "Menu", GREEN, crate::fb::AA_S);
+    // Green underline accent BELOW the label — Ubuntu-style active indicator
+    fb.fill_rect_s(mbx + 28, mby + 34, mbw - 36, 2, GREEN);
     // separator
     fb.fill_rect_s(mbx + mbw + 7, ptop + 14, 1, PANEL_H - 28, PANEL_EDGE);
 
