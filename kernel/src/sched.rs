@@ -78,10 +78,11 @@ struct Task {
     rsp:   u64,  // saved kernel stack pointer (valid when this task is suspended)
     used:  bool,
     alive: bool,
+    cr3:   u64,  // address space (PML4 phys). 0 = don't switch (shared kernel AS).
 }
 
 static mut TASKS: [Task; MAX_TASKS] =
-    [Task { rsp: 0, used: false, alive: false }; MAX_TASKS];
+    [Task { rsp: 0, used: false, alive: false, cr3: 0 }; MAX_TASKS];
 static mut KSTACKS: [[u8; KSTACK_SIZE]; MAX_TASKS] = [[0; KSTACK_SIZE]; MAX_TASKS];
 static mut CUR_TASK: usize = 0;
 
@@ -112,7 +113,7 @@ fn spawn(entry: extern "C" fn() -> !) -> usize {
                 sp &= !0xF;                 // 16-byte align
                 sp -= 8; *(sp as *mut u64) = entry as usize as u64;  // ret target
                 for _ in 0..6 { sp -= 8; *(sp as *mut u64) = 0; }    // rbp..r15
-                TASKS[i] = Task { rsp: sp, used: true, alive: true };
+                TASKS[i] = Task { rsp: sp, used: true, alive: true, cr3: 0 };
                 return i;
             }
         }
@@ -165,7 +166,7 @@ pub fn selftest() {
     use crate::serial::write_str;
     write_str("\n[sched] === Increment 1: cooperative context-switch self-test ===\n");
     unsafe {
-        TASKS[0] = Task { rsp: 0, used: true, alive: true };
+        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: 0 };
         CUR_TASK = 0;
     }
     spawn(task_a);
@@ -215,7 +216,7 @@ fn spawn_preempt(entry: extern "C" fn() -> !) -> usize {
                 push(&mut sp, 0x08);   // cs  = kernel code
                 push(&mut sp, entry as usize as u64); // rip = entry
                 for _ in 0..15 { push(&mut sp, 0); }  // 15 GPRs = 0
-                TASKS[i] = Task { rsp: sp, used: true, alive: true };
+                TASKS[i] = Task { rsp: sp, used: true, alive: true, cr3: 0 };
                 return i;
             }
         }
@@ -232,8 +233,28 @@ extern "C" fn preempt_tick(cur_rsp: u64) -> u64 {
         TASKS[CUR_TASK].rsp = cur_rsp;
         let nxt = next_alive(CUR_TASK);
         CUR_TASK = nxt;
+        // Switch to the next task's address space. Every per-process AS shares
+        // the kernel's low half (PML4[0]), so the kernel stacks we're standing
+        // on stay mapped across the switch. cr3 == 0 means "shared kernel AS,
+        // no switch" (Increment 2 kernel tasks).
+        if TASKS[nxt].cr3 != 0 {
+            crate::vmm::switch_address_space(TASKS[nxt].cr3);
+        }
         TASKS[nxt].rsp
     }
+}
+
+/// Like `spawn_preempt`, but the task runs in its OWN address space (its own
+/// CR3, sharing the kernel low half). Increment 3b: proves the scheduler swaps
+/// CR3 per task — the basis for the desktop and fbDOOM at the same addresses.
+fn spawn_preempt_as(entry: extern "C" fn() -> !) -> usize {
+    let i = spawn_preempt(entry);
+    if i != 0 {
+        if let Some(as_) = unsafe { crate::vmm::new_address_space() } {
+            unsafe { TASKS[i].cr3 = as_; }
+        }
+    }
+    i
 }
 
 /// Preemptive timer IRQ entry. Saves the full GPR set on the current task's
@@ -271,7 +292,7 @@ pub fn selftest_preempt() -> ! {
     write_str("\n[sched] === Increment 2: timer-PREEMPTION self-test ===\n");
     unsafe {
         core::arch::asm!("cli");
-        TASKS[0] = Task { rsp: 0, used: true, alive: true };
+        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: 0 };
         CUR_TASK = 0;
     }
     spawn_preempt(ptask_a);
@@ -341,6 +362,53 @@ pub fn selftest_vmm() -> ! {
 }
 
 fn halt() -> ! { loop { unsafe { core::arch::asm!("hlt"); } } }
+
+fn read_cr3() -> u64 {
+    let v: u64;
+    unsafe { core::arch::asm!("mov {}, cr3", out(reg) v, options(nostack, readonly)); }
+    v & !0xFFF
+}
+
+/// Increment-3b self-test (cmdline `schedtest4`): two preemptible tasks each in
+/// its OWN address space, plus the boot thread in the kernel AS. Each prints its
+/// live CR3. If the three CR3 values differ AND interleave, the scheduler is
+/// switching per-process address spaces under timer preemption — the mechanism
+/// that lets the desktop and fbDOOM occupy the same fixed addresses.
+pub fn selftest_cr3_sched() -> ! {
+    use crate::serial::{write_str, write_hex_u64, write_byte};
+    write_str("\n[sched] === Increment 3b: per-task CR3 switching under preemption ===\n");
+    crate::vmm::extend_identity_map(512);
+    unsafe {
+        core::arch::asm!("cli");
+        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3() };
+        CUR_TASK = 0;
+    }
+    spawn_preempt_as(catask_a);
+    spawn_preempt_as(catask_b);
+    crate::idt::set_timer_vector(irq_timer_preempt as *const () as u64);
+    unsafe { core::arch::asm!("sti"); }
+    loop {
+        write_str("[sched] boot   cr3="); write_hex_u64(read_cr3()); write_byte(b'\n');
+        busy_spin();
+    }
+}
+
+extern "C" fn catask_a() -> ! {
+    loop {
+        crate::serial::write_str("[sched]   task A cr3=");
+        crate::serial::write_hex_u64(read_cr3());
+        crate::serial::write_byte(b'\n');
+        busy_spin();
+    }
+}
+extern "C" fn catask_b() -> ! {
+    loop {
+        crate::serial::write_str("[sched]   task B cr3=");
+        crate::serial::write_hex_u64(read_cr3());
+        crate::serial::write_byte(b'\n');
+        busy_spin();
+    }
+}
 
 /// Fill `buf` with packed 32-byte PsRecord entries.
 /// Layout per record: [u64 pid][u8 state][7 pad][16 name]
