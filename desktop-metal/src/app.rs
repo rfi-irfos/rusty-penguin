@@ -1667,6 +1667,25 @@ pub struct Browser {
     ansi:         crate::ansi::AnsiParser,
 }
 
+/// Decode %XX percent-encoding in a URL string.
+fn url_decode(s: &str) -> String {
+    let mut out = String::new();
+    let b = s.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            let h = b[i+1]; let l = b[i+2];
+            let hv = if h.is_ascii_digit() { h - b'0' } else { (h|32) - b'a' + 10 };
+            let lv = if l.is_ascii_digit() { l - b'0' } else { (l|32) - b'a' + 10 };
+            if hv < 16 && lv < 16 {
+                out.push((hv * 16 + lv) as char); i += 3; continue;
+            }
+        }
+        out.push(b[i] as char); i += 1;
+    }
+    out
+}
+
 impl Browser {
     pub fn new() -> Self {
         const HOME: &[u8] = b"google.com/search?q=rusty+penguin+os";
@@ -1953,7 +1972,8 @@ impl App for Browser {
             if my > content_y0 {
                 for (y0, y1, href) in self.link_hits.clone() {
                     if my >= y0 && my < y1 && !href.is_empty() {
-                        self.set_url(href.as_bytes());
+                        let resolved = self.resolve_href(&href);
+                        self.set_url(resolved.as_bytes());
                         self.navigate();
                         return;
                     }
@@ -2003,6 +2023,37 @@ impl App for Browser {
 }
 
 impl Browser {
+    /// Resolve a (possibly relative) href against the current URL.
+    /// Handles Google's /url?q=https://... redirect format.
+    fn resolve_href(&self, href: &str) -> String {
+        // Already absolute
+        if href.starts_with("http://") || href.starts_with("https://") {
+            return String::from(href);
+        }
+        // Google redirect: /url?q=https://...&...  → extract target
+        if href.contains("/url?") || href.contains("url?q=") {
+            if let Some(q) = href.find("q=") {
+                let val = &href[q+2..];
+                let end = val.find('&').unwrap_or(val.len());
+                let target = url_decode(&val[..end]);
+                if target.starts_with("http") { return target; }
+            }
+        }
+        // Protocol-relative: //example.com/...
+        if href.starts_with("//") {
+            return String::from("https:") + href;
+        }
+        // Relative path: prepend current host
+        let url = core::str::from_utf8(&self.url[..self.url_len]).unwrap_or("");
+        let host_end = url.find('/').unwrap_or(url.len());
+        let host = &url[..host_end];
+        if href.starts_with('/') {
+            String::from(host) + href
+        } else {
+            String::from(host) + "/" + href
+        }
+    }
+
     fn go_back(&mut self) {
         match self.mode {
             BrMode::Live | BrMode::Err => {
