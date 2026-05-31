@@ -9,6 +9,10 @@
 
 > "Binary hardware. Ternary mind."
 
+> *"I'm sure some clueless young person will [rewrite it in Rust]..."* — Linus
+> Torvalds ([the short that triggered it all](https://www.youtube.com/shorts/yBH1DbpbLpk)).
+> We were stupid enough — see [docs/ORIGIN.md](docs/ORIGIN.md).
+
 **Rusty Penguin is a complete operating system written from scratch in pure Rust —
 its own bootloader, kernel, drivers, window manager and apps, with no Linux kernel
 and no libc underneath. The goal: a daily-driver desktop OS you can install in
