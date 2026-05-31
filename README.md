@@ -13,6 +13,13 @@
 > Summit Europe 2024 ([keynote, 16:59](https://www.youtube.com/watch?v=OM_8UOPFpqE&t=1019s)).
 > We were stupid enough — see [docs/ORIGIN.md](docs/ORIGIN.md).
 
+![The keynote playing on the Rusty Penguin kernel](docs/meta-video-on-rusty-penguin.png)
+
+*…and then we played that keynote back **on the kernel it triggered**. The actual
+Torvalds/Hohndel talk, decoded by our own from-scratch `.rpv` codec and blitted to
+our own framebuffer — no browser, no Linux, no external codec. See
+[docs/META_VIDEO.md](docs/META_VIDEO.md).*
+
 **Rusty Penguin is a complete operating system written from scratch in pure Rust —
 its own bootloader, kernel, drivers, window manager and apps, with no Linux kernel
 and no libc underneath. The goal: a daily-driver desktop OS you can install in
