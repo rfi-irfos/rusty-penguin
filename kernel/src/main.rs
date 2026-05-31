@@ -403,6 +403,9 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
     if unsafe { mb2_cmdline_contains(mb2, b"physmaptest") } {
         vmm::selftest_physmap(); // higher-half direct map (VMM migration step 1a)
     }
+    if unsafe { mb2_cmdline_contains(mb2, b"schedtest6") } {
+        sched::selftest_ring3_lowhalf(); // private low half per process (Increment 3d)
+    }
     if unsafe { mb2_cmdline_contains(mb2, b"schedtest5") } {
         sched::selftest_ring3(); // ring-3 task in a private address space
     }

@@ -486,6 +486,83 @@ fn spawn_ring3(stub: &[u8]) -> usize {
     }
 }
 
+// ── Increment 3d: PRIVATE LOW HALF per process ───────────────────────────────
+// Real programs load in the low half (the desktop at 0x400000). To give each
+// process its own low half, the address space must NOT share the kernel's low
+// identity map (PML4[0]) — it shares only the kernel's higher half. Two
+// processes can then both live at the SAME low virtual address with different
+// contents, fully isolated, while the kernel (now entirely higher-half) keeps
+// servicing their syscalls. This is the proof that PML4[0] is no longer needed.
+const LOW_CODE_VA:  u64 = 0x0040_0000;          // 4 MiB — where real programs load
+const LOW_STACK_VA: u64 = 0x0040_1000;          // one page above the code
+const LOW_STACK_TOP: u64 = LOW_STACK_VA + 0x1000;
+
+/// Spawn a ring-3 task in an address space with a PRIVATE LOW HALF, running the
+/// stub at low `LOW_CODE_VA`. `tag` is patched into the stub's syscall arg so two
+/// processes at the same VA emit distinguishable syscalls.
+fn spawn_ring3_low(tag: u8) -> usize {
+    unsafe {
+        for i in 1..MAX_TASKS {
+            if !TASKS[i].used {
+                let as_ = match crate::vmm::new_address_space_private() { Some(p) => p, None => return 0 };
+                let pf  = crate::vmm::PTE_PRESENT | crate::vmm::PTE_USER;
+                let pfw = pf | crate::vmm::PTE_WRITABLE;
+                // Code page in the PRIVATE low half — no collision with the kernel
+                // (its low identity isn't mapped here) or with the other process.
+                let code = crate::pmm::alloc_frame().unwrap_or(0);
+                core::ptr::write_bytes(code as *mut u8, 0, 4096);
+                core::ptr::copy_nonoverlapping(R3_STUB.as_ptr(), code as *mut u8, R3_STUB.len());
+                *(code as *mut u8).add(1) = tag; // patch `mov edi, imm` tag byte
+                crate::vmm::map_page_in(as_, LOW_CODE_VA, code, pf);
+                // User stack page, also in the private low half.
+                let stk = crate::pmm::alloc_frame().unwrap_or(0);
+                core::ptr::write_bytes(stk as *mut u8, 0, 4096);
+                crate::vmm::map_page_in(as_, LOW_STACK_VA, stk, pfw);
+                // Ring-3 iret frame + zeroed GPRs on this task's kernel stack.
+                let base = core::ptr::addr_of_mut!(KSTACKS[i]) as *mut u8;
+                let ktop = ((base.add(KSTACK_SIZE) as u64) & !0xF) as u64;
+                let mut sp = ktop;
+                let push = |sp: &mut u64, v: u64| { *sp -= 8; *(*sp as *mut u64) = v; };
+                push(&mut sp, 0x1b);            // ss = user data | RPL3
+                push(&mut sp, LOW_STACK_TOP);   // user rsp (private low)
+                push(&mut sp, 0x202);           // rflags IF=1
+                push(&mut sp, 0x23);            // cs = user code | RPL3
+                push(&mut sp, LOW_CODE_VA);     // rip = stub entry (private low)
+                for _ in 0..15 { push(&mut sp, 0); }
+                TASKS[i] = Task { rsp: sp, used: true, alive: true, cr3: as_ };
+                return i;
+            }
+        }
+        0
+    }
+}
+
+/// Increment-3d self-test (cmdline `schedtest6`): TWO ring-3 tasks, each in its
+/// own private-low-half address space, both mapped at the SAME low VA 0x400000
+/// but emitting different syscall tags (0xA1, 0xB2), plus the boot thread. If
+/// BOTH tags appear and interleave with the boot thread, then: per-process
+/// private low half, same-VA isolation, and a fully higher-half kernel servicing
+/// ring-3 from address spaces that DO NOT map PML4[0] — all proven.
+pub fn selftest_ring3_lowhalf() -> ! {
+    use crate::serial::write_str;
+    write_str("\n[sched] === Increment 3d: private low half per process ===\n");
+    unsafe {
+        core::arch::asm!("cli");
+        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3() };
+        CUR_TASK = 0;
+    }
+    let a = spawn_ring3_low(0xA1);
+    let b = spawn_ring3_low(0xB2);
+    if a == 0 || b == 0 { write_str("[sched] spawn_ring3_low failed\n"); halt(); }
+    write_str("[sched] two private-low-half ring-3 tasks @ 0x400000; enabling preemption\n");
+    crate::idt::set_timer_vector(irq_timer_preempt as *const () as u64);
+    unsafe { core::arch::asm!("sti"); }
+    loop {
+        write_str("[sched] boot (kernel ring-0)\n");
+        busy_spin();
+    }
+}
+
 /// Increment-3c self-test (cmdline `schedtest5`): one ring-3 task in a private
 /// address space + the boot thread (ring 0). If the ring-3 stub's syscall is
 /// logged AND interleaves with the boot thread, then: ring-3 entry, private-AS

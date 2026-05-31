@@ -240,6 +240,24 @@ pub unsafe fn new_address_space() -> Option<u64> {
     Some(pml4)
 }
 
+/// Create a fresh address space with a PRIVATE low half: it shares ONLY the
+/// kernel's higher-half entries (PML4[511] kernel image, PML4[256] physmap +
+/// framebuffer), and leaves PML4[0] EMPTY. A process mapped into the low half
+/// here (e.g. at 0x400000, where real programs load) cannot collide with any
+/// other process or with the kernel — this is the per-process isolation the
+/// higher-half migration unlocks. The kernel keeps running after a CR3 switch
+/// because everything it touches (code/stack/page-tables/framebuffer) is now in
+/// the shared higher half. Returns the new PML4's physical address.
+pub unsafe fn new_address_space_private() -> Option<u64> {
+    let pml4 = crate::pmm::alloc_frame()?;
+    zero_frame(pml4);
+    let kpml4 = cr3();
+    // Share kernel high half only — NOT PML4[0]. The low half stays private.
+    write64(pml4, 256, read64(kpml4, 256)); // physmap + framebuffer
+    write64(pml4, 511, read64(kpml4, 511)); // kernel image
+    Some(pml4)
+}
+
 /// Map one 4 KiB page into a SPECIFIC address space (`pml4_phys`), rather than
 /// the active one. Used to populate a process's private region before switching
 /// to it. All intermediate tables get USER|WRITABLE|PRESENT.
