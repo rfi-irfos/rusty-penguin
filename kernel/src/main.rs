@@ -168,10 +168,17 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
     // higher half (RIP ≥ 0xFFFFFFFF80000000) before anything else.
     {
         let rip: u64;
-        unsafe { core::arch::asm!("lea {}, [rip + 0]", out(reg) rip, options(nostack)); }
+        let rsp: u64;
+        unsafe {
+            core::arch::asm!("lea {}, [rip + 0]", out(reg) rip, options(nostack));
+            core::arch::asm!("mov {}, rsp", out(reg) rsp, options(nostack));
+        }
         serial::write_str("[hh] kernel_main RIP = ");
         serial::write_hex_u64(rip);
         serial::write_str(if rip >= vmm::KERNEL_VMA { "  (higher half OK)\n" } else { "  (STILL LOW!)\n" });
+        serial::write_str("[hh] kernel_main RSP = ");
+        serial::write_hex_u64(rsp);
+        serial::write_str(if rsp >= vmm::KERNEL_VMA { "  (stack high OK)\n" } else { "  (stack STILL LOW!)\n" });
     }
 
     if magic != 0x36d76289 {

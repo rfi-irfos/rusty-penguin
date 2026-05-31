@@ -169,8 +169,14 @@ long_mode_start:
     movw    %ax, %fs
     movw    %ax, %gs
 
-    /* Restore stack pointer (still valid from 32-bit setup) */
-    movq    $stack_top, %rsp
+    /* Set the kernel stack to the HIGHER-HALF alias of the boot stack. The boot
+     * stack lives at low physical (.boot.bss, < 64 MiB), which the -2 GiB kernel
+     * window (PML4[511]) also maps — so RSP = stack_top + KERNEL_VMA points at
+     * the same bytes through the kernel's own mapping, NOT the low identity map
+     * (PML4[0]). This lets PML4[0] be dropped later for a private low half. */
+    movabs  $stack_top, %rsp
+    movabs  $0xFFFFFFFF80000000, %rax
+    add     %rax, %rsp
 
     /* EDI/ESI already hold magic and mb2 info from 32-bit code above.
      * In 64-bit mode, RDI = arg0, RSI = arg1 (System V ABI).
