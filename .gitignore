@@ -20,3 +20,6 @@ kernel/linux-abi-test/brick4-info
 
 # Regenerable meta-video artifact (scripts/make_meta_video.sh)
 iso/assets/*.rpv
+
+# Python bytecode cache (scripts/)
+__pycache__/
