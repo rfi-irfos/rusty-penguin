@@ -162,6 +162,9 @@ unsafe fn ics_send(base: u64, v: u32) {
 /// Returns true if HDA is up and DMA is running.
 pub fn is_ready() -> bool { unsafe { HDA_READY } }
 
+/// Size of the looping PCM ring buffer in bytes (the rpv player streams into it).
+pub fn audio_ring_bytes() -> usize { AUDIO_BYTES as usize }
+
 // ── Main init function ────────────────────────────────────────────────────────
 /// Initialise Intel HDA, find the first output widget, and begin playback
 /// of a 440 Hz test tone. Returns a ternary Trit indicating the outcome:

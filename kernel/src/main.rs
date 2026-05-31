@@ -18,6 +18,7 @@ mod memory;
 mod vmm;
 mod syscall;
 mod elf;
+mod rpv;
 mod serial;
 mod sched;
 mod input;
@@ -402,6 +403,9 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
     // can never disturb the working desktop boot. See docs/SCHEDULER.md.
     if unsafe { mb2_cmdline_contains(mb2, b"physmaptest") } {
         vmm::selftest_physmap(); // higher-half direct map (VMM migration step 1a)
+    }
+    if unsafe { mb2_cmdline_contains(mb2, b"metavideo") } {
+        rpv::play_from_initrd(); // play the founding clip on the kernel that it triggered
     }
     if unsafe { mb2_cmdline_contains(mb2, b"schedtest6") } {
         sched::selftest_ring3_lowhalf(); // private low half per process (Increment 3d)

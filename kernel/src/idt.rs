@@ -164,7 +164,9 @@ extern "x86-interrupt" fn exc_page_fault(f: InterruptFrame, err: u64) {
 static mut TICKS: u64 = 0;
 
 pub fn ticks() -> u64 {
-    unsafe { TICKS }
+    // Volatile: TICKS is bumped by the timer IRQ, so a plain read can be hoisted
+    // out of a busy-wait loop (e.g. rpv::delay_ms) and never observe the update.
+    unsafe { core::ptr::read_volatile(core::ptr::addr_of!(TICKS)) }
 }
 
 // Keyboard ring buffer — filled by IRQ, drained by sys_read
