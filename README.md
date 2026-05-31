@@ -1,4 +1,5 @@
 # Rusty Penguin
+> "Binary hardware. Ternary mind."
 
 [![Language: Rust](https://img.shields.io/badge/Language-Rust-ce422b?logo=rust)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green)](LICENSE)
@@ -6,8 +7,6 @@
 [![Platform: x86_64](https://img.shields.io/badge/Platform-x86__64-333)](https://en.wikipedia.org/wiki/X86-64)
 [![Kernel: Pure Rust](https://img.shields.io/badge/Kernel-Pure%20Rust%2C%20no%20libc-purple)](https://github.com/rfi-irfos/rusty-penguin)
 [![Status: Active Development](https://img.shields.io/badge/Status-Active%20Development-brightgreen)](https://github.com/rfi-irfos/rusty-penguin/pulse)
-
-> "Binary hardware. Ternary mind."
 
 > *"I'm sure some clueless young person will decide 'how hard can it be?' and
 > start his own operating system in Rust..."* — Linus Torvalds, Open Source
