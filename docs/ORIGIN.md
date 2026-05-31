@@ -1,47 +1,60 @@
-# Origin — the video that triggered it all
+# Origin — the keynote that triggered it all
 
-Rusty Penguin exists because of a throwaway line in a short clip of Linus
-Torvalds talking about Rust in the Linux kernel.
+Rusty Penguin exists because of a single exchange in a Linus Torvalds keynote.
 
-**The clip:** *"Linus Torvalds on RUST for Linux!"* — uploaded by @Dev.RSingh
-https://www.youtube.com/shorts/yBH1DbpbLpk
+**Source:** *Keynote: Linus Torvalds in Conversation with Dirk Hohndel* — The
+Linux Foundation, Open Source Summit Europe 2024 (Vienna, 16–18 September 2024).
+Full video: https://www.youtube.com/watch?v=OM_8UOPFpqE
 
-On screen, Linus says:
+While discussing the heated debate over bringing Rust into the Linux kernel
+alongside C, Torvalds sets it up at **[16:59]**:
 
-> "I'm sure some clueless young person will [rewrite it in Rust]..."
+> "I'm sure some clueless young person will decide 'how hard can it be?' and
+> start his own operating system in Rust or in something else..."
 
-That was the dare. Not meant as one — but that's how we took it.
+Dirk Hohndel immediately calls him on the projection — that calling a new
+developer "clueless" is exactly Torvalds describing his own younger self. Linus
+concedes it at **[17:32]**:
 
-The way Simeon put it:
+> "Oh absolutely. Yeah, you have to... you have to be all kinds of stupid to say
+> 'I can do this,' right? Because it turns out, yes, I'm still doing it 33 years
+> later."
 
-> "You have to be all kinds of stupid to say 'I can do this' — build an OS from
-> scratch, in pure Rust."
+That was the dare. Not meant as one — but that's how we took it. He said *start
+your own operating system in Rust.* So we did.
 
-And then we were stupid enough. The whole thing — a from-scratch, pure-Rust
-operating system: bootloader handoff, long-mode bring-up, physical + virtual
-memory managers, a preemptive scheduler, ring-3 processes, a from-scratch
-TCP/IP stack, an AHCI disk driver, a framebuffer desktop, a Linux ABI shim that
-runs unmodified glibc binaries (id Software's DOOM included), and a kernel that
-now lives in the higher half with per-process address-space isolation.
+## We were stupid enough
 
-## The comment section said it best
+The whole thing is a from-scratch, pure-Rust operating system — no Linux kernel,
+no libc underneath: bootloader handoff and long-mode bring-up, physical + virtual
+memory managers, a higher-half kernel with per-process address-space isolation, a
+preemptive scheduler, ring-3 processes, a from-scratch TCP/IP stack over our own
+TLS 1.3, an AHCI disk driver, a framebuffer desktop, and a Linux ABI shim that
+runs unmodified glibc binaries — id Software's DOOM among them.
 
-The top replies on that short, without knowing it, wrote our design philosophy:
+"You have to be all kinds of stupid to say 'I can do this.'" Noted. Same energy
+built `albert` — a sovereign, offline-first ternary AI node in Rust, in a world
+that says you must rent your compute from a cloud cartel. It takes exactly that
+kind of stupid to build an ecosystem from scratch instead of renting one.
 
-- *"Terry Davis made an OS in a cave... WITH A BOX OF SCRAPS!"* — and he did it
-  alone. We've got QEMU, a ternary streak, and three people plus an AI.
+## The comment section wrote our design philosophy
+
+From the clip of this keynote that first made the rounds:
+
+- *"Terry Davis made an OS in a cave... WITH A BOX OF SCRAPS!"* — and alone.
+  We've got QEMU, a ternary streak, and three people plus an AI.
 - *"There can be an advantage to not knowing how hard something is going to be."*
-  This is the literal truth of this repo. If we'd fully respected how hard a
-  higher-half kernel migration is, we might never have started it. We did it
-  anyway — one boot-verified increment at a time.
+  The literal truth of this repo. If we'd fully respected how hard a higher-half
+  kernel migration is, we might never have started. We did it anyway — one
+  boot-verified increment at a time.
 
 ## Closing the loop
 
-@rfi-irfos-official, replying to that same short:
+Replying to that clip, as @rfi-irfos-official:
 
 > https://github.com/rfi-irfos/rusty-penguin — we were actually stupid enough.
 
-The clueless young person rewrote it in Rust. Hi.
+The clueless young person started his own operating system in Rust. Hi, Linus.
 
 ---
 

@@ -9,8 +9,9 @@
 
 > "Binary hardware. Ternary mind."
 
-> *"I'm sure some clueless young person will [rewrite it in Rust]..."* — Linus
-> Torvalds ([the short that triggered it all](https://www.youtube.com/shorts/yBH1DbpbLpk)).
+> *"I'm sure some clueless young person will decide 'how hard can it be?' and
+> start his own operating system in Rust..."* — Linus Torvalds, Open Source
+> Summit Europe 2024 ([keynote, 16:59](https://www.youtube.com/watch?v=OM_8UOPFpqE&t=1019s)).
 > We were stupid enough — see [docs/ORIGIN.md](docs/ORIGIN.md).
 
 **Rusty Penguin is a complete operating system written from scratch in pure Rust —
