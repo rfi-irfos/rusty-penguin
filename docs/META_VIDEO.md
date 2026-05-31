@@ -6,6 +6,12 @@ OS ("...start his own operating system in Rust...", OSS EU 2024 — see
 browser, no Linux, no external codec, no web stack — just our framebuffer and our
 HDA audio.
 
+![The keynote playing on the Rusty Penguin kernel](meta-video-on-rusty-penguin.png)
+
+*Done. The real keynote (Torvalds + Hohndel on stage) decoded by our from-scratch
+`.rpv` codec and blitted to our own framebuffer — captured via QEMU `screendump`,
+540 frames at 640×360, zero faults.*
+
 ## How it works
 
 The clip is pre-decoded offline into a tiny from-scratch container, `.rpv`

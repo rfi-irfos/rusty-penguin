@@ -1,49 +1,51 @@
 #!/usr/bin/env python3
 """pack_rpv.py — pack raw RGB frames (+ optional PCM) into the .rpv container the
-bare-metal kernel player (kernel/src/rpv.rs) decodes.
+bare-metal kernel player (kernel/src/rpv.rs) decodes. numpy-accelerated.
 
-Two entry points:
   * pack(frames, w, h, fps, pcm, arate, ach) -> bytes   (library)
-  * CLI: pack a directory of WxH raw RGB24 frames + a raw s16le PCM file.
+  * CLI: pack a single rgb24 rawvideo blob + an s16le PCM file.
 
 Frame codec: each frame is a delta vs the previous (frame 0 vs black), encoded as
 repeated segments { u32 skip; u32 litlen; litlen x u32 pixels }. Pixels are stored
 as 0x00RRGGBB (u32 LE), matching fb::pixel. Static regions cost one skip; only the
 changed pixels are stored as literals.
 """
-import struct, sys, os
+import struct, sys
+import numpy as np
 
 MAGIC = b"RPV1"
 
 def encode_frame(cur, prev):
+    """cur, prev: np.uint32 arrays of npix pixels (0x00RRGGBB)."""
+    changed = cur != prev
+    if not changed.any():
+        return b''
+    c = changed.astype(np.int8)
+    d = np.diff(np.concatenate(([np.int8(0)], c, [np.int8(0)])))
+    starts = np.flatnonzero(d == 1)
+    ends   = np.flatnonzero(d == -1)
     seg = bytearray()
-    n = len(cur)
-    i = 0
-    while i < n:
-        skip = 0
-        while i < n and cur[i] == prev[i]:
-            skip += 1; i += 1
-        if i == n:
-            break  # trailing unchanged — nothing to emit
-        lit_start = i
-        while i < n and cur[i] != prev[i]:
-            i += 1
-        litlen = i - lit_start
+    prev_end = 0
+    for s, e in zip(starts.tolist(), ends.tolist()):
+        skip = s - prev_end
+        litlen = e - s
         seg += struct.pack('<II', skip, litlen)
-        seg += struct.pack('<%dI' % litlen, *cur[lit_start:lit_start + litlen])
+        seg += cur[s:e].astype('<u4').tobytes()
+        prev_end = e
     return bytes(seg)
 
 def pack(frames, w, h, fps, pcm=b'', arate=44100, ach=2):
-    """frames: list of lists, each w*h ints (0x00RRGGBB). pcm: s16le bytes."""
+    """frames: 2D np array (nframes x npix) or iterable of npix-length arrays;
+    each pixel 0x00RRGGBB. pcm: s16le bytes."""
     npix = w * h
+    frames = [np.asarray(fr, dtype=np.uint32).reshape(npix) for fr in frames]
     asamps = len(pcm) // (ach * 2) if ach else 0
     out = bytearray()
     out += MAGIC
     out += struct.pack('<7I', w, h, fps, len(frames), arate, ach, asamps)
     out += pcm
-    prev = [0] * npix
+    prev = np.zeros(npix, dtype=np.uint32)
     for fr in frames:
-        assert len(fr) == npix, "frame size mismatch"
         seg = encode_frame(fr, prev)
         out += struct.pack('<I', len(seg))
         out += seg
@@ -51,24 +53,17 @@ def pack(frames, w, h, fps, pcm=b'', arate=44100, ach=2):
     return bytes(out)
 
 def frames_from_rawvideo(blob, w, h):
-    """Split a concatenated rgb24 rawvideo blob (ffmpeg -f rawvideo -pix_fmt
-    rgb24) into a list of frames, each w*h ints (0x00RRGGBB)."""
-    npix = w * h
-    fbytes = npix * 3
-    nframes = len(blob) // fbytes
-    frames = []
-    for f in range(nframes):
-        base = f * fbytes
-        fr = [0] * npix
-        for i in range(npix):
-            o = base + i * 3
-            fr[i] = (blob[o] << 16) | (blob[o + 1] << 8) | blob[o + 2]
-        frames.append(fr)
-    return frames
+    """Split an rgb24 rawvideo blob (ffmpeg -f rawvideo -pix_fmt rgb24) into a 2D
+    np.uint32 array, nframes x (w*h), each pixel 0x00RRGGBB."""
+    arr = np.frombuffer(blob, dtype=np.uint8)
+    total = (arr.size // 3) * 3
+    rgb = arr[:total].reshape(-1, 3).astype(np.uint32)
+    u32 = (rgb[:, 0] << 16) | (rgb[:, 1] << 8) | rgb[:, 2]
+    nframes = u32.size // (w * h)
+    return u32[:nframes * w * h].reshape(nframes, w * h)
 
 def main():
     # pack_rpv.py <rawvideo.rgb> <w> <h> <fps> <pcm|-> <out.rpv>
-    # rawvideo = concatenated rgb24 frames (ffmpeg -f rawvideo -pix_fmt rgb24).
     if len(sys.argv) != 7:
         print("usage: pack_rpv.py <rawvideo.rgb> <w> <h> <fps> <pcm|-> <out.rpv>")
         sys.exit(1)

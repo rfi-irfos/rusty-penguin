@@ -17,3 +17,6 @@ kernel/linux-abi-test/brick2-robust
 kernel/linux-abi-test/brick3-fileio
 kernel/linux-abi-test/brick4-dyn
 kernel/linux-abi-test/brick4-info
+
+# Regenerable meta-video artifact (scripts/make_meta_video.sh)
+iso/assets/*.rpv

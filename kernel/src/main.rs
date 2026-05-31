@@ -244,7 +244,12 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
     // module we read it from (seen as `entry @ 0x0` + #PF). Copying the module
     // up to 40 MiB — above the heap, below the 63 MiB ring-3 stack, inside the
     // 64 MiB identity map — keeps the source intact across the .bss wipe.
-    const INITRD_RELOC: u64 = 0x0280_0000; // 40 MiB (physical)
+    // 128 MiB (physical). Above the desktop image+heap (≤28 MiB), the ring-3
+    // stack (~63 MiB), AND the HDA audio DMA buffer (~50 MiB) — a large initrd
+    // (e.g. the 58 MiB meta-video) at the old 40 MiB would overlap the audio
+    // buffer and get corrupted as PCM streams. Accessed via the physmap, so it
+    // needs no low identity coverage; only enough RAM (initrd_top < phys RAM).
+    const INITRD_RELOC: u64 = 0x0800_0000;
     if let Some((mod_start, mod_end)) = unsafe { parse_mb2_module(mb2) } {
         let size = (mod_end - mod_start) as usize;
         // Copy + read the initrd through the physmap (higher half) so ramfs does
