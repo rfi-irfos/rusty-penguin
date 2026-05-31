@@ -1,6 +1,8 @@
 // Bare-metal linear framebuffer driver.
 // Physical address comes from the Multiboot2 framebuffer tag (type 8).
-// Pages are identity-mapped (virt == phys) via vmm::map_mmio_range.
+// The VRAM is mapped into the HIGHER HALF (PHYSMAP_BASE + phys) via
+// vmm::map_mmio_high, so the framebuffer is reached through the kernel's own
+// mapping rather than the low identity map (PML4[0]) — see docs/VMM_HIGHER_HALF.md.
 
 use crate::font::FONT;
 
@@ -13,9 +15,9 @@ static mut FB_LIVE:   bool    = false;
 
 pub fn init(phys: u64, w: u32, h: u32, pitch: u32, bpp: u8) {
     let size = pitch as u64 * h as u64;
-    crate::vmm::map_mmio_range(phys, size);
+    let virt = unsafe { crate::vmm::map_mmio_high(phys, size) };
     unsafe {
-        FB_BASE   = phys as *mut u8;
+        FB_BASE   = virt as *mut u8;
         FB_WIDTH  = w;
         FB_HEIGHT = h;
         FB_PITCH  = pitch;

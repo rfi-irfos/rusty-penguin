@@ -108,6 +108,30 @@ pub fn map_mmio_range(phys_start: u64, size: u64) {
 /// scheduler, which records each task's address space.
 pub fn current_cr3() -> u64 { cr3() }
 
+/// Map an MMIO range (e.g. the framebuffer, which lives above RAM at ~4 GiB so
+/// the RAM physmap doesn't cover it) into the HIGHER HALF, at `PHYSMAP_BASE +
+/// phys`, using kernel-only 2 MiB huge pages. Returns that higher-half virtual
+/// base. Kernel-only (no USER bit) so it stays mapped in every process (it lives
+/// under PML4[256], which `new_address_space` shares) but is invisible to ring 3.
+/// Lets the framebuffer be reached without the low identity map (PML4[0]).
+pub unsafe fn map_mmio_high(phys: u64, size: u64) -> u64 {
+    const HUGE: u64 = 0x20_0000;
+    let virt_base = phys_to_virt(phys);
+    let start = phys & !(HUGE - 1);
+    let end   = (phys + size + HUGE - 1) & !(HUGE - 1);
+    let pml4  = cr3();
+    let mut p = start;
+    while p < end {
+        let v = phys_to_virt(p);
+        let pdpt = match descend(pml4, pml4_idx(v), PTE_PRESENT | PTE_WRITABLE) { Some(a) => a, None => break };
+        let pd   = match descend(pdpt, pdpt_idx(v), PTE_PRESENT | PTE_WRITABLE) { Some(a) => a, None => break };
+        write64(pd, pd_idx(v), p | PTE_HUGE | PTE_PRESENT | PTE_WRITABLE);
+        p += HUGE;
+    }
+    flush_tlb();
+    virt_base
+}
+
 // ── Higher-half kernel migration (docs/VMM_HIGHER_HALF.md), sub-step 1 ────────
 // Direct map of all physical RAM at PHYSMAP_BASE (PML4[256], kernel-only). Once
 // the low half becomes per-process, the kernel reaches page-table frames and

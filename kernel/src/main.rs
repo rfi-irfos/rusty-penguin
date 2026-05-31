@@ -258,9 +258,17 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
     }
 
     // Switch to framebuffer if GRUB provided one (Multiboot2 tag type 8).
-    // map_mmio_range maps the VRAM pages; term::init() paints the dark background.
+    // fb::init maps the VRAM into the higher half (map_mmio_high); term::init()
+    // paints the dark background.
     if let Some((addr, w, h, pitch, bpp)) = unsafe { parse_mb2_framebuffer(mb2) } {
         fb::init(addr, w, h, pitch, bpp);
+        // Prove the higher-half FB mapping is live VRAM: write a sentinel and
+        // read it back through the high virtual base before painting over it.
+        fb::pixel(0, 0, 0x00ABCDEF);
+        let got = fb::read_pixel(0, 0);
+        serial::write_str("[hh] FB via higher half: wrote 0xABCDEF read ");
+        serial::write_hex_u64(got as u64);
+        serial::write_str(if got == 0x00ABCDEF { "  (FB high OK)\n" } else { "  (FB MISMATCH!)\n" });
         term::init();
         vga::write_str("  [FB] ", vga::Color::Green);
         vga::write_i32(w as i32);
