@@ -127,8 +127,22 @@ problem permanently instead of juggling around it. Plan, in verifiable sub-steps
 Then Increment 4 (virtual `/dev/fb0`) and 5 (compositing) land on a clean base.
 
 ## Status (2026-05-31)
-Option A chosen and underway. Steps 1a + 2 are DONE and QEMU-verified in-sandbox.
-The kernel runs in the higher half with the low identity map retained as an
-alias, so the default desktop boot and every scheduler/VMM self-test still pass.
-Remaining: 1b (reroute low accesses through the physmap), then 3 (drop the low
-alias → private low half per process), then 4 (desktop + second process).
+Option A chosen and largely DONE — all QEMU-verified in-sandbox:
+- **1a** physmap built · **1b** page-table access routed through it.
+- **2** kernel relinked to -2 GiB; RIP runs in the higher half.
+- **3a** kernel stack via the -2 GiB alias · **3b** framebuffer in the higher
+  half (USER-accessible so ring 3 can render) · **3c** initrd via the physmap.
+  The kernel no longer needs PML4[0] for stack / FB / initrd / page tables.
+- **3d** `new_address_space_private()` shares only the kernel's higher half, so
+  each process gets a PRIVATE LOW HALF. Proven by `schedtest6`: two ring-3 tasks
+  both at low VA 0x400000 with different payloads, isolated, kernel servicing
+  both from address spaces that do NOT map PML4[0].
+
+The real `bin/desktop` boots and renders through the higher-half USER framebuffer
+with zero faults; all seven sched/VMM self-test flags pass.
+
+Remaining (Increment 4–5, the windowed-DOOM compositor): load the real desktop
+into a private-low AS (needs an ELF loader that maps into a target AS, plus the
+remaining device MMIO — AHCI/USB/NIC/HDA — moved high to fully null PML4[0] in
+the kernel master AS), a virtual `/dev/fb0` (offscreen buffer per process), and
+compositing two ring-3 processes (desktop + DOOM) into windows.
