@@ -35,8 +35,8 @@ mb2_start:
     .long   8
 mb2_end:
 
-/* ── BSS: stack + page tables ────────────────────────────────────────────── */
-    .section .bss
+/* ── BSS: stack + page tables (low-linked, physical addresses) ───────────── */
+    .section .boot.bss, "aw", @nobits
     .align 16
 stack_bottom:
     .skip   65536               /* 64 KB kernel stack */
@@ -46,12 +46,16 @@ stack_top:
 pml4_table:
     .skip   4096
 pdpt_table:
-    .skip   4096
+    .skip   4096                /* low identity PDPT  (PML4[0])   */
 pd_table:
-    .skip   4096
+    .skip   4096                /* low identity PD    (0–64 MiB)  */
+pdpt_high:
+    .skip   4096                /* higher-half PDPT   (PML4[511]) */
+pd_high:
+    .skip   4096                /* higher-half PD     (-2 GiB → phys 0–64 MiB) */
 
-/* ── 32-bit entry point ──────────────────────────────────────────────────── */
-    .section .text
+/* ── 32-bit entry point (low-linked boot stub) ──────────────────────────────── */
+    .section .boot.text, "ax"
     .code32
     .global _start
 _start:
@@ -89,6 +93,31 @@ _start:
     incl    %ecx
     cmpl    $32, %ecx           /* 32 entries × 2MB = 64MB */
     jl      .Lmap_pd
+
+    /* ── Higher-half kernel window: -2 GiB (0xFFFFFFFF80000000) → phys 0–64MB ──
+     * PML4[511] → pdpt_high ; PDPT_high[510] → pd_high ; PD_high[0..31] huge.
+     * The kernel is linked at -2 GiB; after paging we jump RIP up here so the
+     * low half can later become per-process. The low identity map above is
+     * retained as an alias for now (framebuffer/user/page-frame access). */
+    movl    $pdpt_high, %eax
+    orl     $0x3, %eax
+    movl    %eax, pml4_table + 511*8
+
+    movl    $pd_high, %eax
+    orl     $0x3, %eax
+    movl    %eax, pdpt_high + 510*8
+
+    xorl    %ecx, %ecx
+.Lmap_pd_high:
+    movl    %ecx, %eax
+    shll    $21, %eax           /* physical addr = index * 2MB */
+    orl     $0x83, %eax         /* present + writable + huge */
+    movl    %ecx, %edx
+    shll    $3, %edx            /* byte offset = index * 8 */
+    movl    %eax, pd_high(%edx)
+    incl    %ecx
+    cmpl    $32, %ecx
+    jl      .Lmap_pd_high
 
     /* ── Enable PAE (Physical Address Extension) ── */
     movl    %cr4, %eax
@@ -149,8 +178,12 @@ long_mode_start:
     movl    %edi, %edi          /* zero-extends to RDI */
     movl    %esi, %esi          /* zero-extends to RSI */
 
-    /* Call Rust kernel entry point */
-    call    kernel_main
+    /* Jump RIP into the higher half. kernel_main is linked at -2 GiB; this is
+     * an absolute (movabs) target — a RIP-relative call from the low boot stub
+     * could not reach it (> ±2 GiB away). After this, the kernel executes from
+     * higher-half virtual addresses. The early stack stays low for now. */
+    movabs  $kernel_main, %rax
+    call    *%rax
 
     /* Should never return — halt if it does */
 halt_loop:

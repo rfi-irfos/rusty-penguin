@@ -88,19 +88,38 @@ problem permanently instead of juggling around it. Plan, in verifiable sub-steps
    - Sub-step 1b — switch PMM/page-table frame access (`read64`/`write64`/
      `descend`) to `phys_to_virt`. NOT YET DONE; needs care because page-table
      ops run at boot before `build_physmap`.
-2. Map the kernel image + framebuffer into the higher half; keep the low identity
-   map as a temporary alias. Verify: kernel still boots/runs.
-3. `new_address_space` copies higher-half PML4 entries only; drop the low alias.
-   Verify (`schedtest3`-style): two address spaces with **different low-half**
-   mappings + shared kernel.
+2. Map the kernel image into the higher half **and run from it**; keep the low
+   identity map as a temporary alias. Verify: kernel still boots/runs.
+   - **DONE, VERIFIED 2026-05-31.** The kernel is now linked at `KERNEL_VMA`
+     (`0xFFFFFFFF80000000`, -2 GiB) via a split `linker.ld`: a low-linked boot
+     stub (`.boot`/`.boot.bss` — multiboot header, 32-bit entry, page tables,
+     early stack) plus the higher-half kernel (`AT()` loads it low). Target gets
+     `"code-model": "kernel"`. `boot.s` maps the -2 GiB window (`PML4[511]` →
+     `pdpt_high` → `pd_high`, 32×2 MiB → phys 0–64 MiB) alongside the low
+     identity map, then `movabs $kernel_main; call *%rax` jumps RIP up. First
+     serial line confirms it: `[hh] kernel_main RIP = 0xffffffff80…  (higher
+     half OK)`. `pmm` reserves the kernel by physical end (`kernel_end −
+     KERNEL_VMA`). All six flags (`physmaptest`, `schedtest`..`schedtest5`) pass
+     from the higher half. Framebuffer is still reached via the low identity
+     alias — moving it higher-half is deferred to step 3's alias drop.
+   - Regression fixed in the same pass: `new_address_space` now copies the
+     kernel's higher-half PML4 entries (`[511]` image, `[256]` physmap) in
+     addition to `[0]`, or the first kernel instruction after a CR3 switch
+     faults (caught it: `schedtest5` fired 0 ring-3 syscalls until fixed → 64).
+3. `new_address_space` copies higher-half PML4 entries only; **drop the low
+   alias** (move framebuffer + page-frame/heap access to the physmap first, via
+   sub-step 1b). Verify (`schedtest3`-style): two address spaces with
+   **different low-half** mappings + shared kernel. NOT YET DONE — this is the
+   next step. Prereq: 1b (route `read64`/`write64`/`descend` + the FB pointer
+   through `phys_to_virt`) so nothing depends on `PML4[0]` anymore.
 4. Load the desktop and a second process into private low halves; run both
    ring-3 under the scheduler. Verify: both run, isolated.
 
 Then Increment 4 (virtual `/dev/fb0`) and 5 (compositing) land on a clean base.
 
-## Open question for Simeon
-Higher-half is a meaningful kernel surgery (touches boot, PMM, every `virt==phys`
-assumption). Worth doing now for the proper foundation, or do you want a quick
-Option-C demo of windowed-DOOM-next-to-browser FIRST (throwaway), then the proper
-VMM after SPRIND? Your "always proper" rule says A; flagging the time tradeoff so
-it's your call, not mine.
+## Status (2026-05-31)
+Option A chosen and underway. Steps 1a + 2 are DONE and QEMU-verified in-sandbox.
+The kernel runs in the higher half with the low identity map retained as an
+alias, so the default desktop boot and every scheduler/VMM self-test still pass.
+Remaining: 1b (reroute low accesses through the physmap), then 3 (drop the low
+alias → private low half per process), then 4 (desktop + second process).

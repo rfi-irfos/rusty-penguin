@@ -163,6 +163,17 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
     serial::init();
     enable_sse();
 
+    // Higher-half migration (docs/VMM_HIGHER_HALF.md): the kernel is now linked
+    // at -2 GiB and boot.s jumped RIP up here. Confirm we are executing from the
+    // higher half (RIP ≥ 0xFFFFFFFF80000000) before anything else.
+    {
+        let rip: u64;
+        unsafe { core::arch::asm!("lea {}, [rip + 0]", out(reg) rip, options(nostack)); }
+        serial::write_str("[hh] kernel_main RIP = ");
+        serial::write_hex_u64(rip);
+        serial::write_str(if rip >= vmm::KERNEL_VMA { "  (higher half OK)\n" } else { "  (STILL LOW!)\n" });
+    }
+
     if magic != 0x36d76289 {
         vga::write_str("ERROR: bad multiboot2 magic\n", vga::Color::Red);
         loop {}
@@ -188,7 +199,9 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
     memory::print_map(mb2);
     vga::write_byte(b'\n', vga::Color::White);
 
-    let kend = core::ptr::addr_of!(kernel_end) as u64;
+    // kernel_end is a higher-half VMA now; pmm reserves the kernel's PHYSICAL
+    // image range, so translate back to physical (LMA = VMA − KERNEL_VMA).
+    let kend = core::ptr::addr_of!(kernel_end) as u64 - vmm::KERNEL_VMA;
     pmm::init(mb2, kend);
     let (free, total) = pmm::stats();
     vga::write_str("  [PMM] ", vga::Color::Cyan);

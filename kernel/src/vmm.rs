@@ -90,6 +90,12 @@ pub fn current_cr3() -> u64 { cr3() }
 // map. Additive — coexists with the existing identity map during migration.
 pub const PHYSMAP_BASE: u64 = 0xFFFF_8000_0000_0000;
 
+/// Higher-half kernel link base (-2 GiB). The kernel image is linked at
+/// `KERNEL_VMA + physical` (linker.ld) and boot.s maps this window to phys
+/// 0–64 MiB, so a higher-half kernel virtual address maps back to physical by
+/// subtracting KERNEL_VMA. Distinct from PHYSMAP_BASE (the full-RAM direct map).
+pub const KERNEL_VMA: u64 = 0xFFFF_FFFF_8000_0000;
+
 /// Translate a physical address to its higher-half physmap virtual address.
 #[inline]
 pub fn phys_to_virt(phys: u64) -> u64 { PHYSMAP_BASE + phys }
@@ -152,16 +158,24 @@ pub unsafe fn switch_address_space(pml4_phys: u64) {
     core::arch::asm!("mov cr3, {}", in(reg) pml4_phys & !0xFFF, options(nostack));
 }
 
-/// Create a fresh address space (PML4) for a new process. It SHARES the kernel's
-/// entire low 512 GiB (PML4[0] — identity map, framebuffer, kernel code/stack),
-/// so the kernel keeps running after a CR3 switch. Private per-process mappings
-/// go in PML4[1..] (virtual addresses ≥ 512 GiB) so they don't disturb the
-/// shared kernel region. Returns the new PML4's physical address.
+/// Create a fresh address space (PML4) for a new process. Every address space
+/// MUST keep the kernel mapped, or the first kernel instruction after a CR3
+/// switch faults. With the higher-half migration the kernel lives in:
+///   - PML4[511] — kernel image (code/data/stack), linked at KERNEL_VMA (-2 GiB)
+///   - PML4[256] — physmap (PHYSMAP_BASE direct map of RAM), once built
+///   - PML4[0]   — low identity map (framebuffer, initrd, page frames, heap),
+///                 still shared during the transition until those move higher
+/// so we copy all three top-level entries the kernel relies on. Private
+/// per-process mappings go elsewhere (e.g. PML4[1..] ≥ 512 GiB for the ring-3
+/// demo today; the low half becomes private once PML4[0] is no longer shared).
+/// Returns the new PML4's physical address.
 pub unsafe fn new_address_space() -> Option<u64> {
     let pml4 = crate::pmm::alloc_frame()?;
     core::ptr::write_bytes(pml4 as *mut u8, 0, 4096);
     let kpml4 = cr3();
-    write64(pml4, 0, read64(kpml4, 0)); // share kernel low half (PML4[0])
+    write64(pml4, 0,   read64(kpml4, 0));   // low identity (transitional)
+    write64(pml4, 256, read64(kpml4, 256)); // higher-half physmap (if present)
+    write64(pml4, 511, read64(kpml4, 511)); // higher-half kernel image
     Some(pml4)
 }
 
