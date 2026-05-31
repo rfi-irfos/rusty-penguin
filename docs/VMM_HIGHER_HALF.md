@@ -79,6 +79,15 @@ problem permanently instead of juggling around it. Plan, in verifiable sub-steps
 1. Add a higher-half **physmap** (map all RAM at `0xFFFF_8000_0000_0000 + phys`)
    and switch the PMM/page-table code to access frames through it (instead of
    raw physical = identity). Verify: existing tests still pass.
+   - **Sub-step 1a — build the physmap (DONE, VERIFIED).** `build_physmap()` +
+     `phys_to_virt()`, additive (coexists with the low identity map). Boot flag
+     `physmaptest`: phys `0x100000` read via the identity map and via the physmap
+     match (`0xe85250d6`) → "MATCH: higher-half physmap works". Verified in QEMU
+     2026-05-31 (sandbox QEMU now available; the whole `schedtest..schedtest5`
+     chain was re-confirmed in the same pass).
+   - Sub-step 1b — switch PMM/page-table frame access (`read64`/`write64`/
+     `descend`) to `phys_to_virt`. NOT YET DONE; needs care because page-table
+     ops run at boot before `build_physmap`.
 2. Map the kernel image + framebuffer into the higher half; keep the low identity
    map as a temporary alias. Verify: kernel still boots/runs.
 3. `new_address_space` copies higher-half PML4 entries only; drop the low alias.
