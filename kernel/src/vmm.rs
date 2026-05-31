@@ -110,12 +110,20 @@ pub fn current_cr3() -> u64 { cr3() }
 
 /// Map an MMIO range (e.g. the framebuffer, which lives above RAM at ~4 GiB so
 /// the RAM physmap doesn't cover it) into the HIGHER HALF, at `PHYSMAP_BASE +
-/// phys`, using kernel-only 2 MiB huge pages. Returns that higher-half virtual
-/// base. Kernel-only (no USER bit) so it stays mapped in every process (it lives
-/// under PML4[256], which `new_address_space` shares) but is invisible to ring 3.
-/// Lets the framebuffer be reached without the low identity map (PML4[0]).
-pub unsafe fn map_mmio_high(phys: u64, size: u64) -> u64 {
+/// phys`, using 2 MiB huge pages under PML4[256]. Returns that higher-half
+/// virtual base. Because it lives under PML4[256] it stays mapped in every
+/// process (which `new_address_space*` shares) — and reachable without the low
+/// identity map (PML4[0]).
+///
+/// `user`: if true, the FB is made ring-3 accessible (the desktop writes pixels
+/// directly to the address `sys_fb_query` hands it). The x86 walk requires the
+/// USER bit at EVERY level, so we OR USER into the shared PML4[256] entry and the
+/// FB's own tables/pages. This is safe: the RAM direct-map under the same
+/// PML4[256] keeps USER=0 on its lower levels, so ring 3 still cannot reach it —
+/// only the explicitly-USER framebuffer path is exposed.
+pub unsafe fn map_mmio_high(phys: u64, size: u64, user: bool) -> u64 {
     const HUGE: u64 = 0x20_0000;
+    let u = if user { PTE_USER } else { 0 };
     let virt_base = phys_to_virt(phys);
     let start = phys & !(HUGE - 1);
     let end   = (phys + size + HUGE - 1) & !(HUGE - 1);
@@ -123,9 +131,12 @@ pub unsafe fn map_mmio_high(phys: u64, size: u64) -> u64 {
     let mut p = start;
     while p < end {
         let v = phys_to_virt(p);
-        let pdpt = match descend(pml4, pml4_idx(v), PTE_PRESENT | PTE_WRITABLE) { Some(a) => a, None => break };
-        let pd   = match descend(pdpt, pdpt_idx(v), PTE_PRESENT | PTE_WRITABLE) { Some(a) => a, None => break };
-        write64(pd, pd_idx(v), p | PTE_HUGE | PTE_PRESENT | PTE_WRITABLE);
+        let pdpt = match descend(pml4, pml4_idx(v), PTE_PRESENT | PTE_WRITABLE | u) { Some(a) => a, None => break };
+        // PML4[256] pre-exists (the RAM physmap) without USER; OR it in so the
+        // walk can reach a USER framebuffer. Lower physmap levels stay USER=0.
+        if user { let e = read64(pml4, pml4_idx(v)); write64(pml4, pml4_idx(v), e | PTE_USER); }
+        let pd = match descend(pdpt, pdpt_idx(v), PTE_PRESENT | PTE_WRITABLE | u) { Some(a) => a, None => break };
+        write64(pd, pd_idx(v), p | PTE_HUGE | PTE_PRESENT | PTE_WRITABLE | u);
         p += HUGE;
     }
     flush_tlb();

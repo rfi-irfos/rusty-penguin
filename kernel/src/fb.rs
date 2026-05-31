@@ -15,7 +15,9 @@ static mut FB_LIVE:   bool    = false;
 
 pub fn init(phys: u64, w: u32, h: u32, pitch: u32, bpp: u8) {
     let size = pitch as u64 * h as u64;
-    let virt = unsafe { crate::vmm::map_mmio_high(phys, size) };
+    // user = true: the ring-3 desktop writes pixels directly to this base
+    // (handed to it by sys_fb_query), so it must be USER-accessible.
+    let virt = unsafe { crate::vmm::map_mmio_high(phys, size, true) };
     unsafe {
         FB_BASE   = virt as *mut u8;
         FB_WIDTH  = w;
