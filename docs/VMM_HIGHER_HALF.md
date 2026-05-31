@@ -85,9 +85,18 @@ problem permanently instead of juggling around it. Plan, in verifiable sub-steps
      match (`0xe85250d6`) → "MATCH: higher-half physmap works". Verified in QEMU
      2026-05-31 (sandbox QEMU now available; the whole `schedtest..schedtest5`
      chain was re-confirmed in the same pass).
-   - Sub-step 1b — switch PMM/page-table frame access (`read64`/`write64`/
-     `descend`) to `phys_to_virt`. NOT YET DONE; needs care because page-table
-     ops run at boot before `build_physmap`.
+   - **Sub-step 1b — route page-table frame access through the physmap (DONE,
+     VERIFIED 2026-05-31).** `build_physmap` now runs during normal boot (after
+     `extend_identity_map`, sized to RAM). A single `frame_virt(phys)` chokepoint
+     returns the physmap address once a `PHYSMAP_READY` flag is set (at the end
+     of the build) and the low identity address before that; `read64`/`write64`/
+     `zero_frame`/`descend`/`new_address_space` all go through it. So every
+     paging-structure access after boot uses the higher half — the VMM no longer
+     depends on `PML4[0]`. `build_physmap` is idempotent (re-running it would
+     install an empty PDPT into `PML4[256]` and #PF the next frame access — found
+     and fixed via `physmaptest`). All six flags pass with zero faults.
+     Still TODO before the alias drop: the framebuffer pointer (`fb.rs`) and the
+     kernel heap/stack still use low identity addresses.
 2. Map the kernel image into the higher half **and run from it**; keep the low
    identity map as a temporary alias. Verify: kernel still boots/runs.
    - **DONE, VERIFIED 2026-05-31.** The kernel is now linked at `KERNEL_VMA`

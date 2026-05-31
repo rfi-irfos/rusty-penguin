@@ -215,6 +215,18 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
     vmm::extend_identity_map(64);  // identity-map 0–64 MiB
     vga::write_str("  [VMM] identity map extended to 64 MiB\n", vga::Color::Green);
 
+    // Higher-half physmap (docs/VMM_HIGHER_HALF.md sub-step 1b): direct-map all
+    // physical RAM at PHYSMAP_BASE so the VMM reaches page-table frames through
+    // the higher half instead of the low identity map. After this the kernel no
+    // longer depends on PML4[0] for paging structures — the prerequisite for
+    // dropping the low alias and giving each process a private low half.
+    let phys_mib = (total / 256) as usize;            // frames → MiB (256 × 4 KiB)
+    let map_mib  = ((phys_mib + 4) & !1).max(64);     // round up to 2 MiB, small margin
+    unsafe { vmm::build_physmap(map_mib); }
+    vga::write_str("  [VMM] physmap: RAM direct-mapped at higher half (", vga::Color::Green);
+    vga::write_i32(map_mib as i32);
+    vga::write_str(" MiB)\n", vga::Color::Green);
+
     // Parse initramfs CPIO from GRUB module (Multiboot2 tag type=3).
     //
     // Relocate it to a fixed high address first. The ring-3 desktop is loaded at

@@ -1,3 +1,25 @@
+use core::sync::atomic::{AtomicBool, Ordering};
+
+/// Set once the higher-half physmap is built. Until then, the VMM reaches page-
+/// table frames (and other physical memory) through the low identity map
+/// (virt == phys). After it's set, those accesses go through the physmap
+/// (`PHYSMAP_BASE + phys`) instead, so the VMM no longer depends on `PML4[0]` —
+/// the prerequisite for dropping the low identity alias and giving each process
+/// a private low half. See `build_physmap`.
+static PHYSMAP_READY: AtomicBool = AtomicBool::new(false);
+
+/// Virtual address through which to touch a physical page-table frame (or any
+/// physical RAM the VMM dereferences): the physmap once it's up, else the low
+/// identity map. Single chokepoint so the migration is a one-line policy change.
+#[inline]
+fn frame_virt(phys: u64) -> usize {
+    if PHYSMAP_READY.load(Ordering::Relaxed) {
+        phys_to_virt(phys) as usize
+    } else {
+        phys as usize
+    }
+}
+
 // Page flags
 pub const PTE_PRESENT:  u64 = 1 << 0;
 pub const PTE_WRITABLE: u64 = 1 << 1;
@@ -26,10 +48,14 @@ fn flush_tlb() {
 }
 
 unsafe fn read64(phys: u64, idx: usize) -> u64 {
-    *((phys as usize + idx * 8) as *const u64)
+    *((frame_virt(phys) + idx * 8) as *const u64)
 }
 unsafe fn write64(phys: u64, idx: usize, val: u64) {
-    *((phys as usize + idx * 8) as *mut u64) = val;
+    *((frame_virt(phys) + idx * 8) as *mut u64) = val;
+}
+/// Zero a freshly allocated physical frame through the active mapping policy.
+unsafe fn zero_frame(phys: u64) {
+    core::ptr::write_bytes(frame_virt(phys) as *mut u8, 0, 4096);
 }
 
 fn pml4_idx(v: u64) -> usize { ((v >> 39) & 0x1FF) as usize }
@@ -46,8 +72,7 @@ unsafe fn descend(table: u64, idx: usize, flags: u64) -> Option<u64> {
         return Some(entry & !0xFFF);
     }
     let frame = crate::pmm::alloc_frame()?;
-    // Zero the new page table frame (it's in the identity-mapped region)
-    core::ptr::write_bytes(frame as *mut u8, 0, 4096);
+    zero_frame(frame); // reached via the physmap once it's up, else low identity
     write64(table, idx, frame | flags);
     Some(frame)
 }
@@ -105,9 +130,17 @@ pub fn phys_to_virt(phys: u64) -> u64 { PHYSMAP_BASE + phys }
 /// bit), so it stays mapped in every process's address space but is unreachable
 /// from ring 3.
 pub unsafe fn build_physmap(limit_mib: usize) {
+    // Idempotent: building it twice would install a fresh (empty) PDPT into
+    // PML4[256] before populating it — which unmaps the physmap mid-build, and
+    // the next frame access (now routed THROUGH the physmap) would #PF. Once
+    // it's up, leave it.
+    if PHYSMAP_READY.load(Ordering::Relaxed) { return; }
+    // During the build itself PHYSMAP_READY is still false, so the write64s and
+    // frame zeroings below reach the (low-physical) page-table frames through
+    // the low identity map. We flip the flag only at the very end.
     let pml4 = cr3();
     let pdpt = match crate::pmm::alloc_frame() { Some(f) => f, None => return };
-    core::ptr::write_bytes(pdpt as *mut u8, 0, 4096);
+    zero_frame(pdpt);
     write64(pml4, pml4_idx(PHYSMAP_BASE), pdpt | PTE_PRESENT | PTE_WRITABLE);
 
     let huge_total = limit_mib / 2;            // # of 2 MiB pages
@@ -115,7 +148,7 @@ pub unsafe fn build_physmap(limit_mib: usize) {
     let mut pdpt_i = pdpt_idx(PHYSMAP_BASE);   // 0
     while mapped < huge_total && pdpt_i < 512 {
         let pd = match crate::pmm::alloc_frame() { Some(f) => f, None => return };
-        core::ptr::write_bytes(pd as *mut u8, 0, 4096);
+        zero_frame(pd);
         write64(pdpt, pdpt_i, pd | PTE_PRESENT | PTE_WRITABLE);
         let mut pd_i = 0usize;
         while pd_i < 512 && mapped < huge_total {
@@ -126,16 +159,20 @@ pub unsafe fn build_physmap(limit_mib: usize) {
         pdpt_i += 1;
     }
     flush_tlb();
+    // From now on the VMM reaches page-table frames through the physmap, not the
+    // low identity map — so the low alias can later be dropped.
+    PHYSMAP_READY.store(true, Ordering::Relaxed);
 }
 
-/// Sub-step 1a self-test: build the physmap and confirm a known physical
-/// location reads identically through the low identity map and the higher-half
-/// physmap. Boot flag `physmaptest`.
+/// Physmap self-test: confirm a known physical location reads identically
+/// through the low identity map and the higher-half physmap. Boot flag
+/// `physmaptest`. The physmap is now built during normal boot (sub-step 1b), so
+/// the `build_physmap` call here is an idempotent no-op and we just verify it.
 pub fn selftest_physmap() -> ! {
     use crate::serial::{write_str, write_hex_u64, write_byte};
     write_str("\n[vmm] === higher-half physmap self-test ===\n");
     unsafe {
-        build_physmap(1024); // 1 GiB
+        build_physmap(1024); // no-op if already built at boot
         let p: u64 = 0x10_0000; // 1 MiB — kernel image region, known-mapped
         let via_identity = *(p as *const u64);
         let via_physmap   = *((phys_to_virt(p)) as *const u64);
@@ -171,7 +208,7 @@ pub unsafe fn switch_address_space(pml4_phys: u64) {
 /// Returns the new PML4's physical address.
 pub unsafe fn new_address_space() -> Option<u64> {
     let pml4 = crate::pmm::alloc_frame()?;
-    core::ptr::write_bytes(pml4 as *mut u8, 0, 4096);
+    zero_frame(pml4);
     let kpml4 = cr3();
     write64(pml4, 0,   read64(kpml4, 0));   // low identity (transitional)
     write64(pml4, 256, read64(kpml4, 256)); // higher-half physmap (if present)
