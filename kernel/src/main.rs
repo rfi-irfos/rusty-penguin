@@ -243,12 +243,17 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
     // module we read it from (seen as `entry @ 0x0` + #PF). Copying the module
     // up to 40 MiB — above the heap, below the 63 MiB ring-3 stack, inside the
     // 64 MiB identity map — keeps the source intact across the .bss wipe.
-    const INITRD_RELOC: usize = 0x0280_0000; // 40 MiB
+    const INITRD_RELOC: u64 = 0x0280_0000; // 40 MiB (physical)
     if let Some((mod_start, mod_end)) = unsafe { parse_mb2_module(mb2) } {
         let size = (mod_end - mod_start) as usize;
-        // ptr::copy has memmove semantics, so source/dest overlap is safe.
-        unsafe { core::ptr::copy(mod_start as *const u8, INITRD_RELOC as *mut u8, size); }
-        ramfs::init(INITRD_RELOC as *const u8, size);
+        // Copy + read the initrd through the physmap (higher half) so ramfs does
+        // not depend on the low identity map. Same physical bytes (40 MiB), high
+        // virtual addresses. The reloc target is still low phys 40 MiB, which
+        // survives the desktop's low .bss wipe (≤28 MiB). ptr::copy is memmove.
+        let src = vmm::phys_to_virt(mod_start as u64) as *const u8;
+        let dst = vmm::phys_to_virt(INITRD_RELOC) as *mut u8;
+        unsafe { core::ptr::copy(src, dst, size); }
+        ramfs::init(dst as *const u8, size);
         let count = ramfs::inode_count();
         vga::write_str("  [ramfs] ", vga::Color::Green);
         vga::write_i32(count as i32);
