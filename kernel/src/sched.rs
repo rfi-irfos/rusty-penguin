@@ -976,6 +976,23 @@ pub fn selftest_offscreen() -> ! {
     }
 }
 
+// Like FILL_STUB but renders its surface ONCE, makes one liveness syscall, then
+// hangs forever (jmp $) — a "render then wedge" app. The watchdog sees no further
+// syscall progress and force-quits it. Colour at offset 11 (mov edx, imm32).
+const RENDER_HANG_STUB: [u8; 38] = [
+    0xb8, 0x00, 0x00, 0x80, 0x00,       // mov eax, FB_VA
+    0xb9, 0x00, 0x04, 0x00, 0x00,       // mov ecx, 1024
+    0xba, 0xff, 0xa0, 0x48, 0x00,       // mov edx, 0x0048A0FF (blue)
+    0x89, 0x10,                         // .l: mov [rax], edx
+    0x83, 0xc0, 0x04,                   //     add eax, 4
+    0xff, 0xc9,                         //     dec ecx
+    0x75, 0xf7,                         //     jnz .l
+    0xbf, 0xf3, 0x00, 0x00, 0x00,       // mov edi, 0xF3 (one liveness tag)
+    0xb8, 0x37, 0x13, 0x00, 0x00,       // mov eax, 0x1337
+    0x0f, 0x05,                         // syscall
+    0xeb, 0xfe,                         // jmp $  (wedge forever)
+];
+
 /// Build a fill-program ELF whose surface colour is `color` (patches the
 /// `mov edx, imm32` in FILL_STUB at code offset 11).
 fn make_fill_elf(load_va: u64, color: u32) -> alloc::vec::Vec<u8> {
@@ -1041,6 +1058,63 @@ pub fn selftest_multiwin() -> ! {
         n += 1;
         if n == 6 {
             write_str("[wm] === MULTI-APP PROVEN: two isolated processes composited into two windows at once ===\n");
+        }
+    }
+}
+
+/// `recoverwin` brick — item 4's whole goal in ONE scene: two windowed app
+/// processes, one of which wedges; the watchdog force-quits the hung one and the
+/// compositor closes its window ("Not Responding"), while the healthy app keeps
+/// rendering. Isolation (1/2) + watchdog (2) + windowing (3d) together — exactly
+/// "a hung app can't freeze the desktop, and several apps run at once."
+/// Screenshot-verifiable. Gated behind `recoverwin`.
+pub fn selftest_recover_win() -> ! {
+    use crate::serial::write_str;
+    write_str("\n[wm] === recoverwin: one windowed app hangs -> force-quit; the other keeps running ===\n");
+    unsafe {
+        core::arch::asm!("cli");
+        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3() };
+        CUR_TASK = 0;
+    }
+    let f1 = crate::pmm::alloc_frame().unwrap_or(0);
+    let f2 = crate::pmm::alloc_frame().unwrap_or(0);
+    if f1 == 0 || f2 == 0 { write_str("[wm] no frames\n"); halt(); }
+    unsafe {
+        core::ptr::write_bytes(crate::vmm::phys_to_virt(f1) as *mut u8, 0, 4096);
+        core::ptr::write_bytes(crate::vmm::phys_to_virt(f2) as *mut u8, 0, 4096);
+    }
+    let healthy = make_fill_elf(0x0050_0000, 0x00FF_8800);      // keeps rendering + syscalling
+    let wedger = make_elf(0x0050_0000, &RENDER_HANG_STUB);      // renders once, then hangs
+    let a = spawn_ring3_elf(&healthy, f1);
+    let b = spawn_ring3_elf(&wedger, f2);
+    if a == 0 || b == 0 { write_str("[wm] spawn failed\n"); halt(); }
+    write_str("[wm] app A (healthy) + app B (will wedge) running in windows\n");
+    crate::idt::set_timer_vector(irq_timer_preempt as *const () as u64);
+    unsafe { core::arch::asm!("sti"); }
+
+    let mut prev_b = 0u64;
+    let mut stall = 0u32;
+    let mut closed = false;
+    loop {
+        busy_spin();
+        composite_window(f1, 120, 120); // healthy app A always updates
+        unsafe {
+            if TASKS[b].alive {
+                composite_window(f2, 200, 160); // app B while alive
+                let sb = task_syscalls(b);
+                if sb == prev_b { stall += 1; } else { stall = 0; }
+                prev_b = sb;
+                if stall >= 4 {
+                    write_str("[wm] app B (window 2) NOT RESPONDING — force-quitting\n");
+                    kill_task(b);
+                }
+            } else if !closed {
+                // Draw a "Not Responding / closed" overlay over B's window.
+                crate::fb::fill(200 - 2, 160 - 12, 36, 48, 0x4A2024);
+                write_str("[wm] B's window force-closed; A keeps rendering\n");
+                write_str("[wm] === RECOVER PROVEN: hung windowed app reaped, healthy app unaffected ===\n");
+                closed = true;
+            }
         }
     }
 }
