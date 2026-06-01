@@ -153,6 +153,11 @@ pub static mut WALLPAPER_DEF: i64 = -1;
 /// the whole UI is rendered into RAM and DMA-scanned by the GPU (sys_gpu_flush).
 pub static mut GPU_DISPLAY: bool = false;
 
+/// Set by boot from `showmenu` on the kernel cmdline; the desktop reads it via
+/// sys_showmenu (#35) and opens the start menu on launch. A marketing/screenshot
+/// aid (mouse clicks can't be driven headlessly), like `autostart=`.
+pub static mut SHOW_MENU: bool = false;
+
 /// Parse the decimal value following `key` (e.g. b"autostart=") in the MB2
 /// command line. Returns None if absent.
 unsafe fn mb2_cmdline_value(mb2: u32, key: &[u8]) -> Option<i64> {
@@ -491,6 +496,10 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
     if unsafe { mb2_cmdline_contains(mb2, b"gpudisplay") } && virtio_gpu::is_ready() {
         unsafe { GPU_DISPLAY = true; }
         vga::write_str("  [gpu: desktop routed through virtio-gpu]\n", vga::Color::Green);
+    }
+    // showmenu → desktop opens the start menu on launch (screenshot aid).
+    if unsafe { mb2_cmdline_contains(mb2, b"showmenu") } {
+        unsafe { SHOW_MENU = true; }
     }
     if unsafe { mb2_cmdline_contains(mb2, b"schedtest6") } {
         sched::selftest_ring3_lowhalf(); // private low half per process (Increment 3d)

@@ -617,6 +617,10 @@ pub extern "C" fn syscall_handler(nr: u64, arg1: u64, arg2: u64, arg3: u64) -> u
             let v = unsafe { crate::WALLPAPER_DEF };
             if v < 0 { u64::MAX } else { v as u64 }
         }
+        35 => {
+            // sys_showmenu → 1 if `showmenu` was on the cmdline (screenshot aid), else 0.
+            if unsafe { crate::SHOW_MENU } { 1 } else { 0 }
+        }
         33 => {
             // sys_cpu → CPU busy permille (0..1000) over the last window; resets it.
             crate::sched::cpu_sample() as u64

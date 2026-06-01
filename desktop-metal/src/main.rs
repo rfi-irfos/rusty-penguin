@@ -152,6 +152,17 @@ fn sys_wallpaper() -> u64 {
     n
 }
 
+/// sys_showmenu (#35): true if `showmenu` was on the cmdline (open the start
+/// menu on launch — a screenshot aid, since mouse clicks can't be driven headless).
+fn sys_showmenu() -> bool {
+    let n: u64;
+    unsafe {
+        core::arch::asm!("syscall", inout("rax") 35u64 => n, in("rdi") 0u64,
+            out("rcx") _, out("r11") _, options(nostack));
+    }
+    n != 0
+}
+
 /// Open a desktop app by its menu index (the MenuLaunch::App(n) tags). Returns
 /// None for unknown indices. Shared by autostart and the right-click menu.
 fn open_app_by_index(idx: u64, w: i32, h: i32, n: usize) -> Option<TermWin> {
@@ -2215,6 +2226,11 @@ pub extern "C" fn _start() -> ! {
         if let Some(tw) = open_app_by_index(autostart, w, h, wins.len()) {
             wins.push(tw);
         }
+    }
+    // showmenu cmdline flag → open the start menu on launch (screenshot aid).
+    if sys_showmenu() {
+        start_menu_open = true;
+        scene_dirty = true;
     }
 
     let mut last_loop_tick: u64 = sys_ticks();

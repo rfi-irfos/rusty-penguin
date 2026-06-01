@@ -40,12 +40,14 @@ Built by [RFI-IRFOS](https://github.com/rfi-irfos) as part of the
 [Ternary Intelligence Stack](https://ternlang.com).
 Preinstalled: `albert` · `ternlang` · `albert-cli` · `ternlang-mcp`
 
-![Rusty Penguin desktop v2.3](docs/rusty-penguin-desktop-v2.3.png)
+![Rusty Penguin desktop — menu open, native browser on rustypenguin://home, Nebula wallpaper](docs/rusty-penguin-desktop.png)
 
-*Rusty Penguin Googles itself — on its own bare-metal kernel. The OS fetches
-`google.com/search?q=rusty+penguin+os` over our own TLS 1.3 stack and finds
-**"rusty-penguin - crates.io: Rust Package Registry"** in the results. No X11,
-no Wayland, no libc, no Linux kernel underneath.*
+*The desktop with the start menu open and the native browser on `rustypenguin://home`,
+over the warm "Nebula" wallpaper. The browser is real: point it at any host and it
+fetches live over the from-scratch TCP/IP + TLS 1.3 stack — on boot it even
+[googles the OS itself](docs/rusty-penguin-googling-itself.png), pulling
+`google.com/search?q=rusty+penguin+os` over our own TLS with no X11, no Wayland, no
+libc and no Linux kernel underneath.*
 
 ---
 
