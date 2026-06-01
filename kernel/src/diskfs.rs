@@ -1,163 +1,181 @@
-// RPFS — Rusty Penguin FileSystem.
-// Simple persistent named-file store on top of the AHCI driver.
-// Files and settings written here survive a power cycle.
+// RPFS — Rusty Penguin FileSystem, persistent storage on the AHCI/SATA disk.
 //
-// Disk layout (512-byte sectors):
-//   LBA 8192        Superblock: magic[8] + data_next_lba[8] + zeros
-//   LBA 8193-8194   Directory:  16 entries × 64 bytes  (1024 bytes)
-//   LBA 8195+       File data (append-only; old entries tombstoned on overwrite)
+// This is the thin kernel adapter: it binds the real filesystem core in
+// `rpfs.rs` (block-bitmap reclamation, thousands of files, hierarchical
+// directories — host-tested in tools/rpfs_test.rs) to the AHCI block driver,
+// and keeps the small public API the rest of the kernel already calls
+// (write_file / read_file / is_ready, plus delete/mkdir/list for callers that
+// want them). RPFS v1 — the flat 16-file append-only demo — is gone.
 //
-// Ternary Trit state per directory slot:
-//    1i8  (+1, Pos)  — active file
-//    0i8  ( 0, Zero) — empty slot
-//   -1i8  (-1, Neg)  — deleted / tombstone
+// The filesystem lives in the disk region starting at LBA 8192. The geometry is
+// self-describing in the superblock, so a v1 disk (magic "RPFS2026") simply
+// fails the v2 magic check and gets reformatted on first boot.
 
-const SUPER_LBA:   u64 = 8192;
-const DIR_LBA:     u64 = 8193; // occupies 2 sectors
-const DATA_START:  u64 = 8195;
-const MAGIC:       &[u8; 8] = b"RPFS2026";
-const MAX_FILES:   usize = 16;
-const ENTRY_SZ:    usize = 64;
+use crate::rpfs::{BlockDev, DirItem, Rpfs};
+use alloc::vec::Vec;
 
-// Directory entry byte layout (64 bytes):
-//   [0..52]  name  (null-padded, max 51 chars)
-//   [52]     trit  (i8: +1/0/-1)
-//   [53..56] _pad
-//   [56..60] data_lba  (u32 LE)
-//   [60..64] size      (u32 LE, bytes)
+const FS_BASE: u64 = 8192;
+// The dev disk (launch.sh / installer) is 256 MiB. AHCI exposes no capacity
+// query, so we size the FS for that; a larger disk just leaves a tail unused.
+const DISK_SECTORS: u64 = 256 * 1024 * 1024 / 512; // 524288
 
-static mut DIR:          [[u8; ENTRY_SZ]; MAX_FILES] = [[0u8; ENTRY_SZ]; MAX_FILES];
-static mut DATA_NEXT_LBA: u64 = DATA_START;
-static mut READY:         bool = false;
-
-#[inline] fn e_trit(e: &[u8; ENTRY_SZ]) -> i8 { e[52] as i8 }
-#[inline] fn e_name(e: &[u8; ENTRY_SZ]) -> &[u8] {
-    let end = e[..52].iter().position(|&b| b == 0).unwrap_or(52);
-    &e[..end]
-}
-#[inline] fn e_lba(e: &[u8; ENTRY_SZ]) -> u64 {
-    u32::from_le_bytes([e[56], e[57], e[58], e[59]]) as u64
-}
-#[inline] fn e_size(e: &[u8; ENTRY_SZ]) -> usize {
-    u32::from_le_bytes([e[60], e[61], e[62], e[63]]) as usize
-}
-fn set_entry(e: &mut [u8; ENTRY_SZ], name: &[u8], trit: i8, lba: u64, size: usize) {
-    e.fill(0);
-    let n = name.len().min(51);
-    e[..n].copy_from_slice(&name[..n]);
-    e[52] = trit as u8;
-    e[56..60].copy_from_slice(&(lba as u32).to_le_bytes());
-    e[60..64].copy_from_slice(&(size as u32).to_le_bytes());
-}
-
-fn flush_super() {
-    let mut buf = [0u8; 512];
-    buf[..8].copy_from_slice(MAGIC);
-    let lba = unsafe { DATA_NEXT_LBA };
-    buf[8..16].copy_from_slice(&lba.to_le_bytes());
-    unsafe { crate::ahci::write_sectors(SUPER_LBA, 1, &buf); }
-}
-
-fn flush_dir() {
-    let mut buf = [0u8; 1024];
-    unsafe {
-        for (i, e) in DIR.iter().enumerate() {
-            buf[i * ENTRY_SZ..(i + 1) * ENTRY_SZ].copy_from_slice(e);
-        }
+/// BlockDev over the AHCI driver.
+struct AhciDev;
+impl BlockDev for AhciDev {
+    fn read(&mut self, lba: u64, count: u16, buf: &mut [u8]) -> bool {
+        crate::ahci::read_sectors(lba, count, buf)
     }
-    crate::ahci::write_sectors(DIR_LBA, 2, &buf);
+    fn write(&mut self, lba: u64, count: u16, buf: &[u8]) -> bool {
+        crate::ahci::write_sectors(lba, count, buf)
+    }
 }
+
+static mut FS: Option<Rpfs<AhciDev>> = None;
 
 pub fn init() {
     if !crate::ahci::is_ready() {
         crate::serial::write_str("  [diskfs] AHCI not ready — RPFS skipped\n");
         return;
     }
-    let mut sbuf = [0u8; 512];
-    if !crate::ahci::read_sectors(SUPER_LBA, 1, &mut sbuf) {
-        crate::serial::write_str("  [diskfs] superblock read failed\n");
+    let fs = Rpfs::open(AhciDev, FS_BASE, DISK_SECTORS);
+    let entries = fs.entry_count();
+    let free = fs.free_blocks();
+    let total = fs.total_blocks;
+    unsafe { FS = Some(fs); }
+    crate::serial::write_str("  [diskfs] RPFS v2 ready: ");
+    log_dec(entries as u64);
+    crate::serial::write_str(" files, ");
+    log_dec(free as u64);
+    crate::serial::write_str("/");
+    log_dec(total as u64);
+    crate::serial::write_str(" blocks free (real dirs + reclamation)\n");
+}
+
+#[allow(static_mut_refs)]
+fn fs() -> Option<&'static mut Rpfs<AhciDev>> {
+    unsafe { FS.as_mut() }
+}
+
+/// Write (or overwrite) a file at `name` (a '/'-separated path). Overwrites
+/// reclaim the old blocks. Returns true on success.
+pub fn write_file(name: &[u8], data: &[u8]) -> bool {
+    match fs() {
+        Some(f) => f.write_file(name, data),
+        None => false,
+    }
+}
+
+/// Read a file into `out`. Returns Some(bytes_read) if found.
+pub fn read_file(name: &[u8], out: &mut [u8]) -> Option<usize> {
+    match fs() {
+        Some(f) => f.read_file(name, out),
+        None => None,
+    }
+}
+
+/// Delete a file (or empty directory), freeing its blocks.
+pub fn delete_file(name: &[u8]) -> bool {
+    match fs() {
+        Some(f) => f.delete_file(name),
+        None => false,
+    }
+}
+
+/// Create a directory (and any missing parents).
+pub fn mkdir(name: &[u8]) -> bool {
+    match fs() {
+        Some(f) => f.mkdir(name),
+        None => false,
+    }
+}
+
+/// List the immediate children of directory `path` ("" = root).
+pub fn list_dir(path: &[u8]) -> Vec<DirItem> {
+    match fs() {
+        Some(f) => f.list_dir(path),
+        None => Vec::new(),
+    }
+}
+
+pub fn is_ready() -> bool {
+    fs().map(|f| f.is_ready()).unwrap_or(false)
+}
+
+/// On-hardware self-test (gated by the `fstest` cmdline flag). Proves the
+/// AHCI-backed FS does what the host test proves over RAM: persistence across a
+/// real reboot, a write/read round-trip, block reclamation on overwrite, and
+/// directory listing. Run it twice (same disk) to see the persistence line flip.
+pub fn selftest() {
+    let f = match fs() {
+        Some(f) => f,
+        None => {
+            crate::serial::write_str("  [fstest] RPFS not ready\n");
+            return;
+        }
+    };
+
+    // 1. Persistence: is last boot's marker still on disk?
+    let mut buf = [0u8; 64];
+    match f.read_file(b"sys/rpfs-marker.txt", &mut buf) {
+        Some(n) => {
+            crate::serial::write_str("  [fstest] marker PERSISTED across reboot: ");
+            crate::serial::write_str(core::str::from_utf8(&buf[..n]).unwrap_or("?"));
+            crate::serial::write_str("\n");
+        }
+        None => crate::serial::write_str("  [fstest] no marker yet (first boot on this disk)\n"),
+    }
+    f.write_file(b"sys/rpfs-marker.txt", b"rpfs-v2-persist-ok");
+
+    // 2. Reclamation: write big, overwrite small, free blocks must grow.
+    // Heap, NOT stack — the boot stack is only 64 KiB; a 200 KiB stack array
+    // here underflows it into the VGA/BIOS hole and triple-faults at boot.
+    let big = alloc::vec![0xABu8; 200 * 1024];
+    f.write_file(b"sys/probe.bin", &big);
+    let free_big = f.free_blocks();
+    f.write_file(b"sys/probe.bin", b"small");
+    let free_small = f.free_blocks();
+    crate::serial::write_str("  [fstest] overwrite 200K->5B free blocks ");
+    log_dec(free_big as u64);
+    crate::serial::write_str(" -> ");
+    log_dec(free_small as u64);
+    if free_small > free_big {
+        crate::serial::write_str("  (RECLAIMED)\n");
+    } else {
+        crate::serial::write_str("  (NO RECLAIM!)\n");
+    }
+
+    // 3. Round-trip the small content.
+    let mut rb = [0u8; 16];
+    match f.read_file(b"sys/probe.bin", &mut rb) {
+        Some(n) if &rb[..n] == b"small" => crate::serial::write_str("  [fstest] read-back OK\n"),
+        _ => crate::serial::write_str("  [fstest] read-back FAILED\n"),
+    }
+    f.delete_file(b"sys/probe.bin");
+
+    // 4. Directory hierarchy: write into a nested path, list the parent.
+    f.write_file(b"docs/notes/a.txt", b"alpha");
+    f.write_file(b"docs/notes/b.txt", b"beta");
+    let kids = f.list_dir(b"docs/notes");
+    crate::serial::write_str("  [fstest] list_dir(docs/notes) -> ");
+    log_dec(kids.len() as u64);
+    crate::serial::write_str(" entries; docs has ");
+    log_dec(f.list_dir(b"docs").len() as u64);
+    crate::serial::write_str(" child(ren)\n");
+}
+
+fn log_dec(mut v: u64) {
+    if v == 0 {
+        crate::serial::write_byte(b'0');
         return;
     }
-    if &sbuf[..8] == MAGIC {
-        // Load existing filesystem.
-        let lba = u64::from_le_bytes(sbuf[8..16].try_into().unwrap_or([0u8; 8]));
-        unsafe { DATA_NEXT_LBA = if lba >= DATA_START { lba } else { DATA_START }; }
-        let mut dbuf = [0u8; 1024];
-        if crate::ahci::read_sectors(DIR_LBA, 2, &mut dbuf) {
-            unsafe {
-                for i in 0..MAX_FILES {
-                    DIR[i].copy_from_slice(&dbuf[i * ENTRY_SZ..(i + 1) * ENTRY_SZ]);
-                }
-            }
-        }
-        crate::serial::write_str("  [diskfs] RPFS loaded\n");
-    } else {
-        // First boot — format the filesystem.
-        unsafe { DATA_NEXT_LBA = DATA_START; }
-        flush_super();
-        let empty = [0u8; 1024];
-        crate::ahci::write_sectors(DIR_LBA, 2, &empty);
-        crate::serial::write_str("  [diskfs] RPFS formatted (first boot)\n");
+    let mut buf = [0u8; 20];
+    let mut i = buf.len();
+    while v > 0 {
+        i -= 1;
+        buf[i] = b'0' + (v % 10) as u8;
+        v /= 10;
     }
-    unsafe { READY = true; }
-}
-
-/// Write (or overwrite) a named file. Returns true on success.
-/// Max name length: 51 bytes. Max file size: 65536 bytes (128 sectors).
-pub fn write_file(name: &[u8], data: &[u8]) -> bool {
-    unsafe {
-        if !READY || name.is_empty() || name.len() > 51 || data.len() > 65536 {
-            return false;
-        }
-        // Tombstone any existing active entry with the same name.
-        for e in DIR.iter_mut() {
-            if e_trit(e) == 1 && e_name(e) == name {
-                e[52] = (-1i8) as u8;  // Trit::Neg
-            }
-        }
-        // Find the first empty or deleted slot.
-        let slot = match DIR.iter_mut().position(|e| e_trit(e) <= 0) {
-            Some(i) => i,
-            None => { crate::serial::write_str("  [diskfs] directory full\n"); return false; }
-        };
-        // Pad data to whole sectors and write.
-        let sectors = ((data.len() + 511) / 512).max(1) as u16;
-        let byte_count = sectors as usize * 512;
-        let mut padded = alloc::vec![0u8; byte_count];
-        padded[..data.len()].copy_from_slice(data);
-        let lba = DATA_NEXT_LBA;
-        if !crate::ahci::write_sectors(lba, sectors, &padded) {
-            crate::serial::write_str("  [diskfs] write_sectors failed\n");
-            return false;
-        }
-        DATA_NEXT_LBA += sectors as u64;
-        set_entry(&mut DIR[slot], name, 1, lba, data.len());
-        flush_dir();
-        flush_super();
-        true
+    for &b in &buf[i..] {
+        crate::serial::write_byte(b);
     }
 }
-
-/// Read a named file into `out`. Returns Some(bytes_read) if found, None otherwise.
-pub fn read_file(name: &[u8], out: &mut [u8]) -> Option<usize> {
-    unsafe {
-        if !READY || name.is_empty() { return None; }
-        for e in DIR.iter() {
-            if e_trit(e) == 1 && e_name(e) == name {
-                let file_lba  = e_lba(e);
-                let file_size = e_size(e);
-                let sectors   = ((file_size + 511) / 512).max(1) as u16;
-                let mut tmp   = alloc::vec![0u8; sectors as usize * 512];
-                if !crate::ahci::read_sectors(file_lba, sectors, &mut tmp) {
-                    return None;
-                }
-                let n = file_size.min(out.len());
-                out[..n].copy_from_slice(&tmp[..n]);
-                return Some(n);
-            }
-        }
-        None
-    }
-}
-
-pub fn is_ready() -> bool { unsafe { READY } }

@@ -1,8 +1,10 @@
 use core::alloc::{GlobalAlloc, Layout};
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-// 512 KiB static heap in .bss — enough for Vec-based AI runtime demos
-const HEAP_SIZE: usize = 512 * 1024;
+// 1 MiB static heap in .bss. Bump-only (never frees), so heap-heavy subsystems
+// must allocate once and reuse (see rpfs.rs). Capped well under the user program
+// load address at 4 MiB — growing this further would collide with it.
+const HEAP_SIZE: usize = 1024 * 1024;
 static mut HEAP: [u8; HEAP_SIZE] = [0; HEAP_SIZE];
 
 static HEAP_START: AtomicUsize = AtomicUsize::new(0);

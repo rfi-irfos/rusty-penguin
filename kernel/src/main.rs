@@ -36,6 +36,7 @@ mod usb;
 mod crypto;
 mod tls;
 mod ahci;
+mod rpfs;
 mod diskfs;
 mod virtio_gpu;
 mod p256;
@@ -506,6 +507,9 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
     }
     if unsafe { mb2_cmdline_contains(mb2, b"videowin") } {
         rpv::selftest_window(); // windowed service path (desktop Media app drives this)
+    }
+    if unsafe { mb2_cmdline_contains(mb2, b"fstest") } {
+        diskfs::selftest(); // RPFS v2 on real AHCI: persistence + reclamation + dirs
     }
     // autostart=N → desktop opens app N on launch (deterministic GUI screendumps).
     if let Some(n) = unsafe { mb2_cmdline_value(mb2, b"autostart=") } {
