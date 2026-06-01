@@ -33,6 +33,23 @@ pub struct Framebuffer {
 
 unsafe impl Send for Framebuffer {}
 
+/// sys_gpu_flush(y, h) (nr=34): present rows [y, y+h) of the GPU backing. The
+/// kernel no-ops this unless the desktop is routed through the virtio-gpu, so
+/// it is safe (and cheap) to call on every present regardless of display path.
+fn gpu_flush(y: u32, h: u32) {
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            in("rax") 34u64,
+            in("rdi") y as u64,
+            in("rsi") h as u64,
+            out("rcx") _,
+            out("r11") _,
+            options(nostack),
+        );
+    }
+}
+
 fn sys_fb_query_raw() -> (u64, u32, u32, u32, u32) {
     let mut buf = [0u8; 24];
     let _ret: u64;
@@ -115,14 +132,17 @@ impl Framebuffer {
     #[allow(dead_code)]
     pub fn present_rows(&mut self, y0: u32, y1: u32) {
         let stride = self.stride as usize;
-        let y0 = y0 as usize;
-        let y1 = (y1 as usize).min(self.height as usize);
-        if y1 <= y0 { return; }
-        let off = y0 * stride;
-        let len = (y1 - y0) * stride;
+        let y0u = y0 as usize;
+        let y1u = (y1 as usize).min(self.height as usize);
+        if y1u <= y0u { return; }
+        let off = y0u * stride;
+        let len = (y1u - y0u) * stride;
         unsafe {
             core::ptr::copy_nonoverlapping(self.back.as_ptr().add(off), self.real.add(off), len);
         }
+        // GPU path: when `real` is the virtio-gpu backing (RAM), the copy above
+        // is RAM→RAM; this DMA-scans the band out. No-op under the VBE fb.
+        gpu_flush(y0, (y1u as u32).saturating_sub(y0));
     }
 
     /// Copy the backbuffer to the real framebuffer in one block. Call this
@@ -133,6 +153,7 @@ impl Framebuffer {
         unsafe {
             core::ptr::copy_nonoverlapping(self.back.as_ptr(), self.real, n);
         }
+        gpu_flush(0, self.height);
     }
 
     #[inline]

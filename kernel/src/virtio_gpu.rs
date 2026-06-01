@@ -441,6 +441,10 @@ unsafe fn scanout_selftest() {
     }
     let stride = w * 4;
 
+    // Make the backing USER-accessible so the ring-3 desktop can render into it
+    // (identical to how the VBE framebuffer is exposed). Idempotent.
+    crate::vmm::map_mmio_range(BACKING_PHYS, (w * h * 4).max(0x1000) as u64);
+
     // Paint the backing in cacheable RAM (fast CPU writes — the whole point).
     let fb = BACKING_PHYS as *mut u32;
     let bands = [0x00C0392Bu32, 0x008A938Cu32, 0x006FE18Bu32]; // RR GG BB
@@ -511,4 +515,28 @@ pub fn is_ready() -> bool {
 }
 pub fn display_dims() -> (u32, u32) {
     unsafe { (DISP_W, DISP_H) }
+}
+
+/// Physical base of the scanout backing — what sys_fb_query hands the desktop
+/// when the GPU is the live display, so it renders straight into GPU memory.
+pub fn backing_phys() -> u64 {
+    BACKING_PHYS
+}
+
+/// Present a horizontal band [y, y+h) of the backing: DMA it into the host
+/// surface and flush to screen. Called from sys_gpu_flush after the desktop
+/// writes those rows. Full-width (the desktop only ever flushes whole rows).
+pub fn flush_rect(y: u32, h: u32) {
+    unsafe {
+        if !READY || DISP_W == 0 {
+            return;
+        }
+        let y = if y >= DISP_H { return } else { y };
+        let h = if y + h > DISP_H { DISP_H - y } else { h };
+        if h == 0 {
+            return;
+        }
+        transfer(SCANOUT_RES_ID, 0, y, DISP_W, h, DISP_W * 4);
+        flush(SCANOUT_RES_ID, 0, y, DISP_W, h);
+    }
 }

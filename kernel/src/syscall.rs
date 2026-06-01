@@ -274,18 +274,36 @@ pub extern "C" fn syscall_handler(nr: u64, arg1: u64, arg2: u64, arg3: u64) -> u
         6 => {
             // sys_fb_query(out_ptr) → fills 24-byte struct, returns base virt addr
             // Struct layout: [u64 base][u32 width][u32 height][u32 pitch][u32 bpp]
-            let base = crate::fb::base() as u64;
+            // When the desktop is routed through the GPU (gpudisplay), hand it the
+            // virtio-gpu backing (cacheable RAM) instead of the VBE framebuffer; it
+            // renders there and calls sys_gpu_flush to DMA-scan it out.
+            let gpu = unsafe { crate::GPU_DISPLAY } && crate::virtio_gpu::is_ready();
+            let (base, w, h, pitch, bpp) = if gpu {
+                let (gw, gh) = crate::virtio_gpu::display_dims();
+                (crate::virtio_gpu::backing_phys(), gw, gh, gw * 4, 32u32)
+            } else {
+                (crate::fb::base() as u64, crate::fb::width(), crate::fb::height(),
+                 crate::fb::pitch(), crate::fb::bpp() as u32)
+            };
             if arg1 != 0 {
                 let p = arg1 as *mut u8;
                 unsafe {
                     p.cast::<u64>().write_unaligned(base);
-                    p.add(8).cast::<u32>().write_unaligned(crate::fb::width());
-                    p.add(12).cast::<u32>().write_unaligned(crate::fb::height());
-                    p.add(16).cast::<u32>().write_unaligned(crate::fb::pitch());
-                    p.add(20).cast::<u32>().write_unaligned(crate::fb::bpp() as u32);
+                    p.add(8).cast::<u32>().write_unaligned(w);
+                    p.add(12).cast::<u32>().write_unaligned(h);
+                    p.add(16).cast::<u32>().write_unaligned(pitch);
+                    p.add(20).cast::<u32>().write_unaligned(bpp);
                 }
             }
             base
+        }
+        34 => {
+            // sys_gpu_flush(y, h) — present rows [y, y+h) of the GPU backing.
+            // No-op unless the desktop is routed through the GPU.
+            if unsafe { crate::GPU_DISPLAY } && crate::virtio_gpu::is_ready() {
+                crate::virtio_gpu::flush_rect(arg1 as u32, arg2 as u32);
+            }
+            0
         }
         4 => {
             // sys_ticks — returns tick count (100 Hz since pit_init)

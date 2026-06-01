@@ -148,6 +148,11 @@ pub static mut AUTOSTART_APP: i64 = -1;
 /// sys_wallpaper (#23) and boots with system background N. -1 = default.
 pub static mut WALLPAPER_DEF: i64 = -1;
 
+/// Set by boot from `gpudisplay` on the kernel cmdline. When true, sys_fb_query
+/// hands the desktop the virtio-gpu backing instead of the VBE framebuffer, so
+/// the whole UI is rendered into RAM and DMA-scanned by the GPU (sys_gpu_flush).
+pub static mut GPU_DISPLAY: bool = false;
+
 /// Parse the decimal value following `key` (e.g. b"autostart=") in the MB2
 /// command line. Returns None if absent.
 unsafe fn mb2_cmdline_value(mb2: u32, key: &[u8]) -> Option<i64> {
@@ -481,6 +486,11 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
     // wallpaper=N → desktop boots with system background N (test + feature).
     if let Some(n) = unsafe { mb2_cmdline_value(mb2, b"wallpaper=") } {
         unsafe { WALLPAPER_DEF = n; }
+    }
+    // gpudisplay → route the desktop's framebuffer through the virtio-gpu device.
+    if unsafe { mb2_cmdline_contains(mb2, b"gpudisplay") } && virtio_gpu::is_ready() {
+        unsafe { GPU_DISPLAY = true; }
+        vga::write_str("  [gpu: desktop routed through virtio-gpu]\n", vga::Color::Green);
     }
     if unsafe { mb2_cmdline_contains(mb2, b"schedtest6") } {
         sched::selftest_ring3_lowhalf(); // private low half per process (Increment 3d)
