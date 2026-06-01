@@ -12,6 +12,7 @@ mod editor;
 mod fb;
 mod font;
 mod font_aa;
+mod heap;
 mod icons;
 mod input;
 mod term;
