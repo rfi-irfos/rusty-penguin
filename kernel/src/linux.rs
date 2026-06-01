@@ -772,6 +772,25 @@ pub fn enter(elf: &[u8]) -> ! {
 
     unsafe { LINUX_ABI = true; }
 
+    // Ensure the PS/2 keyboard keeps delivering IRQs to the Linux process. A
+    // stale byte sitting in the 8042 output buffer leaves it "full" so it never
+    // raises a new IRQ1 (the keyboard goes dead for a console app like fbDOOM,
+    // which then can't read its keys). Drain the buffer and re-enable the
+    // keyboard interface + scanning.
+    unsafe {
+        let mut guard = 0;
+        while crate::port::inb(0x64) & 0x01 != 0 && guard < 32 {
+            let _ = crate::port::inb(0x60);
+            guard += 1;
+        }
+        let mut w = 0;
+        while crate::port::inb(0x64) & 0x02 != 0 && w < 100000 { w += 1; }
+        crate::port::outb(0x64, 0xAE); // enable keyboard interface
+        w = 0;
+        while crate::port::inb(0x64) & 0x02 != 0 && w < 100000 { w += 1; }
+        crate::port::outb(0x60, 0xF4); // keyboard: enable scanning
+    }
+
     vga::write_str("  [linux] entering ring-3 @ 0x", vga::Color::Cyan);
     vga::write_hex(entry, vga::Color::Cyan);
     vga::write_byte(b'\n', vga::Color::White);
