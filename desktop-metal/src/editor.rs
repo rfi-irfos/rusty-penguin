@@ -13,6 +13,22 @@ const CHAR_W: u32 = 8;         // pixels per character
 const MARGIN_L: u32 = 8;       // left margin
 const MARGIN_T: u32 = 8;       // top margin
 
+/// Format a u32 into a stack buffer (no heap). Returns the &str slice.
+fn fmt_u32(buf: &mut [u8; 12], mut n: u32) -> &str {
+    if n == 0 { buf[0] = b'0'; return core::str::from_utf8(&buf[..1]).unwrap_or(""); }
+    let mut tmp = [0u8; 12]; let mut i = 0;
+    while n > 0 { tmp[i] = b'0' + (n % 10) as u8; n /= 10; i += 1; }
+    for j in 0..i { buf[j] = tmp[i - 1 - j]; }
+    core::str::from_utf8(&buf[..i]).unwrap_or("")
+}
+
+/// Width of the line-number gutter for `count` lines (min 3 digits + 1 pad).
+fn gutter_width(count: usize) -> u32 {
+    let mut digits = 1u32; let mut n = count;
+    while n >= 10 { n /= 10; digits += 1; }
+    (digits.max(3) + 1) * CHAR_W
+}
+
 pub struct TextEditor {
     lines: Vec<String>,         // one String per line
     cursor_line: usize,         // current line (0-indexed)
@@ -183,7 +199,7 @@ impl TextEditor {
     /// Position the cursor at the click point. `(x, y)` are content-relative.
     pub fn on_mouse(&mut self, x: i32, y: i32, buttons: u8) {
         if buttons & 0x01 == 0 { return; }
-        let lx = x - MARGIN_L as i32;
+        let lx = x - (MARGIN_L + gutter_width(self.lines.len())) as i32;
         let ly = y - MARGIN_T as i32;
         if ly < 0 { return; }
         let row = (ly as u32 / LINE_H) as usize;
@@ -197,29 +213,63 @@ impl TextEditor {
     }
 
     pub fn render(&mut self, fb: &mut Framebuffer, ox: u32, oy: u32, w: u32, h: u32) {
-        let max_lines = (h / LINE_H) as usize;
+        const STATUS_H: u32 = 16;
+        let gutter = gutter_width(self.lines.len());        // numbers + 1 char pad
+        let text_x = ox + MARGIN_L + gutter;
+
+        let body_h = h.saturating_sub(STATUS_H);
+        let max_lines = (body_h / LINE_H) as usize;
 
         self.scroll_line = self.cursor_line.saturating_sub(max_lines / 2).min(
             self.lines.len().saturating_sub(max_lines)
         );
 
+        // Gutter background + separator.
+        fb.fill_rect(ox, oy, MARGIN_L + gutter, body_h, 0x161A23);
+        fb.fill_rect(ox + MARGIN_L + gutter - 2, oy, 1, body_h, 0x2A3040);
+
         for (i, line) in self.lines.iter().skip(self.scroll_line).take(max_lines).enumerate() {
+            let lineno = self.scroll_line + i;
             let y = oy + (i as u32 * LINE_H);
-            let color = if self.scroll_line + i == self.cursor_line { 0xE8E8E8 } else { 0xB8B8B8 };
-            fb.draw_str(ox + MARGIN_L, y + MARGIN_T, line, color, 0x1A1A24);
+            let on_cursor = lineno == self.cursor_line;
+            // Line number (right-aligned in the gutter).
+            let mut nb = [0u8; 12];
+            let s = fmt_u32(&mut nb, (lineno + 1) as u32);
+            let nx = ox + MARGIN_L + gutter - CHAR_W - (s.len() as u32 * CHAR_W);
+            let ncol = if on_cursor { 0x8CC6E5 } else { 0x55615A };
+            fb.draw_str(nx, y + MARGIN_T, s, ncol, 0x161A23);
+            // Text.
+            let color = if on_cursor { 0xE8E8E8 } else { 0xB8B8B8 };
+            fb.draw_str(text_x, y + MARGIN_T, line, color, 0x1A1A24);
         }
 
-        // Draw cursor with bounds checking
+        // Cursor.
         let cy = oy + ((self.cursor_line - self.scroll_line) as u32 * LINE_H) + MARGIN_T;
-        let cx = ox + MARGIN_L + (self.cursor_col as u32 * CHAR_W);
-
-        // Only draw cursor if it's within window bounds
-        if cx >= ox && cx < ox + w && cy >= oy && cy + LINE_H <= oy + h {
-            for row in 0..LINE_H.min(h) {
-                if cy + row < oy + h {
+        let cx = text_x + (self.cursor_col as u32 * CHAR_W);
+        if cx >= ox && cx < ox + w && cy >= oy && cy + LINE_H <= oy + body_h {
+            for row in 0..LINE_H.min(body_h) {
+                if cy + row < oy + body_h {
                     fb.set_pixel(cx, cy + row, 0xF5F5F7);
                 }
             }
         }
+
+        // Status bar: Ln/Col, line count, filename, modified marker.
+        let sy = oy + h - STATUS_H;
+        fb.fill_rect(ox, sy, w, STATUS_H, 0x252E2A);
+        let mut b = [0u8; 12];
+        let mut sx = ox + 8;
+        fb.draw_str_t(sx, sy + 4, "Ln", 0x8A938C); sx += 18;
+        fb.draw_str_t(sx, sy + 4, fmt_u32(&mut b, (self.cursor_line + 1) as u32), 0xECEDE5);
+        sx += 36;
+        fb.draw_str_t(sx, sy + 4, "Col", 0x8A938C); sx += 24;
+        fb.draw_str_t(sx, sy + 4, fmt_u32(&mut b, (self.cursor_col + 1) as u32), 0xECEDE5);
+        sx += 40;
+        fb.draw_str_t(sx, sy + 4, fmt_u32(&mut b, self.lines.len() as u32), 0x6FE18B);
+        sx += 28; fb.draw_str_t(sx, sy + 4, "lines", 0x8A938C);
+        // Right side: filename + modified dot.
+        let fnx = ox + w - 8 - (self.filename.len() as u32 * 6) - 12;
+        if self.dirty { fb.draw_str_t(fnx - 10, sy + 4, "*", 0xF5C451); }
+        fb.draw_str_t(fnx, sy + 4, &self.filename, 0xA8B0A6);
     }
 }
