@@ -10,7 +10,7 @@
 
 [![Language: Rust](https://img.shields.io/badge/Language-Rust-ce422b?logo=rust)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green)](LICENSE)
-[![Version: 2.5.0](https://img.shields.io/badge/Version-2.5.0-blue)](https://github.com/rfi-irfos/rusty-penguin)
+[![Version: 2.6.0](https://img.shields.io/badge/Version-2.6.0-blue)](https://github.com/rfi-irfos/rusty-penguin)
 [![Platform: x86_64](https://img.shields.io/badge/Platform-x86__64-333)](https://en.wikipedia.org/wiki/X86-64)
 [![Kernel: Pure Rust](https://img.shields.io/badge/Kernel-Pure%20Rust%2C%20no%20libc-purple)](https://github.com/rfi-irfos/rusty-penguin)
 [![Status: Active Development](https://img.shields.io/badge/Status-Active%20Development-brightgreen)](https://github.com/rfi-irfos/rusty-penguin/pulse)
@@ -150,15 +150,17 @@ velocity equals completion.
 | **Clock: live time + stopwatch + timer + world clocks** | ✅ QEMU-verified |
 | **NIC drivers: RTL8139, Intel e1000/i219, Realtek r8169** | ✅ ~95% laptop coverage |
 | **TCP/IP stack: ARP/ICMP/UDP/DHCP/DNS/TCP/HTTP** | ✅ fetches real internet |
-| **TLS 1.3 client (X25519 · ChaCha20-Poly1305 · from scratch)** | ✅ real HTTPS, QEMU-verified vs live web |
-| **Live web browser — type host → real page** | ✅ http + https, follows redirects |
+| **TLS 1.3 client + X.509 certificate-chain validation (from scratch)** | ✅ real HTTPS verified to embedded CA roots (GTS R1 / ISRG X1) — no longer MITM-able, QEMU-verified vs live web |
+| **Live web browser — type host → real page** | ✅ http + https, redirects, security lock indicator + back/forward history |
 | `fetch`, `wget` terminal commands | ✅ |
 | Linux ABI layer (static + dynamic glibc binaries) | ✅ Bricks 1–5 done |
 | **id Software's real DOOM (fbDOOM) on the pure-Rust kernel via the Linux ABI** | ✅ boots + renders, QEMU-verified |
 | **Preemptive multitasking + per-process address spaces (CR3) + ring-3 isolation** | ✅ scheduler foundation, QEMU-verified |
+| **Hung-app isolation + watchdog force-quit (a wedged process can't freeze the system; it gets reaped)** | ✅ QEMU-verified behind flags |
+| **ACPI power management — S5 shutdown + reboot** | ✅ QEMU-verified; the Shut Down button powers the machine off |
 | **Multi-user login (SHA-256 passwords, /home/<user>)** | ✅ |
 | In-memory VFS within a session | ✅ |
-| **Persistent bare-metal disk storage (RPFS + AHCI)** | ✅ settings/files survive reboot |
+| **RPFS v2 filesystem on AHCI (block-bitmap reclamation, real directories, 2048 files)** | ✅ files survive reboot; host-tested + QEMU-verified across a power cycle |
 
 ### The installed system (Linux track — the daily-driver path)
 | Component | Status |
@@ -173,11 +175,14 @@ velocity equals completion.
 | Recovery console | ✅ |
 
 ### Remaining gaps for "replace Ubuntu" daily driving
-- TLS certificate-chain validation (the TLS 1.3 client does the handshake +
-  verifies the server Finished, but has no CA trust store or wall clock yet —
-  confidentiality vs a passive attacker, not active-MITM protection)
-- GPU acceleration (framebuffer only; software rendering)
-- WiFi on bare-metal kernel (needs per-chip driver + firmware)
+- GPU acceleration (framebuffer + from-scratch virtio-gpu 2D; no 3D/virgl yet — software rendering)
+- WiFi on the bare-metal kernel: the Intel firmware-image parser is done and
+  host-verified, but device bring-up (MMIO, firmware DMA, 802.11/WPA2) needs real
+  Intel hardware — QEMU can't emulate iwlwifi. (The Linux track has full WiFi.)
+- Battery / brightness / S3 suspend-resume (ACPI shutdown + reboot work; these
+  need an AML interpreter, backlight access, and real power states)
+- Multi-process desktop (the kernel has preemption + isolation + a watchdog;
+  running each desktop app as its own scheduled process is the next big step)
 - **The real work-week path today: install to disk + rp.web mode**
 
 ---
