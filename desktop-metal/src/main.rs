@@ -460,12 +460,69 @@ fn rtc_str() -> Strbuf {
 
 fn draw_scene_static(fb: &mut Framebuffer) { draw_scene_static_v(fb, 0); }
 
+/// Windows XP "Bliss" homage — rolling green hills under an azure, cloudy sky,
+/// drawn from scratch (no copyrighted photo; every pixel is ours). The hidden
+/// 5th wallpaper (variant 4): keep cycling right-click → Change Background. XDXD
+fn draw_bliss(fb: &mut Framebuffer) {
+    #[inline] fn lerp8(a: u32, b: u32, t: u64) -> u32 {
+        ((a as i64) + ((b as i64) - (a as i64)) * (t as i64) / 255) as u32
+    }
+    #[inline] fn rgb(r: u32, g: u32, b: u32) -> u32 { (r << 16) | (g << 8) | b }
+
+    let w = fb.width; let h = fb.height;
+    let wi = w as i32; let hi = h as i32;
+    let horizon = (h * 60 / 100).max(1);
+
+    // Sky: deep azure at the top fading to a pale haze at the horizon.
+    let mut y = 0u32;
+    while y < horizon {
+        let t = y as u64 * 255 / horizon as u64;          // 0 top .. 255 horizon
+        fb.fill_rect(0, y, w, 1, rgb(lerp8(0x33, 0xCF, t), lerp8(0x73, 0xE6, t), lerp8(0xBE, 0xF6, t)));
+        y += 1;
+    }
+
+    // Clouds — soft white pools (overlapping glows with bright cores).
+    fb.glow(wi*22/100, hi*15/100, wi*20/100, 0xEFF5FF, 80);
+    fb.glow(wi*30/100, hi*19/100, wi*13/100, 0xFFFFFF, 70);
+    fb.glow(wi*17/100, hi*23/100, wi*10/100, 0xFFFFFF, 55);
+    fb.glow(wi*70/100, hi*12/100, wi*18/100, 0xEAF2FF, 60);
+    fb.glow(wi*79/100, hi*20/100, wi*12/100, 0xFFFFFF, 50);
+    fb.glow(wi*52/100, hi*27/100, wi*16/100, 0xF3F8FF, 38);
+
+    // Rolling hill: smooth parabolic crest peaking left-of-centre; grass below
+    // shaded from a sunlit rim down to deep green, with a thin haze at the seam.
+    let cxh = wi * 36 / 100;                 // crest centre x
+    let half2 = ((wi * 66 / 100) as i64).pow(2).max(1);
+    let amp  = hi * 14 / 100;                // hump height above the horizon
+    for x in 0..w {
+        let dx = (x as i32 - cxh) as i64;
+        let hump = (1000 - (dx * dx * 1000 / half2)).max(0) as i32;   // 0..1000
+        let crest = (horizon as i32 - amp * hump / 1000).max(0) as u32;
+        let span = (h - crest).max(1) as u64;
+        let mut yy = crest;
+        while yy < h {
+            let d = (yy - crest) as u64;
+            let (r, g, b) = if d < 2 {
+                (0xBCu32, 0xE0, 0x74)        // bright sunlit crest rim
+            } else {
+                let tt = d * 255 / span;
+                (lerp8(0x86, 0x2C, tt), lerp8(0xC0, 0x60, tt), lerp8(0x3A, 0x18, tt))
+            };
+            fb.set_pixel(x, yy, rgb(r, g, b));
+            yy += 1;
+        }
+    }
+}
+
 fn draw_scene_static_v(fb: &mut Framebuffer, variant: u8) {
     let w = fb.width; let h = fb.height;
     let ptop = panel_top(h);
 
-    // Wallpaper — warm-stone gradient, 4 variants for "Change Background".
-    // v0: warm stone green (default), v1: cool slate, v2: deep night, v3: sunset amber.
+    // Wallpaper. Variant 4 = the hidden XP "Bliss" easter egg; 0-3 are the
+    // warm-stone gradients (v0 default, v1 cool slate, v2 deep night, v3 dusk).
+    if variant == 4 {
+        draw_bliss(fb);
+    } else {
     let mut y = 0u32;
     while y < h {
         let t = y as u64 * 256 / h as u64;
@@ -515,6 +572,7 @@ fn draw_scene_static_v(fb: &mut Framebuffer, variant: u8) {
         ];
         for (sx, sy, sr) in stars { fb.draw_star8(sx, sy, sr, 0x1E2E45); }
     }
+    } // end else (non-Bliss wallpapers)
 
     // Centered hero — floating text on the wallpaper, NO card box (matches the
     // mockup #hero: transparent, pointer-events:none). Big dingir, then
@@ -2083,7 +2141,7 @@ pub extern "C" fn _start() -> ! {
                             pending_screenshot = true;
                         }
                         4 => { // Change Background — cycle wallpaper variant
-                            wallpaper_variant = (wallpaper_variant + 1) % 4;
+                            wallpaper_variant = (wallpaper_variant + 1) % 5; // 5th = XP Bliss easter egg
                             fb.invalidate_bg();
                         }
                         5 => { // Display Settings
