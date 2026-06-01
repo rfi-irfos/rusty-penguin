@@ -1,11 +1,30 @@
-// In-memory flat filesystem with RPFS-backed persistence for .config/ paths.
-// Files are stored as raw byte Vecs. Directories are marker entries only.
-// On write: any path under .config/ is also written to the on-disk RPFS via
-// syscall 25 (sys_disk_write). On Vfs::new(): .config/ files are reloaded
-// from disk via syscall 26 (sys_disk_read) so settings survive reboots.
+// In-memory flat filesystem with RPFS-backed persistence. Files are stored as
+// raw byte Vecs; directories are marker entries only. EVERY user file (not just
+// settings) is mirrored to the on-disk RPFS via syscall 25 (sys_disk_write), so
+// documents saved in the editor or created in the terminal survive a reboot.
+//
+// Reload uses a tiny on-disk MANIFEST (".vfsmanifest") listing every persisted
+// file name. On Vfs::new() we read the manifest and pull each listed file back
+// via syscall 26 (sys_disk_read). Persistence is armed only AFTER the built-in
+// default files are laid down, so the bulky demo/readme content is never
+// re-written to disk on each boot — only genuine user changes hit the platter.
+//
+// (Note: RPFS allocation is currently append-only — overwriting a file does not
+// reclaim its old sectors. Fine for normal use on a roomy disk; a compaction
+// pass is a separate follow-up.)
 
 use alloc::vec::Vec;
 use alloc::string::String;
+
+/// On-disk file that lists every persisted file name, one per line. Lets boot
+/// reload the full working set with only read-by-name syscalls.
+const MANIFEST: &str = ".vfsmanifest";
+
+/// Should this name be mirrored to disk? RPFS keys are capped at 51 bytes; the
+/// manifest itself is managed separately and must never list itself.
+fn persistable(name: &str) -> bool {
+    !name.is_empty() && name.len() <= 51 && name != MANIFEST
+}
 
 // ── Syscall 25/26: RPFS disk persistence ─────────────────────────────────────
 // name_len and data_len are packed into rsi:  low 8 bits = name_len,
@@ -57,11 +76,14 @@ pub struct VfsEntry {
 
 pub struct Vfs {
     entries: Vec<VfsEntry>,
+    // Disk mirroring is armed only after the built-in defaults are written, so
+    // the default files are not needlessly re-persisted on every boot.
+    persist_on: bool,
 }
 
 impl Vfs {
     fn new() -> Self {
-        let mut v = Vfs { entries: Vec::new() };
+        let mut v = Vfs { entries: Vec::new(), persist_on: false };
         v.write("readme.txt",
             b"Welcome to RustyPenguin OS.\n\
               Bare-metal Rust. Ternary mind.\n\
@@ -147,8 +169,10 @@ impl Vfs {
               ai 8\n\
               echo \"\"\n\
               echo \"\x1b[1;32m=== Demo Complete ===\"\x1b[0m\n");
-        // Reload any persisted .config/ files from disk so settings survive reboots.
+        // Reload the persisted working set from disk (settings AND user files),
+        // then arm mirroring so subsequent writes hit the platter.
         v.load_persisted();
+        v.persist_on = true;
         v
     }
 
@@ -172,27 +196,93 @@ impl Vfs {
     }
 
     pub fn write(&mut self, name: &str, data: &[u8]) {
+        let was_new = !self.exists(name);
         self.write_mem(name, data);
-        // Persist any .config/ path to the on-disk RPFS so it survives reboots.
-        if name.starts_with(".config/") {
+        // Mirror every user file to the on-disk RPFS so it survives a reboot.
+        if self.persist_on && persistable(name) {
             persist_write(name, data);
+            // The manifest only changes when the SET of files changes — keep it
+            // off the hot path for ordinary overwrites/saves.
+            if was_new {
+                self.flush_manifest();
+            }
         }
     }
 
-    // Load persisted .config/ files from the RPFS on-disk store into the
-    // in-memory VFS. Called once at init so Settings::load_from_disk() finds
-    // the correct data without needing to know about the disk layer.
+    /// Rewrite the on-disk manifest = the names of every persistable file
+    /// currently in memory. Called when a file is created or removed.
+    fn flush_manifest(&self) {
+        let mut list = String::new();
+        for e in &self.entries {
+            if !e.is_dir && persistable(&e.name) {
+                list.push_str(&e.name);
+                list.push('\n');
+            }
+        }
+        if list.is_empty() {
+            // RPFS rejects empty writes; a single newline = "manifest, no files".
+            list.push('\n');
+        }
+        persist_write(MANIFEST, list.as_bytes());
+    }
+
+    /// Create directory marker entries for every path prefix of `name`, so the
+    /// File Manager shows reloaded files inside their folders.
+    fn ensure_parent_dirs(&mut self, name: &str) {
+        let bytes = name.as_bytes();
+        for (i, &b) in bytes.iter().enumerate() {
+            if b == b'/' {
+                let dir = &name[..i];
+                if !dir.is_empty() && !self.exists(dir) {
+                    self.entries.push(VfsEntry {
+                        name: String::from(dir),
+                        data: Vec::new(),
+                        is_dir: true,
+                    });
+                }
+            }
+        }
+    }
+
+    // Reload the persisted working set from the RPFS on-disk store into the
+    // in-memory VFS. Manifest-driven: read the file list, then pull each entry.
+    // A legacy single-file path keeps older disks (pre-manifest) loading their
+    // settings. Called once at init, before mirroring is armed.
     fn load_persisted(&mut self) {
-        let mut buf = [0u8; 4096];
-        let n = persist_read(".config/rusty-penguin/settings.ini", &mut buf);
-        if n > 0 {
-            if !self.exists(".config") {
-                self.entries.push(VfsEntry { name: String::from(".config"), data: Vec::new(), is_dir: true });
+        // 65535, not 65536: sys_disk_read packs out_max into a 16-bit field, so
+        // a 0x10000 buffer would truncate to 0 and read nothing back.
+        let mut buf = Vec::new();
+        buf.resize(65535, 0u8);
+
+        // Manifest-driven reload of the full working set.
+        let mn = persist_read(MANIFEST, &mut buf);
+        if mn > 0 {
+            // Copy the name list out before reusing `buf` for file contents.
+            let names: Vec<String> = core::str::from_utf8(&buf[..mn])
+                .unwrap_or("")
+                .split('\n')
+                .filter(|s| !s.is_empty())
+                .map(String::from)
+                .collect();
+            for name in &names {
+                let n = persist_read(name, &mut buf);
+                if n > 0 {
+                    self.ensure_parent_dirs(name);
+                    let data = buf[..n].to_vec();
+                    self.write_mem(name, &data);
+                }
             }
-            if !self.exists(".config/rusty-penguin") {
-                self.entries.push(VfsEntry { name: String::from(".config/rusty-penguin"), data: Vec::new(), is_dir: true });
+        }
+
+        // Legacy fallback: disks written before the manifest existed still have
+        // a bare settings.ini. Load it if the manifest didn't already.
+        if !self.exists(".config/rusty-penguin/settings.ini") {
+            let n = persist_read(".config/rusty-penguin/settings.ini", &mut buf);
+            if n > 0 {
+                self.ensure_parent_dirs(".config/rusty-penguin/settings.ini");
+                let data = buf[..n].to_vec();
+                self.write_mem(".config/rusty-penguin/settings.ini", &data);
             }
-            self.write_mem(".config/rusty-penguin/settings.ini", &buf[..n]);
         }
     }
 
@@ -215,16 +305,32 @@ impl Vfs {
     pub fn delete(&mut self, name: &str) -> bool {
         let before = self.entries.len();
         self.entries.retain(|e| e.name != name);
-        self.entries.len() < before
+        let removed = self.entries.len() < before;
+        // Drop it from the manifest so it does not reload on the next boot. The
+        // file's data sectors stay on disk (RPFS is append-only) but, unlisted,
+        // they are never read back.
+        if removed && self.persist_on && persistable(name) {
+            self.flush_manifest();
+        }
+        removed
     }
 
     pub fn rename(&mut self, from: &str, to: &str) -> bool {
-        if let Some(e) = self.entries.iter_mut().find(|e| e.name == from) {
-            e.name = String::from(to);
-            true
-        } else {
-            false
+        let found = self.entries.iter_mut().find(|e| e.name == from);
+        let (data, is_dir) = match found {
+            Some(e) => {
+                e.name = String::from(to);
+                (e.data.clone(), e.is_dir)
+            }
+            None => return false,
+        };
+        // Persist under the new name and refresh the manifest (the name set
+        // changed). The old name's sectors linger but, unlisted, never reload.
+        if self.persist_on && !is_dir && persistable(to) {
+            persist_write(to, &data);
+            self.flush_manifest();
         }
+        true
     }
 
     pub fn list(&self) -> &[VfsEntry] {

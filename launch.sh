@@ -22,10 +22,23 @@ if [ ! -f rusty-penguin.iso ]; then
     exit 1
 fi
 
+# Persistent disk — files you create (editor saves, terminal `echo > f`) are
+# mirrored to RPFS on this image and reloaded on the next boot. Created once,
+# 256 MiB, and kept across runs. Delete it to start with a clean filesystem.
+DISK=rusty-penguin-disk.img
+if [ ! -f "$DISK" ]; then
+    echo "=== Creating persistent disk $DISK (256 MiB) ==="
+    qemu-img create -f raw "$DISK" 256M >/dev/null 2>&1 \
+        || dd if=/dev/zero of="$DISK" bs=1M count=256 2>/dev/null
+fi
+
 echo "=== Launching Rusty Penguin (click window to grab mouse, Ctrl+Alt to release) ==="
 exec qemu-system-x86_64 \
     -machine q35 \
     -cdrom rusty-penguin.iso \
+    -drive id=hd0,file="$DISK",format=raw,if=none \
+    -device ich9-ahci,id=ahci \
+    -device ide-hd,drive=hd0,bus=ahci.0 \
     -m 512M \
     -vga std \
     -display sdl,show-cursor=off \
