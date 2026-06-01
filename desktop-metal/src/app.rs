@@ -2552,9 +2552,50 @@ const SHOT_W: usize = 384;             // saved + preview thumbnail width (16:9)
 const SHOT_H: usize = 216;
 static mut SHOT_BUF: [u32; SHOT_W * SHOT_H] = [0; SHOT_W * SHOT_H];
 static mut SHOT_PPM: [u8; SHOT_W * SHOT_H * 3 + 32] = [0; SHOT_W * SHOT_H * 3 + 32];
+static mut SHOT_COUNTER: u32 = 0;      // shared filename counter (app + right-click)
+
+/// Sample the full composited framebuffer into SHOT_BUF, encode a PPM into
+/// SHOT_PPM, and write it to the VFS as screenshots/shot-N.ppm. Returns N.
+/// Shared by the Screenshot app and the desktop's right-click "Take Screenshot".
+pub fn capture_fullscreen(fb: &mut Framebuffer) -> u32 {
+    let fw = fb.width as usize;
+    let fh = fb.height as usize;
+    if fw == 0 || fh == 0 { return unsafe { SHOT_COUNTER }; }
+    unsafe {
+        for ty in 0..SHOT_H {
+            let sy = (ty * fh / SHOT_H) as u32;
+            for tx in 0..SHOT_W {
+                let sx = (tx * fw / SHOT_W) as u32;
+                SHOT_BUF[ty * SHOT_W + tx] = fb.get_pixel(sx, sy);
+            }
+        }
+        let hdr = b"P6\n384 216\n255\n";
+        let mut p = 0usize;
+        for &b in hdr { SHOT_PPM[p] = b; p += 1; }
+        for i in 0..SHOT_W * SHOT_H {
+            let rgb = SHOT_BUF[i];
+            SHOT_PPM[p] = ((rgb >> 16) & 0xFF) as u8; p += 1;
+            SHOT_PPM[p] = ((rgb >> 8) & 0xFF) as u8;  p += 1;
+            SHOT_PPM[p] = (rgb & 0xFF) as u8;         p += 1;
+        }
+        SHOT_COUNTER += 1;
+        let mut name = alloc::string::String::from("screenshots/shot-");
+        let mut nb = [0u8; 24];
+        name.push_str(u64_into(&mut nb, SHOT_COUNTER as u64));
+        name.push_str(".ppm");
+        vfs::vfs().write(&name, &SHOT_PPM[..p]);
+        SHOT_COUNTER
+    }
+}
+
+/// Most recent capture's thumbnail (SHOT_BUF) — used by the Image Viewer to show
+/// the latest shot, and by the Screenshot app preview.
+pub fn last_shot_buf() -> (&'static [u32], usize, usize) {
+    unsafe { (&SHOT_BUF[..], SHOT_W, SHOT_H) }
+}
+pub fn shot_count() -> u32 { unsafe { SHOT_COUNTER } }
 
 pub struct Screenshot {
-    shots: u32,           // capture counter → filename
     have_shot: bool,
     pending: bool,        // capture requested (executed in render where fb is live)
     saved_n: u32,         // index of the last saved file (for the status line)
@@ -2565,46 +2606,15 @@ pub struct Screenshot {
 
 impl Screenshot {
     pub fn new() -> Self {
-        Screenshot { shots: 0, have_shot: false, pending: false, saved_n: 0,
+        Screenshot { have_shot: false, pending: false, saved_n: 0,
                      dirty: true, wants_close: false, ansi: crate::ansi::AnsiParser::new() }
     }
 
-    /// Sample the full composited framebuffer down into SHOT_BUF, encode a PPM
-    /// into SHOT_PPM, and write it to the VFS. Runs inside render() so `fb` holds
-    /// the live scene. The screenshot window itself appears in the shot (an
+    /// Capture via the shared full-screen function. Runs inside render() so `fb`
+    /// holds the live scene. The screenshot window itself appears in the shot (an
     /// in-desktop tool capturing itself) — acceptable for v1.
     fn capture(&mut self, fb: &mut Framebuffer) {
-        let fw = fb.width as usize;
-        let fh = fb.height as usize;
-        if fw == 0 || fh == 0 { return; }
-        unsafe {
-            for ty in 0..SHOT_H {
-                let sy = (ty * fh / SHOT_H) as u32;
-                for tx in 0..SHOT_W {
-                    let sx = (tx * fw / SHOT_W) as u32;
-                    SHOT_BUF[ty * SHOT_W + tx] = fb.get_pixel(sx, sy);
-                }
-            }
-            // PPM (P6) header.
-            let hdr = b"P6\n384 216\n255\n";
-            let mut p = 0usize;
-            for &b in hdr { SHOT_PPM[p] = b; p += 1; }
-            for i in 0..SHOT_W * SHOT_H {
-                let rgb = SHOT_BUF[i];
-                SHOT_PPM[p]     = ((rgb >> 16) & 0xFF) as u8; p += 1;
-                SHOT_PPM[p]     = ((rgb >> 8) & 0xFF) as u8;  p += 1;
-                SHOT_PPM[p]     = (rgb & 0xFF) as u8;         p += 1;
-            }
-            self.shots += 1;
-            self.saved_n = self.shots;
-            // screenshots/shot-N.ppm — the Files app and a future Image Viewer
-            // can read it back.
-            let mut name = alloc::string::String::from("screenshots/shot-");
-            let mut nb = [0u8; 24];
-            name.push_str(u64_into(&mut nb, self.shots as u64));
-            name.push_str(".ppm");
-            vfs::vfs().write(&name, &SHOT_PPM[..p]);
-        }
+        self.saved_n = capture_fullscreen(fb);
         self.have_shot = true;
     }
 }
@@ -2683,6 +2693,128 @@ impl App for Screenshot {
     }
 
     fn title(&self) -> &str { "Screenshot" }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Image Viewer — decode + display a binary PPM (P6) from the VFS, scaled to fit.
+// Pairs with the Screenshot tool (opens screenshots/shot-N.ppm), but works on any
+// P6 PPM. N/P cycle through the saved screenshots; no heap (decodes in place).
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub struct ImageViewer {
+    cur: u32,             // current screenshot index (1..shot_count)
+    pub dirty: bool,
+    pub wants_close: bool,
+    ansi: crate::ansi::AnsiParser,
+}
+
+impl ImageViewer {
+    pub fn new() -> Self {
+        ImageViewer { cur: shot_count().max(1), dirty: true, wants_close: false,
+                      ansi: crate::ansi::AnsiParser::new() }
+    }
+
+    /// Parse a binary PPM (P6) header. Returns (width, height, pixel_data_offset).
+    /// Tolerates a single comment line and arbitrary whitespace, per the spec.
+    fn parse_ppm(data: &[u8]) -> Option<(usize, usize, usize)> {
+        if data.len() < 2 || &data[0..2] != b"P6" { return None; }
+        let mut i = 2usize;
+        let mut nums = [0usize; 3]; // width, height, maxval
+        let mut ni = 0usize;
+        while ni < 3 && i < data.len() {
+            // skip whitespace + comments
+            while i < data.len() {
+                let c = data[i];
+                if c == b'#' { while i < data.len() && data[i] != b'\n' { i += 1; } }
+                else if c == b' ' || c == b'\t' || c == b'\n' || c == b'\r' { i += 1; }
+                else { break; }
+            }
+            let mut v = 0usize; let mut any = false;
+            while i < data.len() && data[i].is_ascii_digit() {
+                v = v * 10 + (data[i] - b'0') as usize; any = true; i += 1;
+            }
+            if !any { return None; }
+            nums[ni] = v; ni += 1;
+        }
+        if ni < 3 { return None; }
+        // exactly one whitespace byte separates the header from the pixel data
+        if i < data.len() { i += 1; }
+        Some((nums[0], nums[1], i))
+    }
+
+    fn filename(&self) -> alloc::string::String {
+        let mut name = alloc::string::String::from("screenshots/shot-");
+        let mut nb = [0u8; 24];
+        name.push_str(u64_into(&mut nb, self.cur as u64));
+        name.push_str(".ppm");
+        name
+    }
+}
+
+impl App for ImageViewer {
+    fn render(&mut self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, h: u32) {
+        fb.fill_rect(x, y, w, h, 0x14171A);
+        // Header.
+        fb.fill_rect(x, y, w, 26, 0x252E2A);
+        fb.draw_str(x + 12, y + 8, "Image Viewer", 0xECEDE5, 0x252E2A);
+        let mut nb = [0u8; 24]; let mut tb = [0u8; 24];
+        fb.draw_str_t(x + 120, y + 9, "shot", 0x6B756D);
+        fb.draw_str_t(x + 150, y + 9, u64_into(&mut nb, self.cur as u64), 0x8CC6E5);
+        fb.draw_str_t(x + 174, y + 9, "/", 0x6B756D);
+        fb.draw_str_t(x + 184, y + 9, u64_into(&mut tb, shot_count() as u64), 0x6B756D);
+        fb.draw_str_t(x + w - 96, y + 9, "N/P cycle", 0x6B756D);
+
+        let vx = x; let vy = y + 26; let vw = w; let vh = h.saturating_sub(26);
+        fb.fill_rect(vx, vy, vw, vh, 0x0A0D0B);
+
+        let name = self.filename();
+        let img = vfs::vfs().read(&name);
+        match img.and_then(|d| Self::parse_ppm(d).map(|(iw, ih, off)| (d, iw, ih, off))) {
+            Some((data, iw, ih, off)) if iw > 0 && ih > 0 => {
+                // Fit the image into the view, aspect-preserved.
+                let s = ((vw as usize * 1024 / iw).min(vh as usize * 1024 / ih)).max(1);
+                let outw = (iw * s / 1024).max(1); let outh = (ih * s / 1024).max(1);
+                let ox = vx + (vw - outw.min(vw as usize) as u32) / 2;
+                let oy = vy + (vh - outh.min(vh as usize) as u32) / 2;
+                for yy in 0..outh {
+                    if oy as usize + yy >= (vy + vh) as usize { break; }
+                    let sy = yy * ih / outh;
+                    for xx in 0..outw {
+                        let sx = xx * iw / outw;
+                        let p = off + (sy * iw + sx) * 3;
+                        if p + 2 < data.len() {
+                            let rgb = ((data[p] as u32) << 16) | ((data[p+1] as u32) << 8) | data[p+2] as u32;
+                            fb.set_pixel(ox + xx as u32, oy + yy as u32, rgb);
+                        }
+                    }
+                }
+            }
+            _ => {
+                if shot_count() == 0 {
+                    fb.draw_str(vx + 16, vy + 20, "No images. Use the Screenshot tool", 0xA8B0A6, 0x0A0D0B);
+                    fb.draw_str(vx + 16, vy + 38, "or right-click the desktop -> Take Screenshot.", 0xA8B0A6, 0x0A0D0B);
+                } else {
+                    fb.draw_str(vx + 16, vy + 20, "Image not found.", 0xEF7575, 0x0A0D0B);
+                }
+            }
+        }
+        self.dirty = false;
+    }
+
+    fn on_key(&mut self, key: u8) {
+        use crate::ansi::Key as AK;
+        match self.ansi.feed(key) {
+            AK::Char(b'n') | AK::Char(b'N') | AK::Right => {
+                if self.cur < shot_count() { self.cur += 1; self.dirty = true; }
+            }
+            AK::Char(b'p') | AK::Char(b'P') | AK::Left => {
+                if self.cur > 1 { self.cur -= 1; self.dirty = true; }
+            }
+            _ => {}
+        }
+    }
+
+    fn title(&self) -> &str { "Image Viewer" }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

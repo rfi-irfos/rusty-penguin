@@ -138,6 +138,49 @@ unsafe fn mb2_cmdline_contains(mb2: u32, needle: &[u8]) -> bool {
     false
 }
 
+/// Set by boot from `autostart=N` on the kernel cmdline; the desktop reads it via
+/// sys_autostart (#22) and opens app N on launch. -1 = none. Used to screendump a
+/// specific app headlessly (deterministic GUI verification without driving mouse).
+pub static mut AUTOSTART_APP: i64 = -1;
+
+/// Parse the decimal value following `key` (e.g. b"autostart=") in the MB2
+/// command line. Returns None if absent.
+unsafe fn mb2_cmdline_value(mb2: u32, key: &[u8]) -> Option<i64> {
+    if mb2 == 0 || key.is_empty() { return None; }
+    let total = *(mb2 as *const u32);
+    let mut off: u32 = 8;
+    while off < total {
+        let tag_ptr = (mb2 + off) as *const u32;
+        let ttype = *tag_ptr;
+        let tsize = *tag_ptr.add(1);
+        if ttype == 0 { break; }
+        if ttype == 1 && tsize > 8 {
+            let s = (mb2 + off + 8) as *const u8;
+            let slen = (tsize - 8) as usize;
+            if slen >= key.len() {
+                'scan: for i in 0..=(slen - key.len()) {
+                    for j in 0..key.len() {
+                        if *s.add(i + j) != key[j] { continue 'scan; }
+                    }
+                    // matched key at i; parse digits after it
+                    let mut p = i + key.len();
+                    let mut val: i64 = 0;
+                    let mut any = false;
+                    while p < slen {
+                        let c = *s.add(p);
+                        if c < b'0' || c > b'9' { break; }
+                        val = val * 10 + (c - b'0') as i64;
+                        any = true; p += 1;
+                    }
+                    return if any { Some(val) } else { None };
+                }
+            }
+        }
+        off += (tsize + 7) & !7;
+    }
+    None
+}
+
 /// Enable SSE/SSE2 (CR0.EM=0, CR0.MP=1, CR4.OSFXSR=1, CR4.OSXMMEXCPT=1).
 /// The kernel itself is built soft-float (no SSE), but every real Linux x86-64
 /// binary uses SSE2 (it's the x86-64 baseline) — the Linux ABI layer needs it
@@ -414,6 +457,10 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
     }
     if unsafe { mb2_cmdline_contains(mb2, b"videowin") } {
         rpv::selftest_window(); // windowed service path (desktop Media app drives this)
+    }
+    // autostart=N → desktop opens app N on launch (deterministic GUI screendumps).
+    if let Some(n) = unsafe { mb2_cmdline_value(mb2, b"autostart=") } {
+        unsafe { AUTOSTART_APP = n; }
     }
     if unsafe { mb2_cmdline_contains(mb2, b"schedtest6") } {
         sched::selftest_ring3_lowhalf(); // private low half per process (Increment 3d)

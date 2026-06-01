@@ -108,11 +108,20 @@ def ic_shot(d):
     d.rounded_rectangle([s(8),s(5),s(14),s(8)], radius=s(1), outline=255, width=max(2,W-SS))
     d.ellipse([s(9),s(11),s(15),s(17)], outline=255, width=W)
 
+def ic_image(d):
+    # Framed picture — sun + mountains (image viewer).
+    d.rounded_rectangle([s(3),s(5),s(21),s(19)], radius=s(2), outline=255, width=W)
+    d.ellipse([s(6.5),s(8),s(9.5),s(11)], outline=255, width=max(2,W-SS))   # sun
+    d.line([s(4),s(18),s(10),s(12)], fill=255, width=W)                      # near peak
+    d.line([s(10),s(12),s(13),s(15)], fill=255, width=W)
+    d.line([s(12),s(14),s(17),s(9)], fill=255, width=W)                      # far peak
+    d.line([s(17),s(9),s(20),s(13)], fill=255, width=W)
+
 ICONS = [
     ("TERM", ic_term), ("FILES", ic_files), ("EDIT", ic_edit), ("CALC", ic_calc),
     ("SETTINGS", ic_settings), ("TIS", ic_tis), ("SNAKE", ic_snake),
     ("MINES", ic_mines), ("DOOM", ic_doom), ("WEB", ic_web), ("MEDIA", ic_media),
-    ("SHOT", ic_shot),
+    ("SHOT", ic_shot), ("IMAGE", ic_image),
 ]
 
 def main():

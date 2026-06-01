@@ -125,6 +125,46 @@ fn sys_yield() {
     }
 }
 
+/// sys_autostart (#22): app index from `autostart=N` on the kernel cmdline, or
+/// u64::MAX if none. Used to open a specific app on boot for headless screendumps.
+fn sys_autostart() -> u64 {
+    let n: u64;
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            inout("rax") 22u64 => n,
+            in("rdi") 0u64,
+            out("rcx") _, out("r11") _,
+            options(nostack),
+        );
+    }
+    n
+}
+
+/// Open a desktop app by its menu index (the MenuLaunch::App(n) tags). Returns
+/// None for unknown indices. Shared by autostart and the right-click menu.
+fn open_app_by_index(idx: u64, w: i32, h: i32, n: usize) -> Option<TermWin> {
+    match idx {
+        0  => open_file_manager(w, h, n),
+        1  => open_editor(w, h, n, "readme.txt", "Text Editor"),
+        2  => open_calculator(w, h, n),
+        3  => open_help_browser(w, h, n),
+        4  => open_settings(w, h, n),
+        5  => open_tis_console(w, h, n),
+        6  => open_snake(w, h, n),
+        7  => open_minesweeper(w, h, n),
+        8  => open_doom_raycaster(w, h, n),
+        9  => open_browser(w, h, n),
+        10 => open_kernel_manager(w, h, n),
+        11 => open_sound(w, h, n),
+        12 => open_media_player(w, h, n),
+        13 => open_screenshot(w, h, n),
+        14 => open_image_viewer(w, h, n),
+        100 => open_term(w, h, n, &LAUNCHERS[0]),
+        _  => None,
+    }
+}
+
 fn sys_serial_debug(b: u8) {
     unsafe {
         core::arch::asm!(
@@ -1014,12 +1054,13 @@ const MENU_ITEMS: &[MenuItem] = &[
     MenuItem { label: "Sound",          desc: "Audio mixer + tone player",    color: 0x4A9EFF, icon: icons::IC_CALC,     kind: MenuLaunch::App(11) },
     MenuItem { label: "Media Player",   desc: "Video + audio — the founding clip", color: 0xF5C451, icon: icons::IC_MEDIA, kind: MenuLaunch::App(12) },
     MenuItem { label: "Screenshot",     desc: "Capture the screen to a file",  color: 0x8CC6E5, icon: icons::IC_SHOT,  kind: MenuLaunch::App(13) },
-    // games start at index 11
+    MenuItem { label: "Image Viewer",   desc: "View PPM images & screenshots",  color: 0x8CC6E5, icon: icons::IC_IMAGE, kind: MenuLaunch::App(14) },
+    // games start at index 12
     MenuItem { label: "Snake",        desc: "Classic arcade",             color: 0x4ADE80, icon: icons::IC_SNAKE,    kind: MenuLaunch::App(6) },
     MenuItem { label: "Minesweeper",  desc: "Find the mines",             color: 0xFCD34D, icon: icons::IC_MINES,    kind: MenuLaunch::App(7) },
     MenuItem { label: "Doom",         desc: "E1M1 — shareware DOOM",      color: 0xEF4444, icon: icons::IC_DOOM,     kind: MenuLaunch::App(8) },
 ];
-const MENU_APPS_END: usize = 11;  // items 0..11 = apps, 11..14 = games
+const MENU_APPS_END: usize = 12;  // items 0..12 = apps, 12..15 = games
 
 const MENU_W:       i32 = 280;
 const MENU_HDR_H:   i32 = 54;   // dingir avatar + title + subtitle
@@ -1143,13 +1184,15 @@ fn start_menu_hit(fh: u32, mx: i32, my: i32) -> Option<usize> {
 // Items: (label, color) — empty label = separator.
 // Action indices (non-separator items, in order):
 //   0  Open Terminal     1  Open Files        2  Show Desktop
-//   3  Change Background 4  Display Settings  5  Close All Windows
+//   3  Take Screenshot   4  Change Background  5  Display Settings
+//   6  Close All Windows
 
 const CTX_ITEMS: &[(&str, u32)] = &[
     ("Open Terminal",      0x6FE18B),  // GREEN
     ("Open Files",         0x8CC6E5),  // BLUE
     ("",                   0),          // separator
     ("Show Desktop",       0x909A92),  // DIM
+    ("Take Screenshot",    0x8CC6E5),  // BLUE — sleek one-click capture
     ("",                   0),          // separator
     ("Change Background",  0xECDAA7),  // CREAM
     ("Display Settings",   0xF5C451),  // AMBER
@@ -1417,6 +1460,26 @@ fn open_screenshot(w: i32, h: i32, n: usize) -> Option<TermWin> {
             let wy = ((h - wm::WINDOW_H - 28) / 2 + off).max(TOPBAR_H as i32).min(h - wm::WINDOW_H - 28);
             Some(TermWin { win: wm::Window::new(wx, wy, "Screenshot"), term: t,
                            editor: None, app: Some(ss), win_dirty: true, initial_cmd: None })
+        }
+        Err(_) => None,
+    }
+}
+
+fn open_image_viewer(w: i32, h: i32, n: usize) -> Option<TermWin> {
+    match term::Terminal::spawn() {
+        Ok(t) => {
+            let iv = alloc::boxed::Box::new(app::ImageViewer::new());
+            let off = n as i32 * 20;
+            let left_margin = 75;
+            let wx = ((w - left_margin - wm::WINDOW_W) / 2 + left_margin + off)
+                .max(left_margin).min(w - wm::WINDOW_W);
+            let wy = ((h - wm::WINDOW_H - 28) / 2 + off).max(TOPBAR_H as i32).min(h - wm::WINDOW_H - 28);
+            let mut win = wm::Window::new(wx, wy, "Image Viewer");
+            let iw = 540.min(w - 90); let ih = 400.min(h - 28 - TOPBAR_H as i32);
+            win.w = iw; win.h = ih; win.restore_w = iw; win.restore_h = ih;
+            win.x = win.x.min(w - iw - 8).max(75);
+            Some(TermWin { win, term: t, editor: None, app: Some(iv),
+                           win_dirty: true, initial_cmd: None })
         }
         Err(_) => None,
     }
@@ -1774,11 +1837,21 @@ pub extern "C" fn _start() -> ! {
     let mut ctx_menu: Option<(i32, i32)> = None;
     let mut hover_icon: Option<usize> = None;
     let mut wallpaper_variant: u8 = 0;  // cycles on "Change Background"
+    let mut pending_screenshot = false; // right-click "Take Screenshot" → capture next clean frame
 
     // Boot to a clean desktop — the Apple-style welcome card + dock + gradient
     // are the first impression, not a terminal covering them. Open apps from
     // the dock or the Menu.
     scene_dirty = true;
+
+    // autostart=N on the kernel cmdline opens app N immediately (headless
+    // screendump verification — no mouse needed).
+    let autostart = sys_autostart();
+    if autostart != u64::MAX {
+        if let Some(tw) = open_app_by_index(autostart, w, h, wins.len()) {
+            wins.push(tw);
+        }
+    }
 
     let mut last_loop_tick: u64 = sys_ticks();
 
@@ -1819,6 +1892,13 @@ pub extern "C" fn _start() -> ! {
                     wins.push(tw);
                     scene_dirty = true;
                 }
+            } else if k == 0x07 { // Ctrl+G — open Image Viewer (gallery)
+                if let Some(tw) = open_image_viewer(w, h, wins.len()) {
+                    wins.push(tw);
+                    scene_dirty = true;
+                }
+            } else if k == 0x10 { // Ctrl+P — take a screenshot (capture next clean frame)
+                pending_screenshot = true;
             } else if k == 0x06 { // Ctrl+F — exec real fbDOOM (Linux ABI test)
                 sys_exec_linux(b"bin/fbdoom");
             } else if k == 0x04 { // Ctrl+D — open DOOM raycaster window
@@ -1996,16 +2076,20 @@ pub extern "C" fn _start() -> ! {
                         2 => { // Show Desktop — minimize all windows
                             for tw in wins.iter_mut() { tw.win.minimized = true; }
                         }
-                        3 => { // Change Background — cycle wallpaper variant
+                        3 => { // Take Screenshot — capture on the NEXT clean frame
+                               // (after this menu is gone), so the shot is unobstructed.
+                            pending_screenshot = true;
+                        }
+                        4 => { // Change Background — cycle wallpaper variant
                             wallpaper_variant = (wallpaper_variant + 1) % 4;
                             fb.invalidate_bg();
                         }
-                        4 => { // Display Settings
+                        5 => { // Display Settings
                             if let Some(tw) = open_settings(w, h, wins.len()) {
                                 wins.push(tw);
                             }
                         }
-                        5 => { // Close All Windows
+                        6 => { // Close All Windows
                             wins.clear();
                         }
                         _ => {}
@@ -2036,6 +2120,7 @@ pub extern "C" fn _start() -> ! {
                             MenuLaunch::App(11)  => open_sound(w, h, wins.len()),
                             MenuLaunch::App(12)  => open_media_player(w, h, wins.len()),
                             MenuLaunch::App(13)  => open_screenshot(w, h, wins.len()),
+                            MenuLaunch::App(14)  => open_image_viewer(w, h, wins.len()),
                             MenuLaunch::App(_)   => None,
                         };
                         if let Some(tw) = opened { wins.push(tw); }
@@ -2268,6 +2353,12 @@ pub extern "C" fn _start() -> ! {
                     fb.present_rows(y_top, y_bot);
                 }
                 _ => fb.present(),
+            }
+            // Right-click "Take Screenshot": now that a clean frame (menu gone) is
+            // on screen, capture the backbuffer to screenshots/shot-N.ppm.
+            if pending_screenshot {
+                pending_screenshot = false;
+                let _ = app::capture_fullscreen(&mut fb);
             }
             frames_since_stat = frames_since_stat.saturating_add(1);
         }
