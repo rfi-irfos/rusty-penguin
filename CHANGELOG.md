@@ -4,6 +4,19 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+### Added — Multiproc brick 3d: two real app processes in two windows at once (2026-06-01)
+
+- Closes the second half of item 4's goal ("run several real apps at once"; the
+  first half — a hung app can't freeze the desktop — is bricks 1/2), visibly.
+- `multiwin` boot flag → two independent ELF processes, each in its OWN private
+  address space rendering its OWN colour into its OWN surface (orange + blue, same
+  VA but fully isolated); the compositor blits BOTH into separate windows.
+- Verified by QEMU screendump: an orange window and a blue window appear at once,
+  zero faults. Proof: docs/multiproc-two-windows.png.
+- With 3a (real ELF processes), 3b (offscreen surfaces) and 3c (compositor →
+  screen), the whole windowed multi-app model is proven end to end and on screen,
+  behind flags. Remaining: wire the real desktop + real apps (fbDOOM) through it.
+
 ### Added — Multiproc brick 3c: compositor blits a process's surface to screen — VISIBLE (2026-06-01)
 
 - The full windowed-app pipeline, end to end and on screen: an isolated,

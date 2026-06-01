@@ -157,6 +157,7 @@ velocity equals completion.
 | **id Software's real DOOM (fbDOOM) on the pure-Rust kernel via the Linux ABI** | ✅ boots + renders, QEMU-verified |
 | **Preemptive multitasking + per-process address spaces (CR3) + ring-3 isolation** | ✅ scheduler foundation, QEMU-verified |
 | **Hung-app isolation + watchdog force-quit (a wedged process can't freeze the system; it gets reaped)** | ✅ QEMU-verified behind flags |
+| **Multi-process windowed apps (real ELF processes → isolated offscreen surfaces → compositor → on-screen windows; two apps at once)** | ✅ pipeline proven + screenshot-verified behind flags |
 | **ACPI power management — S5 shutdown + reboot** | ✅ QEMU-verified; the Shut Down button powers the machine off |
 | **Multi-user login (SHA-256 passwords, /home/<user>)** | ✅ |
 | In-memory VFS within a session | ✅ |
@@ -181,8 +182,11 @@ velocity equals completion.
   Intel hardware — QEMU can't emulate iwlwifi. (The Linux track has full WiFi.)
 - Battery / brightness / S3 suspend-resume (ACPI shutdown + reboot work; these
   need an AML interpreter, backlight access, and real power states)
-- Multi-process desktop (the kernel has preemption + isolation + a watchdog;
-  running each desktop app as its own scheduled process is the next big step)
+- Multi-process desktop: the kernel side is proven end to end (real ELF
+  processes in isolated address spaces → private offscreen surfaces → a
+  compositor that blits them into on-screen windows, two apps at once). The
+  remaining step is wiring the *real* desktop + real apps (fbDOOM) through this
+  pipeline — the application-level refactor on top of the proven kernel work.
 - **The real work-week path today: install to disk + rp.web mode**
 
 ---
