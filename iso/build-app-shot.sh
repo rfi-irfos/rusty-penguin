@@ -44,7 +44,7 @@ grub-mkrescue -o /tmp/appshot.iso "$T" 2>/dev/null | tail -1
 
 QMP=/tmp/rp-appshot-qmp.sock; rm -f "$QMP"
 qemu-system-x86_64 -machine q35 -m 512 -cdrom /tmp/appshot.iso \
-    -vga std -device intel-hda -device hda-duplex \
+    -vga std -audiodev none,id=snd0 -device intel-hda -device hda-duplex,audiodev=snd0 \
     -display none -no-reboot -qmp unix:$QMP,server,nowait >/dev/null 2>&1 &
 QPID=$!
 until [ -S "$QMP" ]; do sleep 1; done
