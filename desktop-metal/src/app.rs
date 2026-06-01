@@ -92,6 +92,7 @@ pub struct FileManager {
     entries: Vec<FileEntry>,
     selected: usize,
     clipboard: Option<String>,
+    sort_mode: u8,   // 0 name A-Z, 1 name Z-A, 2 size large→small, 3 size small→large
     pub dirty: bool,
     pub wants_close: bool,
     ansi: crate::ansi::AnsiParser,
@@ -134,12 +135,28 @@ impl FileManager {
             entries: Vec::new(),
             selected: 0,
             clipboard: None,
+            sort_mode: 0,
             dirty: true,
             wants_close: false,
             ansi: crate::ansi::AnsiParser::new(),
         };
         fm.refresh();
         fm
+    }
+
+    /// Sort the current entries by the active sort mode. Stable, no heap churn
+    /// beyond the in-place sort.
+    fn apply_sort(&mut self) {
+        match self.sort_mode {
+            0 => self.entries.sort_by(|a, b| a.name.cmp(&b.name)),
+            1 => self.entries.sort_by(|a, b| b.name.cmp(&a.name)),
+            2 => self.entries.sort_by(|a, b| b.size.cmp(&a.size).then(a.name.cmp(&b.name))),
+            _ => self.entries.sort_by(|a, b| a.size.cmp(&b.size).then(a.name.cmp(&b.name))),
+        }
+    }
+
+    fn sort_label(&self) -> &'static str {
+        match self.sort_mode { 0 => "Name A-Z", 1 => "Name Z-A", 2 => "Size big", _ => "Size small" }
     }
 
     fn copy_selected(&mut self) {
@@ -200,6 +217,7 @@ impl FileManager {
 
             self.entries.push(FileEntry { name, size });
         }
+        self.apply_sort();
     }
 
     fn nav_up(&mut self) {
@@ -223,16 +241,23 @@ impl App for FileManager {
         fb.fill_rect(x, y, w, 24, 0x2C2C38);
         fb.draw_str(x + 24, y + 7, &self.cwd, 0xF5F5F7, 0x2C2C38);
 
-        // Draw column headers
+        // Draw column headers, with a ↑/↓ marker on the active sort column.
         fb.fill_rect(x, y + 24, w, 18, 0x3C3C48);
-        fb.draw_str(x + 8, y + 29, "Name", 0xB8B8B8, 0x3C3C48);
-        fb.draw_str(x + 300, y + 29, "Size", 0xB8B8B8, 0x3C3C48);
+        let name_active = self.sort_mode < 2;
+        let size_active = self.sort_mode >= 2;
+        let name_arrow = if self.sort_mode == 0 { "v" } else if self.sort_mode == 1 { "^" } else { "" };
+        let size_arrow = if self.sort_mode == 2 { "v" } else if self.sort_mode == 3 { "^" } else { "" };
+        fb.draw_str(x + 8, y + 29, "Name", if name_active { 0x8CC6E5 } else { 0xB8B8B8 }, 0x3C3C48);
+        fb.draw_str(x + 8 + 32, y + 29, name_arrow, 0x8CC6E5, 0x3C3C48);
+        fb.draw_str(x + 300, y + 29, "Size", if size_active { 0x8CC6E5 } else { 0xB8B8B8 }, 0x3C3C48);
+        fb.draw_str(x + 300 + 32, y + 29, size_arrow, 0x8CC6E5, 0x3C3C48);
 
-        // Draw file entries
+        // Draw file entries (reserve 18px at the bottom for the status bar).
+        let list_bottom = y + h - 18;
         let mut sbuf = [0u8; 24];
         for (i, entry) in self.entries.iter().enumerate() {
             let file_y = y + 42 + (i as u32 * 18);
-            if file_y + 18 > y + h { break; }
+            if file_y + 18 > list_bottom { break; }
 
             // Highlight selected entry
             let bg_color = if i == self.selected { 0x4A5568 } else if i % 2 == 0 { 0x1A1A24 } else { 0x232333 };
@@ -244,6 +269,17 @@ impl App for FileManager {
             let size_str = u64_into(&mut sbuf, entry.size);
             fb.draw_str(x + 300, file_y + 4, size_str, text_color, bg_color);
         }
+
+        // Status bar: item count · sort mode · "s sorts".
+        let sy = y + h - 18;
+        fb.fill_rect(x, sy, w, 18, 0x252E2A);
+        let mut cb = [0u8; 24];
+        let mut sx = x + 8;
+        fb.draw_str_t(sx, sy + 5, u64_into(&mut cb, self.entries.len() as u64), 0xECEDE5);
+        sx += 14; fb.draw_str_t(sx, sy + 5, "items", 0x8A938C);
+        sx += 40; fb.draw_str_t(sx, sy + 5, "sort:", 0x8A938C);
+        sx += 32; fb.draw_str_t(sx, sy + 5, self.sort_label(), 0x6FE18B);
+        fb.draw_str_t(x + w - 120, sy + 5, "s sort  c copy  d del", 0x6B756D);
 
         self.dirty = false;
     }
@@ -276,6 +312,16 @@ impl App for FileManager {
             }
             AK::Char(b'c') | AK::Char(b'C') => self.copy_selected(),
             AK::Char(b'd') | AK::Char(b'D') => self.delete_selected(),
+            AK::Char(b's') | AK::Char(b'S') => {
+                // Cycle sort mode, keeping the selected file selected.
+                let sel_name = self.entries.get(self.selected).map(|e| e.name.clone());
+                self.sort_mode = (self.sort_mode + 1) % 4;
+                self.apply_sort();
+                if let Some(n) = sel_name {
+                    if let Some(i) = self.entries.iter().position(|e| e.name == n) { self.selected = i; }
+                }
+                self.dirty = true;
+            }
             _ => {}
         }
     }
