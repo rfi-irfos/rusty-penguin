@@ -4274,8 +4274,12 @@ impl WadDoom {
                 if ty == 1 {
                     self.px    = read_i16_le(tb, i*10) as f32;
                     self.py    = -(read_i16_le(tb, i*10+2) as f32);
+                    // We flip the world Y axis (py and wall Y are negated), so the
+                    // facing angle must negate too — otherwise the player looks the
+                    // opposite way (at the E1M1 start that's straight into the wall
+                    // behind them, which fills the view with one flat color).
                     let ang_deg = read_u16_le(tb, i*10+4) as f32;
-                    self.angle = ang_deg * (3.14159265358979f32 / 180.0f32);
+                    self.angle = -ang_deg * (3.14159265358979f32 / 180.0f32);
                     break;
                 }
             }
