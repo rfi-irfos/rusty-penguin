@@ -4,6 +4,21 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+### Added — Multiproc brick 3a: real ELF programs as isolated scheduled processes (2026-06-01)
+
+- Bricks 1/2 used synthetic hand-written stubs; this adds the loader path a
+  multi-process desktop needs: load a genuine ELF into its own private address
+  space and schedule it as a ring-3 process.
+- `spawn_ring3_elf` walks an ELF's program headers and loads each PT_LOAD
+  segment into freshly-allocated frames mapped into a new private address space
+  (written through the higher-half physmap, no CR3 switch), then schedules a
+  ring-3 task at `e_entry`. Reusable for any ELF (the desktop, fbDOOM).
+- `realelf` boot flag runs two real ELF programs at the same virtual address in
+  separate private spaces under preemption with the boot thread.
+- Verified in QEMU: both ELF tags interleave with the boot thread (37× / 37× /
+  26×), zero faults → "REAL-ELF MULTIPROCESS PROVEN". Next: load the real desktop
+  + an app this way and arbitrate the framebuffer (virtual /dev/fb0 + compositing).
+
 ### Fixed — Real DOOM was broken by an mmap/initrd overlap; in-OS Doom faced the wrong way (2026-06-01)
 
 - Real fbDOOM on the bare-metal kernel opened DOOM1.WAD and bailed with "doesn't
