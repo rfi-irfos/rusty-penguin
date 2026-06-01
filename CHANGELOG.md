@@ -4,6 +4,30 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+### Changed — RPFS v2: a real filesystem (reclamation, thousands of files, directories) (2026-06-01)
+
+- RPFS v1 was a demo — 16 files, one flat directory, append-only data that
+  leaked blocks forever (delete/overwrite never reclaimed space). Replaced with
+  a real filesystem.
+- `rpfs.rs` — block-bitmap FS core, generic over a `BlockDev` trait so it is
+  host-testable. First-fit contiguous-extent allocation over a free-block
+  bitmap: deleting/overwriting a file frees its blocks for reuse (no more leak).
+  2048-entry directory (128× v1's 16). Hierarchical `/`-separated paths with
+  real directory entries (`mkdir`, `list_dir`), parents auto-created on write.
+- Heap-disciplined for the kernel's bump-only allocator: directory, bitmap, and
+  one I/O scratch buffer are allocated once at mount; file reads/writes stage
+  through the scratch, so steady state never touches the heap. Kernel heap grown
+  512 KiB → 1 MiB (still under the 4 MiB user-load line; `.bss` ends at 3.79 MiB).
+- `tools/rpfs_test.rs` — host test over a RAM disk: 1800 files across 50 nested
+  dirs, `list_dir` correctness, **reclamation** (delete 900 → blocks freed →
+  rewrite 900 reuses them), overwrite-shrink reclaim, and persistence across a
+  remount. ALL CHECKS PASSED.
+- Verified in QEMU on real AHCI across a reboot: boot 1 formats (515457 blocks),
+  reclaims on overwrite, lists a nested directory; boot 2 reads the persisted
+  marker back with 5 files intact.
+- Note: new superblock magic (RPFS2027) — an existing v1 disk is reformatted on
+  first boot.
+
 ### Added — WiFi brick 1: Intel iwlwifi card detection + firmware parser (2026-06-01)
 
 - Started the hardest brick in the OS, honestly. Native WiFi is firmware-driven

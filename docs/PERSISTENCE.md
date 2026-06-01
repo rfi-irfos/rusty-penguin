@@ -14,9 +14,14 @@ Desktop VFS (in-memory)  ──persist──▶  syscall 25 (sys_disk_write)  �
 
 - **VFS** (`desktop-metal/src/vfs.rs`) is the desktop's in-memory filesystem.
   Every user file write is mirrored to the on-disk **RPFS** via syscall 25.
-- **RPFS** (`kernel/src/diskfs.rs`) is a flat named-file store: a superblock at
-  LBA 8192, a 16-entry directory at 8193–8194, and append-only file data from
-  8195. It rides on the from-scratch **AHCI/SATA** driver (`kernel/src/ahci.rs`).
+- **RPFS v2** (`kernel/src/rpfs.rs` core + `kernel/src/diskfs.rs` AHCI adapter)
+  is a real filesystem: a self-describing superblock at LBA 8192, a **free-block
+  bitmap**, a **2048-entry directory**, and a data region with first-fit
+  contiguous-extent allocation. Deleting or overwriting a file **reclaims** its
+  blocks (v1 leaked them forever). Paths are `/`-separated with real directory
+  entries (`mkdir`, `list_dir`); parent dirs are auto-created on write. It rides
+  on the from-scratch **AHCI/SATA** driver (`kernel/src/ahci.rs`). The core is
+  generic over a `BlockDev` trait and host-tested in `tools/rpfs_test.rs`.
 - On boot, the VFS reads a small **manifest** (`.vfsmanifest`) listing every
   persisted file, then pulls each one back with syscall 26 — so the full working
   set reappears, not just settings.
@@ -40,20 +45,24 @@ qemu-system-x86_64 -machine q35 -cdrom rusty-penguin.iso -m 512M \
   -device ich9-ahci,id=ahci -device ide-hd,drive=hd0,bus=ahci.0
 ```
 
-On first boot you'll see `[diskfs] RPFS formatted (first boot)`; on every boot
-after, `[diskfs] RPFS loaded`.
+On every boot you'll see e.g. `[diskfs] RPFS v2 ready: N files, F/T blocks free
+(real dirs + reclamation)`.
 
 ## Verified
 
-Two-boot test (same disk image):
-
-1. Boot 1 — `echo persistproof42 > probe.txt`, clean power-down.
-2. Boot 2 — `cat probe.txt` → `persistproof42`, and `ls` lists `probe.txt`.
+- **Host test** (`tools/rpfs_test.rs`, over a RAM disk): 1800 files across 50
+  nested directories, `list_dir` correctness, **block reclamation** (delete 900
+  files → blocks freed → rewrite 900 reuses the freed blocks, no leak),
+  overwrite-shrink reclaim, and full persistence across a remount.
+- **On hardware** (QEMU AHCI, `fstest` boot flag, two boots on one disk image):
+  boot 1 formats, reclaims on overwrite, lists a nested directory; boot 2 reads
+  the persisted marker back (`rpfs-v2-persist-ok`) with its files intact.
 
 ## Known limits
 
-- RPFS allocation is **append-only**: overwriting a file does not reclaim its
-  old sectors, and the directory holds **16 files**. Fine for normal use on a
-  roomy disk; a compaction + larger-directory pass is a follow-up.
+- The directory holds **2048 entries** and file allocation uses **contiguous
+  extents**, so a very fragmented disk could fail a large allocation even with
+  enough total free space. Block lists / extents-with-holes are a follow-up.
 - The read syscall packs the output length into a 16-bit field, so a single
-  file reloads up to **65535 bytes**.
+  file reloads up to **65535 bytes** through that path.
+- A v1 disk (magic `RPFS2026`) is reformatted to v2 (`RPFS2027`) on first boot.
