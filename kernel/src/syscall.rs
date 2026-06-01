@@ -594,6 +594,11 @@ pub extern "C" fn syscall_handler(nr: u64, arg1: u64, arg2: u64, arg3: u64) -> u
             let v = unsafe { crate::AUTOSTART_APP };
             if v < 0 { u64::MAX } else { v as u64 }
         }
+        23 => {
+            // sys_wallpaper → system-background index from `wallpaper=N`, or u64::MAX.
+            let v = unsafe { crate::WALLPAPER_DEF };
+            if v < 0 { u64::MAX } else { v as u64 }
+        }
         39 => {
             // sys_getpid → current PID
             crate::sched::current_pid()

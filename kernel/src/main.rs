@@ -143,6 +143,10 @@ unsafe fn mb2_cmdline_contains(mb2: u32, needle: &[u8]) -> bool {
 /// specific app headlessly (deterministic GUI verification without driving mouse).
 pub static mut AUTOSTART_APP: i64 = -1;
 
+/// Set by boot from `wallpaper=N` on the kernel cmdline; the desktop reads it via
+/// sys_wallpaper (#23) and boots with system background N. -1 = default.
+pub static mut WALLPAPER_DEF: i64 = -1;
+
 /// Parse the decimal value following `key` (e.g. b"autostart=") in the MB2
 /// command line. Returns None if absent.
 unsafe fn mb2_cmdline_value(mb2: u32, key: &[u8]) -> Option<i64> {
@@ -461,6 +465,10 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
     // autostart=N → desktop opens app N on launch (deterministic GUI screendumps).
     if let Some(n) = unsafe { mb2_cmdline_value(mb2, b"autostart=") } {
         unsafe { AUTOSTART_APP = n; }
+    }
+    // wallpaper=N → desktop boots with system background N (test + feature).
+    if let Some(n) = unsafe { mb2_cmdline_value(mb2, b"wallpaper=") } {
+        unsafe { WALLPAPER_DEF = n; }
     }
     if unsafe { mb2_cmdline_contains(mb2, b"schedtest6") } {
         sched::selftest_ring3_lowhalf(); // private low half per process (Increment 3d)

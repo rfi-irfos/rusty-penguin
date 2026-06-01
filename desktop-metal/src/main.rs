@@ -141,6 +141,16 @@ fn sys_autostart() -> u64 {
     n
 }
 
+/// sys_wallpaper (#23): system-background index from `wallpaper=N`, or u64::MAX.
+fn sys_wallpaper() -> u64 {
+    let n: u64;
+    unsafe {
+        core::arch::asm!("syscall", inout("rax") 23u64 => n, in("rdi") 0u64,
+            out("rcx") _, out("r11") _, options(nostack));
+    }
+    n
+}
+
 /// Open a desktop app by its menu index (the MenuLaunch::App(n) tags). Returns
 /// None for unknown indices. Shared by autostart and the right-click menu.
 fn open_app_by_index(idx: u64, w: i32, h: i32, n: usize) -> Option<TermWin> {
@@ -460,128 +470,334 @@ fn rtc_str() -> Strbuf {
 
 fn draw_scene_static(fb: &mut Framebuffer) { draw_scene_static_v(fb, 0); }
 
-/// Windows XP "Bliss" homage — rolling green hills under an azure, cloudy sky,
-/// drawn from scratch (no copyrighted photo; every pixel is ours). The hidden
-/// 5th wallpaper (variant 4): keep cycling right-click → Change Background. XDXD
-fn draw_bliss(fb: &mut Framebuffer) {
-    #[inline] fn lerp8(a: u32, b: u32, t: u64) -> u32 {
-        ((a as i64) + ((b as i64) - (a as i64)) * (t as i64) / 255) as u32
+// ── Wallpaper gallery ─────────────────────────────────────────────────────────
+// Eight procedural "system backgrounds", each with real depth (gradients, glows,
+// layered silhouettes, atmospheric perspective) — never flat. Cycle through them
+// with right-click desktop → Change Background. All drawn from scratch, no image
+// assets (every pixel is ours). These are STATIC (cached) so per-pixel cost is a
+// one-time draw.
+pub const WALLPAPER_COUNT: u8 = 8;
+
+#[inline] fn lerp8(a: u32, b: u32, t: u64) -> u32 {
+    ((a as i64) + ((b as i64) - (a as i64)) * (t as i64) / 255) as u32
+}
+#[inline] fn rgb(r: u32, g: u32, b: u32) -> u32 { ((r & 0xFF) << 16) | ((g & 0xFF) << 8) | (b & 0xFF) }
+/// Cheap per-coordinate hash → pseudo-random u32 (for stars, bubbles, grass…).
+#[inline] fn hash2(x: i32, y: i32) -> u32 {
+    let mut h = (x as u32).wrapping_mul(374_761_393).wrapping_add((y as u32).wrapping_mul(668_265_263));
+    h = (h ^ (h >> 13)).wrapping_mul(1_274_126_177);
+    h ^ (h >> 16)
+}
+/// Vertical 3-stop gradient fill across [y0,y1): top→mid at the midpoint→bot.
+fn vgrad3(fb: &mut Framebuffer, y0: u32, y1: u32, top: (u32,u32,u32), mid: (u32,u32,u32), bot: (u32,u32,u32)) {
+    let w = fb.width; if y1 <= y0 { return; }
+    let span = (y1 - y0) as u64;
+    for y in y0..y1 {
+        let t = (y - y0) as u64 * 255 / span.max(1);
+        let (r, g, b) = if t < 128 {
+            let u = t * 255 / 128;
+            (lerp8(top.0, mid.0, u), lerp8(top.1, mid.1, u), lerp8(top.2, mid.2, u))
+        } else {
+            let u = (t - 128) * 255 / 127;
+            (lerp8(mid.0, bot.0, u), lerp8(mid.1, bot.1, u), lerp8(mid.2, bot.2, u))
+        };
+        fb.fill_rect(0, y, w, 1, rgb(r, g, b));
     }
-    #[inline] fn rgb(r: u32, g: u32, b: u32) -> u32 { (r << 16) | (g << 8) | b }
+}
 
-    let w = fb.width; let h = fb.height;
-    let wi = w as i32; let hi = h as i32;
-    let horizon = (h * 60 / 100).max(1);
-
-    // Sky: deep azure at the top fading to a pale haze at the horizon.
+/// v0 — Stone Green (default): warm midnight wall, navy glows, a faint dingir
+/// constellation, and a corner vignette. The signature desktop.
+fn draw_bg_stone(fb: &mut Framebuffer) {
+    let w = fb.width; let h = fb.height; let wi = w as i32; let hi = h as i32;
     let mut y = 0u32;
-    while y < horizon {
-        let t = y as u64 * 255 / horizon as u64;          // 0 top .. 255 horizon
-        fb.fill_rect(0, y, w, 1, rgb(lerp8(0x33, 0xCF, t), lerp8(0x73, 0xE6, t), lerp8(0xBE, 0xF6, t)));
+    while y < h {
+        let t = y as u64 * 256 / h as u64;
+        fb.fill_rect(0, y, w, 1, rgb(
+            0x0Eu64.saturating_sub(0x08 * t / 255) as u32,
+            0x1Bu64.saturating_sub(0x12 * t / 255) as u32,
+            0x2Eu64.saturating_sub(0x1E * t / 255) as u32));
         y += 1;
     }
+    fb.glow(wi*76/100, hi*22/100, wi*30/100, 0x1A4A6B, 60);
+    fb.glow(wi*16/100, hi*84/100, wi*26/100, 0x1A3D5E, 40);
+    fb.glow(wi/2,      hi/2,      wi*20/100, 0x152A45, 35);
+    for (sx, sy, sr) in [(wi*11/100, hi*30/100, 11), (wi*90/100, hi*82/100, 14),
+                         (wi*33/100, hi*70/100, 9), (wi*60/100, hi*12/100, 8)] {
+        fb.glow(sx, sy, sr*5, 0x24364F, 55);
+        fb.draw_star8(sx, sy, sr, 0x32486A);
+    }
+    let vr = wi*58/100;
+    for (vx, vy) in [(0,0),(wi,0),(0,hi),(wi,hi)] { fb.glow(vx, vy, vr, 0x06090D, 60); }
+}
 
-    // Clouds — soft white pools (overlapping glows with bright cores).
+/// Scatter stars on a coarse grid using hash2 (used by several night scenes).
+fn scatter_stars(fb: &mut Framebuffer, y0: u32, y1: u32, density: u32, cell: i32) {
+    let w = fb.width as i32;
+    let mut gy = y0 as i32;
+    while gy < y1 as i32 {
+        let mut gx = 0;
+        while gx < w {
+            let hsh = hash2(gx, gy);
+            if hsh % 100 < density {
+                let px = gx + (hash2(gx, gy + 1) % cell as u32) as i32;
+                let py = gy + (hash2(gx + 1, gy) % cell as u32) as i32;
+                let bright = 0x60 + (hsh >> 8) % 0xA0;           // 0x60..0xFF
+                let c = rgb(bright, bright, (bright + 0x10).min(0xFF));
+                if hsh % 23 == 0 { fb.draw_star8(px, py, 3, c); } // occasional sparkle
+                else { fb.set_pixel(px as u32, py as u32, c); if hsh % 5 == 0 { fb.set_pixel(px as u32+1, py as u32, c); } }
+            }
+            gx += cell;
+        }
+        gy += cell;
+    }
+}
+
+/// v1 — Aurora: deep polar night, scattered stars, and flowing green/teal
+/// aurora ribbons (soft vertical falloff around sine baselines).
+fn draw_bg_aurora(fb: &mut Framebuffer) {
+    let w = fb.width; let h = fb.height; let wi = w as i32; let hi = h as i32;
+    vgrad3(fb, 0, h, (0x04,0x06,0x10), (0x06,0x0A,0x1A), (0x09,0x12,0x20));
+    scatter_stars(fb, 0, h*70/100, 5, 22);
+    // Two ribbons: (baseline frac, amplitude frac, thickness, color).
+    let ribbons = [(0.34f32, 0.07f32, hi*16/100, 0x2BE08Au32), (0.46f32, 0.05f32, hi*12/100, 0x35B8C8u32)];
+    for (basef, ampf, thick, color) in ribbons {
+        let sr = (color >> 16) & 0xFF; let sg = (color >> 8) & 0xFF; let sb = color & 0xFF;
+        for x in 0..w {
+            let phase = x as f32 / wi as f32 * 6.2831 * 1.5;
+            let base = hi as f32 * basef + libm::sinf(phase) * hi as f32 * ampf
+                     + libm::sinf(phase * 2.3 + 1.0) * hi as f32 * (ampf * 0.4);
+            let by = base as i32;
+            for dy in -thick..thick {
+                let yy = by + dy;
+                if yy < 0 || yy >= hi { continue; }
+                // brightest at the baseline, fading up/down; brighter at the bottom edge.
+                let f = (thick - dy.abs()) as i64 * 200 / thick as i64;
+                let a = (f.max(0).min(200)) as u32;
+                if a == 0 { continue; }
+                let d = fb.get_pixel(x, yy as u32);
+                let dr = (d>>16)&0xFF; let dg = (d>>8)&0xFF; let db = d&0xFF;
+                fb.set_pixel(x, yy as u32, rgb((sr*a+dr*(255-a))/255, (sg*a+dg*(255-a))/255, (sb*a+db*(255-a))/255));
+            }
+        }
+    }
+    fb.glow(wi*30/100, hi*40/100, wi*30/100, 0x103A2A, 30); // faint ground glow
+}
+
+/// v2 — Sunset Dusk: indigo→orange→gold sky, a low sun, layered warm hills.
+fn draw_bg_sunset(fb: &mut Framebuffer) {
+    let w = fb.width; let h = fb.height; let wi = w as i32; let hi = h as i32;
+    let horizon = h*66/100;
+    vgrad3(fb, 0, horizon, (0x2A,0x1A,0x46), (0xC8,0x55,0x44), (0xF5,0xB0,0x55));
+    // Sun — bright disk + halo low on the horizon, right of centre.
+    let sx = wi*62/100; let sy = horizon as i32 - hi*4/100;
+    fb.glow(sx, sy, wi*22/100, 0xF5D06A, 90);
+    fb.glow(sx, sy, wi*9/100, 0xFFF0C0, 120);
+    fb.fill_circle(sx, sy, hi*6/100, 0xFFE8A0);
+    // Three hill ranges, front darkest (parallax + warm silhouettes).
+    let ranges = [(0.70f32, hi*5/100, 0x6A2E3Au32), (0.78f32, hi*7/100, 0x3E1A28u32), (0.86f32, hi*9/100, 0x180A12u32)];
+    for (basef, amp, color) in ranges {
+        for x in 0..w {
+            let phase = x as f32 / wi as f32 * 6.2831;
+            let ridge = (hi as f32 * basef + libm::sinf(phase*1.3 + basef*9.0) * amp as f32
+                       + libm::sinf(phase*0.6) * (amp as f32 * 0.6)) as u32;
+            let top = ridge.min(h);
+            if top < h { fb.fill_rect(x, top, 1, h - top, color); }
+        }
+    }
+}
+
+/// v3 — Deep Ocean: aqua→navy depth, angled god-rays, drifting bubbles.
+fn draw_bg_ocean(fb: &mut Framebuffer) {
+    let w = fb.width; let h = fb.height; let wi = w as i32; let hi = h as i32;
+    vgrad3(fb, 0, h, (0x2E,0x9A,0xB8), (0x12,0x52,0x76), (0x04,0x12,0x22));
+    // God-rays — slanted bright wedges from the surface.
+    for k in 0..5 {
+        let ox = wi*(12 + k*20)/100;
+        let width = wi*4/100;
+        for y in 0..hi*70/100 {
+            let slant = y*30/100;
+            let cxr = ox + slant;
+            let a = (70 - y*70/(hi*70/100)).max(0) as u32; // fade with depth
+            if a == 0 { continue; }
+            for dx in -width..width {
+                let px = cxr + dx;
+                if px < 0 || px >= wi { continue; }
+                let fa = a * (width - dx.abs()) as u32 / width as u32;
+                if fa == 0 { continue; }
+                let d = fb.get_pixel(px as u32, y as u32);
+                let dr=(d>>16)&0xFF; let dg=(d>>8)&0xFF; let db=d&0xFF;
+                let (sr,sg,sb)=(0xD0u32,0xF0,0xFF);
+                fb.set_pixel(px as u32, y as u32, rgb((sr*fa+dr*(255-fa))/255,(sg*fa+dg*(255-fa))/255,(sb*fa+db*(255-fa))/255));
+            }
+        }
+    }
+    // Bubbles — soft light circles, larger/brighter toward the surface.
+    let mut gy = 0; while gy < hi {
+        let mut gx = 0; while gx < wi {
+            let hsh = hash2(gx*3, gy*3);
+            if hsh % 100 < 4 {
+                let px = gx + (hsh % 40) as i32; let py = gy + ((hsh>>8)%40) as i32;
+                let r = 2 + (hsh>>16)%4;
+                fb.glow(px, py, r as i32*3, 0xCFEFFF, 40);
+            }
+            gx += 46;
+        }
+        gy += 46;
+    }
+}
+
+/// v4 — XP "Bliss" homage: rolling green hill, azure cloudy sky, grass texture +
+/// dandelions. Drawn from scratch (no copyrighted photo). The nostalgia card. XDXD
+fn draw_bg_bliss(fb: &mut Framebuffer) {
+    let w = fb.width; let h = fb.height; let wi = w as i32; let hi = h as i32;
+    let horizon = (h*60/100).max(1);
+    let mut y = 0u32;
+    while y < horizon {
+        let t = y as u64 * 255 / horizon as u64;
+        fb.fill_rect(0, y, w, 1, rgb(lerp8(0x33,0xCF,t), lerp8(0x73,0xE6,t), lerp8(0xBE,0xF6,t)));
+        y += 1;
+    }
     fb.glow(wi*22/100, hi*15/100, wi*20/100, 0xEFF5FF, 80);
     fb.glow(wi*30/100, hi*19/100, wi*13/100, 0xFFFFFF, 70);
     fb.glow(wi*17/100, hi*23/100, wi*10/100, 0xFFFFFF, 55);
     fb.glow(wi*70/100, hi*12/100, wi*18/100, 0xEAF2FF, 60);
     fb.glow(wi*79/100, hi*20/100, wi*12/100, 0xFFFFFF, 50);
     fb.glow(wi*52/100, hi*27/100, wi*16/100, 0xF3F8FF, 38);
-
-    // Rolling hill: smooth parabolic crest peaking left-of-centre; grass below
-    // shaded from a sunlit rim down to deep green, with a thin haze at the seam.
-    let cxh = wi * 36 / 100;                 // crest centre x
-    let half2 = ((wi * 66 / 100) as i64).pow(2).max(1);
-    let amp  = hi * 14 / 100;                // hump height above the horizon
+    let cxh = wi*36/100; let half2 = ((wi*66/100) as i64).pow(2).max(1); let amp = hi*14/100;
     for x in 0..w {
         let dx = (x as i32 - cxh) as i64;
-        let hump = (1000 - (dx * dx * 1000 / half2)).max(0) as i32;   // 0..1000
-        let crest = (horizon as i32 - amp * hump / 1000).max(0) as u32;
+        let hump = (1000 - (dx*dx*1000/half2)).max(0) as i32;
+        let crest = (horizon as i32 - amp*hump/1000).max(0) as u32;
         let span = (h - crest).max(1) as u64;
         let mut yy = crest;
         while yy < h {
             let d = (yy - crest) as u64;
-            let (r, g, b) = if d < 2 {
-                (0xBCu32, 0xE0, 0x74)        // bright sunlit crest rim
-            } else {
-                let tt = d * 255 / span;
-                (lerp8(0x86, 0x2C, tt), lerp8(0xC0, 0x60, tt), lerp8(0x3A, 0x18, tt))
-            };
+            let (mut r, mut g, mut b) = if d < 2 { (0xBCu32,0xE0,0x74) }
+                else { let tt = d*255/span; (lerp8(0x86,0x2C,tt), lerp8(0xC0,0x60,tt), lerp8(0x3A,0x18,tt)) };
+            // Grass texture: fine vertical-blade noise, stronger in the foreground.
+            if d >= 2 {
+                let n = hash2(x as i32, (yy/3) as i32) % 24;
+                let shade = (n as i32) - 12;                 // -12..+11
+                let fg = (d as i32 * 100 / span as i32).min(100);   // foreground weight
+                let s = shade * fg / 100;
+                r = (r as i32 + s).clamp(0,255) as u32;
+                g = (g as i32 + s + s/2).clamp(0,255) as u32;
+            }
             fb.set_pixel(x, yy, rgb(r, g, b));
             yy += 1;
         }
     }
+    // Dandelions — tiny yellow clusters, denser/larger toward the foreground.
+    let mut gy = (horizon as i32); while gy < hi {
+        let mut gx = 0; while gx < wi {
+            let hsh = hash2(gx*7, gy*7);
+            let fg = (gy - horizon as i32) * 100 / (hi - horizon as i32).max(1);
+            if (hsh % 100) < (3 + fg as u32 / 12) {
+                let px = gx + (hsh%30) as i32; let py = gy + ((hsh>>8)%30) as i32;
+                let yellow = 0xE8D24A;
+                fb.set_pixel(px as u32, py as u32, yellow);
+                if fg > 50 { // bigger blooms up close
+                    fb.set_pixel((px+1) as u32, py as u32, yellow);
+                    fb.set_pixel(px as u32, (py+1) as u32, yellow);
+                    fb.set_pixel((px+1) as u32, (py+1) as u32, 0xF5E070);
+                }
+            }
+            gx += 34;
+        }
+        gy += 34;
+    }
+}
+
+/// v5 — Nebula Cosmos: deep space, overlapping colourful nebula clouds, a dense
+/// starfield of varied brightness.
+fn draw_bg_nebula(fb: &mut Framebuffer) {
+    let w = fb.width; let h = fb.height; let wi = w as i32; let hi = h as i32;
+    let mut y = 0u32;
+    while y < h { // near-black with a faint violet wash toward the middle band
+        let t = y as u64*255/h as u64;
+        fb.fill_rect(0, y, w, 1, rgb(lerp8(0x05,0x0A,t), lerp8(0x04,0x06,t), lerp8(0x0C,0x14,t)));
+        y += 1;
+    }
+    // Nebula pools — overlapping glows in a diagonal cloud band.
+    fb.glow(wi*30/100, hi*42/100, wi*30/100, 0x6A2EA0, 55);
+    fb.glow(wi*42/100, hi*52/100, wi*24/100, 0xB0408A, 45);
+    fb.glow(wi*55/100, hi*38/100, wi*26/100, 0x2E7AC0, 50);
+    fb.glow(wi*64/100, hi*55/100, wi*20/100, 0x9A3AD0, 40);
+    fb.glow(wi*48/100, hi*46/100, wi*14/100, 0xE070B0, 35);
+    fb.glow(wi*20/100, hi*30/100, wi*16/100, 0x203A8A, 30);
+    scatter_stars(fb, 0, h, 9, 16);
+}
+
+/// v6 — Mountain Dawn: dawn sky, a low sun, four mountain ranges with
+/// atmospheric perspective (hazier/lighter as they recede) and mist bands.
+fn draw_bg_mountains(fb: &mut Framebuffer) {
+    let w = fb.width; let h = fb.height; let wi = w as i32; let hi = h as i32;
+    let horizon = h*72/100;
+    vgrad3(fb, 0, horizon, (0x8A,0xA8,0xD0), (0xE0,0xA8,0xB0), (0xF7,0xD8,0xB0));
+    let sx = wi*40/100; let sy = horizon as i32 - hi*6/100;
+    fb.glow(sx, sy, wi*20/100, 0xFFE0B0, 80);
+    fb.glow(sx, sy, wi*7/100, 0xFFF4D8, 110);
+    // Ranges back→front: lighter/hazier (sky-tinted) in back, darker in front.
+    let ranges = [
+        (0.50f32, hi*8/100,  0xB9C2D6u32, 4.0f32),
+        (0.58f32, hi*11/100, 0x97A2BEu32, 3.0f32),
+        (0.66f32, hi*13/100, 0x6E7796u32, 2.2f32),
+        (0.74f32, hi*16/100, 0x434C68u32, 1.6f32),
+    ];
+    for (basef, amp, color, freq) in ranges {
+        for x in 0..w {
+            let ph = x as f32 / wi as f32 * 6.2831 * freq;
+            let jag = libm::sinf(ph) * 0.6 + libm::sinf(ph*2.7+basef*5.0)*0.3
+                    + ((hash2(x as i32/8, (basef*100.0) as i32) % 100) as f32/100.0 - 0.5)*0.3;
+            let ridge = (hi as f32 * basef + jag * amp as f32) as u32;
+            let top = ridge.min(h);
+            if top < h { fb.fill_rect(x, top, 1, h - top, color); }
+        }
+        // mist band hugging the base of each range
+        fb.glow(wi/2, (hi as f32*basef) as i32 + amp, wi*60/100, 0xE8E0E0, 14);
+    }
+}
+
+/// v7 — Sakura Mist: a calm lavender→pink→cream wash with soft bokeh petals and
+/// a gentle vignette. The serene one.
+fn draw_bg_sakura(fb: &mut Framebuffer) {
+    let w = fb.width; let h = fb.height; let wi = w as i32; let hi = h as i32;
+    vgrad3(fb, 0, h, (0x5E,0x52,0x80), (0xC8,0x88,0xA8), (0xF2,0xDD,0xE4));
+    // Bokeh petals — soft circles of varied size (depth via size + alpha).
+    let mut gy = 0; while gy < hi {
+        let mut gx = 0; while gx < wi {
+            let hsh = hash2(gx*5, gy*5);
+            if hsh % 100 < 7 {
+                let px = gx + (hsh%60) as i32; let py = gy + ((hsh>>8)%60) as i32;
+                let r = 4 + (hsh>>16)%18;
+                let pink = if hsh % 3 == 0 { 0xFFFFFF } else { 0xF8C8DC };
+                fb.glow(px, py, r as i32, pink, 30 + (hsh>>20)%40);
+            }
+            gx += 64;
+        }
+        gy += 64;
+    }
+    let vr = wi*60/100;
+    for (vx, vy) in [(0,0),(wi,0),(0,hi),(wi,hi)] { fb.glow(vx, vy, vr, 0x3A2E40, 35); }
 }
 
 fn draw_scene_static_v(fb: &mut Framebuffer, variant: u8) {
     let w = fb.width; let h = fb.height;
     let ptop = panel_top(h);
 
-    // Wallpaper. Variant 4 = the hidden XP "Bliss" easter egg; 0-3 are the
-    // warm-stone gradients (v0 default, v1 cool slate, v2 deep night, v3 dusk).
-    if variant == 4 {
-        draw_bliss(fb);
-    } else {
-    let mut y = 0u32;
-    while y < h {
-        let t = y as u64 * 256 / h as u64;
-        let (r, g, b) = match variant {
-            1 => { // Cool slate blue-grey
-                let r = 0x1Cu64.saturating_sub(0x06 * t / 255);
-                let g = 0x22u64.saturating_sub(0x08 * t / 255);
-                let b = 0x2Eu64.saturating_sub(0x0A * t / 255);
-                (r, g, b)
-            }
-            2 => { // Deep forest night
-                let r = 0x10u64.saturating_sub(0x04 * t / 255);
-                let g = 0x1Au64.saturating_sub(0x08 * t / 255);
-                let b = 0x12u64.saturating_sub(0x05 * t / 255);
-                (r, g, b)
-            }
-            3 => { // Warm amber dusk
-                let r = 0x2Eu64.saturating_sub(0x0A * t / 255);
-                let g = 0x24u64.saturating_sub(0x0A * t / 255);
-                let b = 0x18u64.saturating_sub(0x08 * t / 255);
-                (r, g, b)
-            }
-            _ => { // v0: deep midnight blue
-                let r = 0x0Eu64.saturating_sub(0x08 * t / 255);
-                let g = 0x1Bu64.saturating_sub(0x12 * t / 255);
-                let b = 0x2Eu64.saturating_sub(0x1E * t / 255);
-                (r, g, b)
-            }
-        };
-        fb.fill_rect(0, y, w, 1, ((r as u32) << 16) | ((g as u32) << 8) | b as u32);
-        y += 1;
+    // Wallpaper gallery — 8 procedural system backgrounds with depth. Cycle via
+    // right-click desktop → Change Background. v4 = the XP "Bliss" easter egg.
+    let _ = (w, h);
+    match variant {
+        1 => draw_bg_aurora(fb),
+        2 => draw_bg_sunset(fb),
+        3 => draw_bg_ocean(fb),
+        4 => draw_bg_bliss(fb),
+        5 => draw_bg_nebula(fb),
+        6 => draw_bg_mountains(fb),
+        7 => draw_bg_sakura(fb),
+        _ => draw_bg_stone(fb),
     }
-
-    // Warm atmospheric glows + a faint dingir constellation — the depth the
-    // mockup gets from radial-gradients and blurred color pools. Only on the
-    // default variant (the others stay clean tinted gradients).
-    if variant == 0 {
-        let wi = w as i32; let hi = h as i32;
-        fb.glow(wi * 76 / 100, hi * 22 / 100, (w as i32) * 30 / 100, 0x1A4A6B, 60); // cool blue, top-right
-        fb.glow(wi * 16 / 100, hi * 84 / 100, (w as i32) * 26 / 100, 0x1A3D5E, 40); // deep blue, bottom-left
-        fb.glow(wi / 2,        hi / 2,        (w as i32) * 20 / 100, 0x152A45, 35); // center navy
-        let stars: [(i32, i32, i32); 4] = [
-            (wi * 11 / 100, hi * 30 / 100, 11),
-            (wi * 90 / 100, hi * 82 / 100, 14),
-            (wi * 33 / 100, hi * 70 / 100,  9),
-            (wi * 60 / 100, hi * 12 / 100,  8),
-        ];
-        for (sx, sy, sr) in stars {
-            fb.glow(sx, sy, sr * 5, 0x24364F, 55);   // soft bloom under each star
-            fb.draw_star8(sx, sy, sr, 0x32486A);     // a touch brighter than before
-        }
-        // Vignette — gently darken the corners so the eye settles to the centre
-        // (spatial depth, the "illuminated room" feel from the Aero doctrine).
-        let vr = wi * 58 / 100;
-        for (vx, vy) in [(0, 0), (wi, 0), (0, hi), (wi, hi)] {
-            fb.glow(vx, vy, vr, 0x06090D, 60);
-        }
-    }
-    } // end else (non-Bliss wallpapers)
 
     // Centered hero — floating text on the wallpaper, NO card box (matches the
     // mockup #hero: transparent, pointer-events:none). Big dingir, then
@@ -1911,7 +2127,10 @@ pub extern "C" fn _start() -> ! {
     let mut start_menu_open = false;
     let mut ctx_menu: Option<(i32, i32)> = None;
     let mut hover_icon: Option<usize> = None;
-    let mut wallpaper_variant: u8 = 0;  // cycles on "Change Background"
+    let mut wallpaper_variant: u8 = {   // cycles on "Change Background"
+        let wp = sys_wallpaper();       // `wallpaper=N` boot override (test + feature)
+        if wp != u64::MAX { (wp as u8) % WALLPAPER_COUNT } else { 0 }
+    };
     let mut pending_screenshot = false; // right-click "Take Screenshot" → capture next clean frame
 
     // Boot to a clean desktop — the Apple-style welcome card + dock + gradient
@@ -2156,7 +2375,7 @@ pub extern "C" fn _start() -> ! {
                             pending_screenshot = true;
                         }
                         4 => { // Change Background — cycle wallpaper variant
-                            wallpaper_variant = (wallpaper_variant + 1) % 5; // 5th = XP Bliss easter egg
+                            wallpaper_variant = (wallpaper_variant + 1) % WALLPAPER_COUNT; // 8 system backgrounds
                             fb.invalidate_bg();
                         }
                         5 => { // Display Settings
