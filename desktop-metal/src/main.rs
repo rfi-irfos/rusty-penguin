@@ -160,6 +160,7 @@ fn open_app_by_index(idx: u64, w: i32, h: i32, n: usize) -> Option<TermWin> {
         12 => open_media_player(w, h, n),
         13 => open_screenshot(w, h, n),
         14 => open_image_viewer(w, h, n),
+        15 => open_system_clock(w, h, n),
         100 => open_term(w, h, n, &LAUNCHERS[0]),
         _  => None,
     }
@@ -1055,12 +1056,13 @@ const MENU_ITEMS: &[MenuItem] = &[
     MenuItem { label: "Media Player",   desc: "Video + audio — the founding clip", color: 0xF5C451, icon: icons::IC_MEDIA, kind: MenuLaunch::App(12) },
     MenuItem { label: "Screenshot",     desc: "Capture the screen to a file",  color: 0x8CC6E5, icon: icons::IC_SHOT,  kind: MenuLaunch::App(13) },
     MenuItem { label: "Image Viewer",   desc: "View PPM images & screenshots",  color: 0x8CC6E5, icon: icons::IC_IMAGE, kind: MenuLaunch::App(14) },
-    // games start at index 12
+    MenuItem { label: "Clock",          desc: "Time, stopwatch, timer, world",  color: 0x6FE18B, icon: icons::IC_CLOCK, kind: MenuLaunch::App(15) },
+    // games start at index 13
     MenuItem { label: "Snake",        desc: "Classic arcade",             color: 0x4ADE80, icon: icons::IC_SNAKE,    kind: MenuLaunch::App(6) },
     MenuItem { label: "Minesweeper",  desc: "Find the mines",             color: 0xFCD34D, icon: icons::IC_MINES,    kind: MenuLaunch::App(7) },
     MenuItem { label: "Doom",         desc: "E1M1 — shareware DOOM",      color: 0xEF4444, icon: icons::IC_DOOM,     kind: MenuLaunch::App(8) },
 ];
-const MENU_APPS_END: usize = 12;  // items 0..12 = apps, 12..15 = games
+const MENU_APPS_END: usize = 13;  // items 0..13 = apps, 13..16 = games
 
 const MENU_W:       i32 = 280;
 const MENU_HDR_H:   i32 = 54;   // dingir avatar + title + subtitle
@@ -1588,7 +1590,7 @@ fn open_system_clock(w: i32, h: i32, n: usize) -> Option<TermWin> {
                 .min(w - wm::WINDOW_W);
             let wy = ((h - wm::WINDOW_H - 28) / 2 + off).max(TOPBAR_H as i32).min(h - wm::WINDOW_H - 28);
             Some(TermWin {
-                win: wm::Window::new(wx, wy, "System Clock"),
+                win: wm::Window::new(wx, wy, "Clock"),
                 term: t,
                 editor: None,
                 app: Some(clock),
@@ -2121,6 +2123,7 @@ pub extern "C" fn _start() -> ! {
                             MenuLaunch::App(12)  => open_media_player(w, h, wins.len()),
                             MenuLaunch::App(13)  => open_screenshot(w, h, wins.len()),
                             MenuLaunch::App(14)  => open_image_viewer(w, h, wins.len()),
+                            MenuLaunch::App(15)  => open_system_clock(w, h, wins.len()),
                             MenuLaunch::App(_)   => None,
                         };
                         if let Some(tw) = opened { wins.push(tw); }

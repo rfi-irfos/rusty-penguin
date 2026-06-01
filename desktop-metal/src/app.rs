@@ -6,6 +6,25 @@ use crate::vfs;
 use alloc::string::String;
 use alloc::vec::Vec;
 
+/// sys_ticks (#4) — 100 Hz tick counter since boot.
+fn sys_ticks() -> u64 {
+    let n: u64;
+    unsafe {
+        core::arch::asm!("syscall", inout("rax") 4u64 => n, in("rdi") 0u64,
+            out("rcx") _, out("r11") _, options(nostack));
+    }
+    n
+}
+/// sys_rtc (#13) — packed CMOS clock: wday|sec<<8|min<<16|hour<<24|mday<<32|month<<40.
+fn sys_rtc() -> u64 {
+    let n: u64;
+    unsafe {
+        core::arch::asm!("syscall", inout("rax") 13u64 => n, in("rdi") 0u64,
+            out("rcx") _, out("r11") _, options(nostack));
+    }
+    n
+}
+
 /// Format a u64 into a stack buffer and return the &str slice that points into
 /// it. Avoids the heap allocation that `format!("{}", n)` would do — the bump
 /// allocator never frees, so every render-path format! was leaking.
@@ -1122,63 +1141,189 @@ impl App for Calculator {
 }
 
 /// System Clock and Status Display
+/// Clock — live time + date, a stopwatch, a countdown timer, and world clocks.
+/// Tabs switch with 1-4 (or Tab). Real RTC + 100 Hz tick counter, no fakes.
 pub struct SystemClock {
+    tab: u8,                 // 0 Clock, 1 Stopwatch, 2 Timer, 3 World
+    sw_running: bool, sw_start: u64, sw_accum: u64,   // stopwatch, in ticks
+    tm_set: u64,             // timer total seconds configured
+    tm_running: bool, tm_start: u64, tm_left_at_start: u64, // timer
+    last_update: u64,
     pub dirty: bool,
     pub wants_close: bool,
+    ansi: crate::ansi::AnsiParser,
 }
+
+// (city, hours offset from the RTC's local Vienna time). Vienna RTC is the base.
+const WORLD: [(&str, i64); 6] = [
+    ("Vienna", 0), ("London", -1), ("New York", -6),
+    ("Los Angeles", -9), ("Tokyo", 7), ("Sydney", 8),
+];
 
 impl SystemClock {
     pub fn new() -> Self {
-        SystemClock {
-            dirty: true,
-            wants_close: false,
-        }
+        SystemClock { tab: 0, sw_running: false, sw_start: 0, sw_accum: 0,
+                      tm_set: 60, tm_running: false, tm_start: 0, tm_left_at_start: 60,
+                      last_update: 0, dirty: true, wants_close: false,
+                      ansi: crate::ansi::AnsiParser::new() }
+    }
+
+    fn sw_elapsed(&self) -> u64 { // in ticks (100 Hz)
+        self.sw_accum + if self.sw_running { sys_ticks().wrapping_sub(self.sw_start) } else { 0 }
+    }
+    fn tm_remaining(&self) -> u64 { // seconds, floored at 0
+        if !self.tm_running { return self.tm_left_at_start; }
+        let elapsed = sys_ticks().wrapping_sub(self.tm_start) / 100;
+        self.tm_left_at_start.saturating_sub(elapsed)
+    }
+
+    // hh:mm:ss into a stack buffer.
+    fn hms(buf: &mut [u8; 12], h: u64, m: u64, s: u64) -> &str {
+        buf[0] = b'0' + (h / 10) as u8; buf[1] = b'0' + (h % 10) as u8; buf[2] = b':';
+        buf[3] = b'0' + (m / 10) as u8; buf[4] = b'0' + (m % 10) as u8; buf[5] = b':';
+        buf[6] = b'0' + (s / 10) as u8; buf[7] = b'0' + (s % 10) as u8;
+        core::str::from_utf8(&buf[..8]).unwrap_or("")
     }
 }
 
 impl App for SystemClock {
+    fn tick(&mut self, ticks: u64) -> bool {
+        // Update at ~20 Hz while a stopwatch/timer runs (centiseconds matter),
+        // ~2 Hz otherwise (catch the seconds flip promptly).
+        let iv = if self.sw_running || self.tm_running { 5 } else { 50 };
+        if ticks.wrapping_sub(self.last_update) >= iv { self.last_update = ticks; return true; }
+        false
+    }
+
     fn render(&mut self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, h: u32) {
-        // Header
-        fb.fill_rect(x, y, w, 24, 0x2C2C38);
-        fb.draw_str(x + 8, y + 7, "System Clock", 0xF5F5F7, 0x2C2C38);
-        fb.fill_rect(x, y + 24, w, 1, 0x3C3C48);
-
-        // Large time display
-        fb.fill_rect(x + 8, y + 32, w - 16, 48, 0x1A1A24);
-        fb.draw_str(x + 12, y + 45, "12:34:56", 0x4ADE80, 0x1A1A24);
-
-        // Date and info
-        fb.fill_rect(x, y + 90, w, 1, 0x3C3C48);
-
-        let items = [
-            "Date: 2026-05-28",
-            "Uptime: Running",
-            "Load: Minimal",
-            "",
-            "System Status:",
-            "CPU: Idle",
-            "Memory: 85% Free",
-            "Disk: 512MB Available",
-        ];
-
-        for (i, item) in items.iter().enumerate() {
-            let y_pos = y + 98 + (i as u32 * 14);
-            if y_pos + 14 > y + h { break; }
-
-            let color = if item.is_empty() { 0x1A1A24 } else { 0xB8B8B8 };
-            fb.draw_str(x + 12, y_pos, item, color, 0x0F172A);
+        fb.fill_rect(x, y, w, h, 0x14171A);
+        // Tab bar.
+        fb.fill_rect(x, y, w, 26, 0x252E2A);
+        let tabs = ["Clock", "Stopwatch", "Timer", "World"];
+        let mut tx = x + 12;
+        for (i, t) in tabs.iter().enumerate() {
+            let active = self.tab as usize == i;
+            let col = if active { 0x6FE18B } else { 0x8A938C };
+            let tw_px = (t.len() as u32) * 7;   // tiny font ≈ 6px + 1px tracking
+            if active { fb.fill_rect(tx - 4, y + 22, tw_px + 8, 2, 0x6FE18B); }
+            fb.draw_str_t(tx, y + 9, t, col);
+            tx += tw_px + 20;
         }
 
+        let cx = x + w / 2;
+        let body_y = y + 30;
+        match self.tab {
+            0 => { // Clock
+                let rtc = sys_rtc();
+                let sec = ((rtc >> 8) & 0xFF) as u64;
+                let min = ((rtc >> 16) & 0xFF) as u64;
+                let hour = ((rtc >> 24) & 0xFF) as u64;
+                let mday = ((rtc >> 32) & 0xFF) as u64;
+                let month = ((rtc >> 40) & 0xFF) as u64;
+                let mut tbuf = [0u8; 12];
+                let (hh, mm, ss) = if hour < 24 && min < 60 && sec < 60 {
+                    (hour, min, sec)
+                } else { let t = sys_ticks() / 100; (t / 3600 % 24, t / 60 % 60, t % 60) };
+                let s = Self::hms(&mut tbuf, hh, mm, ss);
+                fb.draw_str_scaled_t(cx - (s.len() as u32 * 7 * 4) / 2, body_y + 30, s, 0x6FE18B, 4);
+                // Date line.
+                const MON: [&str; 13] = ["", "Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+                if month >= 1 && month <= 12 {
+                    let mut db = [0u8; 24];
+                    fb.draw_str_t(cx - 40, body_y + 90, MON[month as usize], 0xA8B0A6);
+                    fb.draw_str_t(cx - 10, body_y + 90, u64_into(&mut db, mday), 0xECEDE5);
+                    fb.draw_str_t(cx + 14, body_y + 90, "2026", 0xA8B0A6);
+                }
+            }
+            1 => { // Stopwatch — MM:SS.cs
+                let t = self.sw_elapsed();
+                let cs = (t % 100) as u64; let total = t / 100;
+                let mut tb = [0u8; 12];
+                let s = Self::hms(&mut tb, total / 3600, total / 60 % 60, total % 60);
+                fb.draw_str_scaled_t(cx - (s.len() as u32 * 7 * 4) / 2, body_y + 26, s, 0xECEDE5, 4);
+                let mut cb = [0u8; 8];
+                cb[0] = b'.'; cb[1] = b'0' + (cs / 10) as u8; cb[2] = b'0' + (cs % 10) as u8;
+                fb.draw_str_scaled_t(cx + (s.len() as u32 * 8 * 4) / 2 + 6, body_y + 40, core::str::from_utf8(&cb[..3]).unwrap_or(""), 0x8CC6E5, 2);
+                fb.draw_str_t(cx - 86, body_y + 84, "SPACE start/stop   R reset", 0x6B756D);
+            }
+            2 => { // Timer — countdown
+                let rem = self.tm_remaining();
+                let done = self.tm_running && rem == 0;
+                let mut tb = [0u8; 12];
+                let s = Self::hms(&mut tb, rem / 3600, rem / 60 % 60, rem % 60);
+                let col = if done { 0xEF7575 } else { 0xF5C451 };
+                fb.draw_str_scaled_t(cx - (s.len() as u32 * 7 * 4) / 2, body_y + 26, s, col, 4);
+                if done { fb.draw_str_t(cx - 24, body_y + 76, "TIME UP", 0xEF7575); }
+                fb.draw_str_t(cx - 96, body_y + 92, "+/- adjust  SPACE start/stop  R reset", 0x6B756D);
+            }
+            _ => { // World clocks
+                let rtc = sys_rtc();
+                let hour = ((rtc >> 24) & 0xFF) as i64;
+                let min = ((rtc >> 16) & 0xFF) as i64;
+                let sec = ((rtc >> 8) & 0xFF) as i64;
+                let (lh, lm, ls) = if hour < 24 && min < 60 { (hour, min, sec.max(0)) }
+                    else { let t = (sys_ticks()/100) as i64; (t/3600%24, t/60%60, t%60) };
+                let mut yy = body_y + 8;
+                for (city, off) in WORLD.iter() {
+                    let hh = (((lh + off) % 24) + 24) % 24;
+                    let mut tb = [0u8; 12];
+                    let s = Self::hms(&mut tb, hh as u64, lm as u64, ls as u64);
+                    fb.draw_str(x + 16, yy, city, 0xECEDE5, 0x14171A);
+                    fb.draw_str(x + w - 90, yy, s, 0x6FE18B, 0x14171A);
+                    yy += 22;
+                }
+            }
+        }
         self.dirty = false;
     }
 
-    fn on_key(&mut self, _key: u8) {
-        // Clock display - read-only
+    fn on_key(&mut self, key: u8) {
+        use crate::ansi::Key as AK;
+        match self.ansi.feed(key) {
+            AK::Char(b'1') => { self.tab = 0; self.dirty = true; }
+            AK::Char(b'2') => { self.tab = 1; self.dirty = true; }
+            AK::Char(b'3') => { self.tab = 2; self.dirty = true; }
+            AK::Char(b'4') => { self.tab = 3; self.dirty = true; }
+            AK::Char(b'\t') => { self.tab = (self.tab + 1) % 4; self.dirty = true; }
+            AK::Char(b' ') => {
+                match self.tab {
+                    1 => { // stopwatch start/stop
+                        if self.sw_running { self.sw_accum = self.sw_elapsed(); self.sw_running = false; }
+                        else { self.sw_start = sys_ticks(); self.sw_running = true; }
+                        self.dirty = true;
+                    }
+                    2 => { // timer start/stop
+                        if self.tm_running { self.tm_left_at_start = self.tm_remaining(); self.tm_running = false; }
+                        else if self.tm_left_at_start > 0 { self.tm_start = sys_ticks(); self.tm_running = true; }
+                        self.dirty = true;
+                    }
+                    _ => {}
+                }
+            }
+            AK::Char(b'r') | AK::Char(b'R') => {
+                match self.tab {
+                    1 => { self.sw_running = false; self.sw_accum = 0; self.dirty = true; }
+                    2 => { self.tm_running = false; self.tm_left_at_start = self.tm_set; self.dirty = true; }
+                    _ => {}
+                }
+            }
+            AK::Char(b'+') | AK::Char(b'=') => {
+                if self.tab == 2 && !self.tm_running {
+                    self.tm_set = (self.tm_set + 10).min(86399);
+                    self.tm_left_at_start = self.tm_set; self.dirty = true;
+                }
+            }
+            AK::Char(b'-') | AK::Char(b'_') => {
+                if self.tab == 2 && !self.tm_running {
+                    self.tm_set = self.tm_set.saturating_sub(10);
+                    self.tm_left_at_start = self.tm_set; self.dirty = true;
+                }
+            }
+            _ => {}
+        }
     }
 
-    fn title(&self) -> &str {
-        "System Clock"
-    }
+    fn title(&self) -> &str { "Clock" }
 }
 
 /// Help and Reference Browser

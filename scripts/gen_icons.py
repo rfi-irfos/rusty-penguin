@@ -117,11 +117,17 @@ def ic_image(d):
     d.line([s(12),s(14),s(17),s(9)], fill=255, width=W)                      # far peak
     d.line([s(17),s(9),s(20),s(13)], fill=255, width=W)
 
+def ic_clock(d):
+    cx, cy = s(12), s(12)
+    d.ellipse([cx-s(9),cy-s(9),cx+s(9),cy+s(9)], outline=255, width=W)
+    d.line([cx,cy,cx,cy-s(5.5)], fill=255, width=W+SS)    # hour hand
+    d.line([cx,cy,cx+s(4.5),cy+s(2)], fill=255, width=W)  # minute hand
+
 ICONS = [
     ("TERM", ic_term), ("FILES", ic_files), ("EDIT", ic_edit), ("CALC", ic_calc),
     ("SETTINGS", ic_settings), ("TIS", ic_tis), ("SNAKE", ic_snake),
     ("MINES", ic_mines), ("DOOM", ic_doom), ("WEB", ic_web), ("MEDIA", ic_media),
-    ("SHOT", ic_shot), ("IMAGE", ic_image),
+    ("SHOT", ic_shot), ("IMAGE", ic_image), ("CLOCK", ic_clock),
 ]
 
 def main():
