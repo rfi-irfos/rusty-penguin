@@ -4,6 +4,23 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+### Added — ACPI power management: clean shutdown + reboot (2026-06-01)
+
+- The kernel had no power management — the only way out was closing the VM or a
+  triple fault, and the desktop "Shut Down" button was a halt-only stub.
+- `acpi.rs` parses the firmware tables (RSDP → RSDT/XSDT → FADT, and the FADT's
+  DSDT for the `\_S5` package), read through the higher-half RAM physmap, then:
+  - `poweroff()` — real ACPI S5 soft-off via the PM1a/PM1b control ports;
+  - `reboot()` — FADT reset register with 8042 (`0x64←0xFE`) and PCI (`0xCF9`)
+    fallbacks.
+- Syscalls 37 (`sys_poweroff`) / 38 (`sys_reboot`); the start-menu "Shut Down"
+  button now actually powers the machine off.
+- Verified in QEMU: probe reads `PM1a=0x604`, S5 type 0, reset supported;
+  `acpipoweroff` enters S5 and the VM powers off cleanly (qemu exits rc=0);
+  `acpireboot` resets.
+- Scope: shutdown + reboot. Battery (`_BST`, needs an AML interpreter),
+  brightness, and S3 suspend/resume are larger follow-ups.
+
 ### Changed — RPFS v2: a real filesystem (reclamation, thousands of files, directories) (2026-06-01)
 
 - RPFS v1 was a demo — 16 files, one flat directory, append-only data that
