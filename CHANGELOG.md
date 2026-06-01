@@ -4,6 +4,22 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+### Added — Multiproc brick 3e: hung windowed app force-quit, others keep running (2026-06-01)
+
+- Item 4's entire goal in one scene, combining isolation (1/2) + watchdog (2) +
+  windowed compositing (3c/3d).
+- `recoverwin` boot flag → a healthy app and a wedging app, each its own isolated
+  process + window. The boot thread runs the compositor *and* a watchdog: it sees
+  the wedged app make no syscall progress, force-quits it, and closes its window
+  with a "Not Responding" overlay — while the healthy app keeps rendering.
+- Verified by QEMU screendump: healthy window stays up (1024 px), hung window is
+  gone (0 px) and replaced by the closed overlay, zero faults → "RECOVER PROVEN".
+  Proof: docs/multiproc-hung-app-recovered.png.
+- This is item 4 as written ("a hung app can't freeze the desktop, and you can
+  run several real apps at once") proven end to end and on screen. The
+  kernel/compositor model is complete; remaining is swapping the test apps for
+  the real desktop + real apps (fbDOOM) through this same pipeline.
+
 ### Added — Multiproc brick 3d: two real app processes in two windows at once (2026-06-01)
 
 - Closes the second half of item 4's goal ("run several real apps at once"; the
