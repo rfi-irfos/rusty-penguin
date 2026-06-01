@@ -1886,8 +1886,13 @@ fn open_process_monitor(w: i32, h: i32, n: usize) -> Option<TermWin> {
                 .max(left_margin)
                 .min(w - wm::WINDOW_W);
             let wy = ((h - wm::WINDOW_H - 28) / 2 + off).max(TOPBAR_H as i32).min(h - wm::WINDOW_H - 28);
+            let mut win = wm::Window::new(wx, wy, "System Monitor");
+            // Roomier than the terminal default so the graph + readout breathe.
+            let mw = 580.min(w - 90); let mh = 440.min(h - 28 - TOPBAR_H as i32);
+            win.w = mw; win.h = mh; win.restore_w = mw; win.restore_h = mh;
+            win.x = win.x.min(w - mw - 8).max(75);
             Some(TermWin {
-                win: wm::Window::new(wx, wy, "Process Monitor"),
+                win,
                 term: t,
                 editor: None,
                 app: Some(proc_mon),

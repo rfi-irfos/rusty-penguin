@@ -24,6 +24,23 @@ fn sys_rtc() -> u64 {
     }
     n
 }
+/// sys_meminfo (#5) → (free_mib, total_mib).
+fn sys_meminfo() -> (u32, u32) {
+    let n: u64;
+    unsafe {
+        core::arch::asm!("syscall", inout("rax") 5u64 => n, in("rdi") 0u64,
+            out("rcx") _, out("r11") _, options(nostack));
+    }
+    ((n >> 32) as u32, (n & 0xFFFF_FFFF) as u32)
+}
+/// sys_ps (#9) → fills `buf` with up to `max` 32-byte process records
+/// ([pid u64][state u8][7 pad][name 16]); returns the record count.
+unsafe fn sys_ps(buf: &mut [u8], max: usize) -> usize {
+    let n: u64;
+    core::arch::asm!("syscall", inout("rax") 9u64 => n, in("rdi") buf.as_mut_ptr(),
+        in("rsi") max as u64, out("rcx") _, out("r11") _, options(nostack));
+    n as usize
+}
 
 /// Format a u64 into a stack buffer and return the &str slice that points into
 /// it. Avoids the heap allocation that `format!("{}", n)` would do — the bump
@@ -37,6 +54,9 @@ fn u64_into<'a>(buf: &'a mut [u8; 24], n: u64) -> &'a str {
     for j in 0..i { buf[j] = tmp[i - 1 - j]; }
     core::str::from_utf8(&buf[..i]).unwrap_or("")
 }
+
+/// Number of decimal digits in `n` (≥1). For laying text out next to a number.
+fn count_digits(mut n: u32) -> u32 { let mut d = 1; while n >= 10 { n /= 10; d += 1; } d }
 
 pub trait App {
     /// Render the app's content into the given framebuffer region
@@ -914,61 +934,157 @@ impl App for TisConsole {
 }
 
 /// Process Monitor application
+const MON_HIST: usize = 200;   // memory-% history samples (~50s at 4 Hz)
+
+/// System Monitor — a real, GNOME-System-Monitor-style tool. Resources tab shows a
+/// LIVE scrolling memory-usage graph (sys_meminfo, real data) + readout + uptime;
+/// Processes tab lists the kernel's actual processes (sys_ps) with ternary-coloured
+/// state. (This kernel doesn't track per-core CPU%, so we don't fake a CPU graph —
+/// memory + processes + uptime are all real.) Tabs: 1/2 or Tab.
 pub struct ProcessMonitor {
+    tab: u8,                       // 0 Resources, 1 Processes
+    mem_hist: [u8; MON_HIST],      // memory-used % history (chronological, [len-1]=newest)
+    hist_len: usize,
+    mem_free: u32, mem_total: u32, // MiB
+    nprocs: usize,
+    last_sample: u64,
     pub dirty: bool,
     pub wants_close: bool,
+    ansi: crate::ansi::AnsiParser,
 }
 
 impl ProcessMonitor {
     pub fn new() -> Self {
-        ProcessMonitor {
-            dirty: true,
-            wants_close: false,
+        let mut m = ProcessMonitor {
+            tab: 0, mem_hist: [0; MON_HIST], hist_len: 0,
+            mem_free: 0, mem_total: 0, nprocs: 0, last_sample: 0,
+            dirty: true, wants_close: false, ansi: crate::ansi::AnsiParser::new(),
+        };
+        m.sample();
+        m
+    }
+
+    fn sample(&mut self) {
+        let (free, total) = sys_meminfo();
+        self.mem_free = free; self.mem_total = total;
+        let used_pct = if total > 0 { ((total - free) as u64 * 100 / total as u64) as u8 } else { 0 };
+        if self.hist_len < MON_HIST {
+            self.mem_hist[self.hist_len] = used_pct; self.hist_len += 1;
+        } else {
+            self.mem_hist.copy_within(1.., 0);
+            self.mem_hist[MON_HIST - 1] = used_pct;
         }
+        let mut buf = [0u8; 16 * 32];
+        self.nprocs = unsafe { sys_ps(&mut buf, 16) };
     }
 }
 
 impl App for ProcessMonitor {
+    fn tick(&mut self, ticks: u64) -> bool {
+        if ticks.wrapping_sub(self.last_sample) >= 25 { // ~4 Hz
+            self.last_sample = ticks; self.sample(); return true;
+        }
+        false
+    }
+
     fn render(&mut self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, h: u32) {
-        // Draw header
-        fb.fill_rect(x, y, w, 24, 0x2C2C38);
-        fb.draw_str(x + 8, y + 7, "Process Monitor", 0xF5F5F7, 0x2C2C38);
-        fb.fill_rect(x, y + 24, w, 1, 0x3C3C48);
-
-        // Column headers
-        fb.fill_rect(x, y + 24, w, 18, 0x3C3C48);
-        fb.draw_str(x + 8, y + 29, "PID", 0xB8B8B8, 0x3C3C48);
-        fb.draw_str(x + 80, y + 29, "NAME", 0xB8B8B8, 0x3C3C48);
-        fb.draw_str(x + 250, y + 29, "STATE", 0xB8B8B8, 0x3C3C48);
-
-        // Sample process data
-        let processes = [
-            ("1", "psh", "Active"),
-            ("2", "desktop", "Active"),
-            ("3", "init", "Active"),
-        ];
-
-        for (i, (pid, name, state)) in processes.iter().enumerate() {
-            let y_pos = y + 42 + (i as u32 * 18);
-            if y_pos + 18 > y + h { break; }
-
-            let bg_color = if i % 2 == 0 { 0x1A1A24 } else { 0x232333 };
-            fb.fill_rect(x, y_pos, w, 18, bg_color);
-
-            fb.draw_str(x + 8, y_pos + 4, pid, 0xB8B8B8, bg_color);
-            fb.draw_str(x + 80, y_pos + 4, name, 0xB8B8B8, bg_color);
-            fb.draw_str(x + 250, y_pos + 4, state, 0x4AFF4A, bg_color);
+        fb.fill_rect(x, y, w, h, 0x14171A);
+        // Tab bar.
+        fb.fill_rect(x, y, w, 26, 0x252E2A);
+        for (i, t) in ["Resources", "Processes"].iter().enumerate() {
+            let tx = x + 14 + i as u32 * 96;
+            let active = self.tab as usize == i;
+            let col = if active { 0x6FE18B } else { 0x8A938C };
+            if active { fb.fill_rect(tx - 4, y + 22, (t.len() as u32) * 7 + 8, 2, 0x6FE18B); }
+            fb.draw_str_t(tx, y + 9, t, col);
         }
 
+        if self.tab == 0 {
+            // ── Resources: live memory graph ───────────────────────────────────
+            let used = self.mem_total.saturating_sub(self.mem_free);
+            let pct = if self.mem_total > 0 { used * 100 / self.mem_total } else { 0 };
+            fb.draw_str(x + 14, y + 36, "Memory", 0xECEDE5, 0x14171A);
+            // graph box
+            let gx = x + 14; let gy = y + 56; let gw = w.saturating_sub(28); let gh = 120u32;
+            fb.fill_rect(gx, gy, gw, gh, 0x0E1311);
+            // gridlines at 25/50/75%
+            for q in 1..4 { fb.fill_rect(gx, gy + gh * q / 4, gw, 1, 0x1E2A24); }
+            // plot the history right-aligned (newest at the right edge), area chart.
+            for col in 0..gw {
+                let back = (gw - 1 - col) as usize;          // 0 = rightmost = newest
+                if back >= self.hist_len { continue; }
+                let v = self.mem_hist[self.hist_len - 1 - back] as u32; // 0..100
+                let barh = v * gh / 100;
+                let top = gy + gh - barh;
+                fb.fill_rect(gx + col, top, 1, barh, 0x1E5A3E);     // green area
+                fb.set_pixel(gx + col, top, 0x6FE18B);              // bright top line
+            }
+            // readout: used / total + percent + bar.
+            let ry = gy + gh + 14;
+            let mut ub = [0u8; 24]; let mut tb = [0u8; 24]; let mut pb = [0u8; 24];
+            let bg = 0x14171Au32;
+            fb.draw_str(x + 14, ry, u64_into(&mut ub, used as u64), 0x6FE18B, bg);
+            let uw = (count_digits(used) + 1) * 8;
+            fb.draw_str(x + 14 + uw, ry, "/", 0x8A938C, bg);
+            fb.draw_str(x + 14 + uw + 12, ry, u64_into(&mut tb, self.mem_total as u64), 0xECEDE5, bg);
+            fb.draw_str(x + 14 + uw + 12 + (count_digits(self.mem_total) + 1) * 8, ry, "MiB", 0x8A938C, bg);
+            fb.draw_str(x + w - 70, ry, u64_into(&mut pb, pct as u64), 0xF5C451, bg);
+            fb.draw_str(x + w - 70 + (count_digits(pct)) * 8, ry, "%", 0x8A938C, bg);
+            // usage bar
+            let by = ry + 22; let bw = w.saturating_sub(28);
+            fb.fill_rect(x + 14, by, bw, 10, 0x2A332F);
+            fb.fill_rect(x + 14, by, bw * pct / 100, 10, 0x6FE18B);
+            // uptime + process count
+            let secs = sys_ticks() / 100;
+            let mut hb = [0u8; 12];
+            fb.draw_str_t(x + 14, by + 18, "Uptime", 0x8A938C);
+            let upt = SystemClock::hms(&mut hb, secs / 3600, secs / 60 % 60, secs % 60);
+            fb.draw_str_t(x + 64, by + 18, upt, 0xA8B0A6);
+            let mut nb = [0u8; 24];
+            fb.draw_str_t(x + w - 150, by + 18, "Processes", 0x8A938C);
+            fb.draw_str_t(x + w - 80, by + 18, u64_into(&mut nb, self.nprocs as u64), 0xA8B0A6);
+        } else {
+            // ── Processes: real list from sys_ps ───────────────────────────────
+            let mut buf = [0u8; 16 * 32];
+            let n = unsafe { sys_ps(&mut buf, 16) };
+            self.nprocs = n;
+            fb.fill_rect(x, y + 28, w, 18, 0x252E2A);
+            fb.draw_str_t(x + 14, y + 33, "PID", 0x8A938C);
+            fb.draw_str_t(x + 70, y + 33, "NAME", 0x8A938C);
+            fb.draw_str_t(x + 240, y + 33, "STATE", 0x8A938C);
+            for i in 0..n {
+                let rec = &buf[i * 32..i * 32 + 32];
+                let pid = u64::from_le_bytes([rec[0],rec[1],rec[2],rec[3],rec[4],rec[5],rec[6],rec[7]]);
+                let state = rec[8];
+                let name_end = rec[16..32].iter().position(|&c| c == 0).unwrap_or(16);
+                let name = core::str::from_utf8(&rec[16..16 + name_end]).unwrap_or("?");
+                let ry = y + 50 + i as u32 * 18;
+                if ry + 18 > y + h { break; }
+                if i % 2 == 1 { fb.fill_rect(x, ry, w, 18, 0x1A1F1C); }
+                let mut pb = [0u8; 24];
+                fb.draw_str(x + 14, ry + 4, u64_into(&mut pb, pid), 0xA8B0A6, if i%2==1 {0x1A1F1C} else {0x14171A});
+                let bg = if i%2==1 {0x1A1F1C} else {0x14171A};
+                fb.draw_str(x + 70, ry + 4, name, 0xECEDE5, bg);
+                // Ternary state: 1=Running(+1 green), 0=Ready(0 amber), 2=Blocked(-1 red).
+                let (lbl, col) = match state { 1 => ("Running", 0x6FE18B), 2 => ("Blocked", 0xEF7575), _ => ("Ready", 0xF5C451) };
+                fb.draw_str(x + 240, ry + 4, lbl, col, bg);
+            }
+        }
         self.dirty = false;
     }
 
-    fn on_key(&mut self, _key: u8) {
-        // Process monitor - read-only for now
+    fn on_key(&mut self, key: u8) {
+        use crate::ansi::Key as AK;
+        match self.ansi.feed(key) {
+            AK::Char(b'1') => { self.tab = 0; self.dirty = true; }
+            AK::Char(b'2') => { self.tab = 1; self.dirty = true; }
+            AK::Char(b'\t') => { self.tab ^= 1; self.dirty = true; }
+            _ => {}
+        }
     }
 
     fn title(&self) -> &str {
-        "Process Monitor"
+        "System Monitor"
     }
 }
 
