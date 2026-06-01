@@ -570,7 +570,16 @@ fn draw_scene_static_v(fb: &mut Framebuffer, variant: u8) {
             (wi * 33 / 100, hi * 70 / 100,  9),
             (wi * 60 / 100, hi * 12 / 100,  8),
         ];
-        for (sx, sy, sr) in stars { fb.draw_star8(sx, sy, sr, 0x1E2E45); }
+        for (sx, sy, sr) in stars {
+            fb.glow(sx, sy, sr * 5, 0x24364F, 55);   // soft bloom under each star
+            fb.draw_star8(sx, sy, sr, 0x32486A);     // a touch brighter than before
+        }
+        // Vignette — gently darken the corners so the eye settles to the centre
+        // (spatial depth, the "illuminated room" feel from the Aero doctrine).
+        let vr = wi * 58 / 100;
+        for (vx, vy) in [(0, 0), (wi, 0), (0, hi), (wi, hi)] {
+            fb.glow(vx, vy, vr, 0x06090D, 60);
+        }
     }
     } // end else (non-Bliss wallpapers)
 
@@ -579,6 +588,12 @@ fn draw_scene_static_v(fb: &mut Framebuffer, variant: u8) {
     // "Rusty Penguin" with Penguin in green, then two tagline lines.
     let cx = w as i32 / 2;
     let hero_cy = ptop.max(0) / 2;
+    // Ambient depth: a soft warm light pool lifts the hero off the wall, and a
+    // cream halo makes the dingir luminous. (Also improves hero legibility over
+    // any wallpaper, including the Bliss easter egg.)
+    fb.glow(cx, hero_cy - 18, w as i32 * 17 / 100, 0x283A2A, 60); // warm-green lift behind text
+    fb.glow(cx, hero_cy - 64, 76, 0x4A4226, 95);                 // gold pool under the dingir
+    fb.glow(cx, hero_cy - 64, 34, ACCENT_CREAM, 70);             // bright cream core (glow)
     fb.draw_star8(cx, hero_cy - 64, 28, ACCENT_CREAM);
     // Title in the smooth AA display font. "Rusty " white + "Penguin" green.
     let w1 = Framebuffer::aa_w("Rusty ", crate::fb::AA_L);
