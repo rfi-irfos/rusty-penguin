@@ -227,6 +227,15 @@ extern "x86-interrupt" fn irq_mouse(_f: InterruptFrame) {
 extern "x86-interrupt" fn irq_keyboard(_f: InterruptFrame) {
     let sc = unsafe { port::inb(0x60) };
 
+    // Raw keyboard mode: a Linux app (fbDOOM) set KDSKBMODE=K_RAW/K_MEDIUMRAW and
+    // reads raw keycodes itself. PS/2 set-1 scancodes ARE that stream (make=code,
+    // break=code|0x80, E0 prefix passed through), so deliver every byte verbatim.
+    if crate::linux::is_linux() && crate::linux::raw_kbd() {
+        crate::linux::push_linux_key(sc);
+        unsafe { pic::eoi(1); }
+        return;
+    }
+
     // E0 prefix = extended key; next byte is the real scancode
     if sc == 0xE0 {
         unsafe { E0_PREFIX = true; }

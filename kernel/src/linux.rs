@@ -18,6 +18,10 @@ use ternary_core::Trit;
 
 // ── Per-process ABI mode ─────────────────────────────────────────────────────
 static mut LINUX_ABI: bool = false;
+// Set when a Linux app puts the console keyboard in K_RAW/K_MEDIUMRAW mode
+// (fbDOOM does). The PS/2 IRQ then delivers raw scancodes instead of ASCII.
+static mut RAW_KBD: bool = false;
+pub fn raw_kbd() -> bool { unsafe { RAW_KBD } }
 
 // Args 4–6 of the *current* syscall. Linux passes them in r10/r8/r9; the asm
 // trampoline in syscall.rs stashes them into these .data globals before the
@@ -53,7 +57,12 @@ fn errno(e: i64) -> u64 { e as u64 }
 // VMM with demand paging is a later brick.
 const BRK_BASE:  u64 = 0x0700_0000; // 112 MiB
 const BRK_CAP:   u64 = 0x0800_0000; // 128 MiB
-const MMAP_BASE: u64 = 0x0800_0000; // 128 MiB
+// The initrd is relocated to 128 MiB (main.rs INITRD_RELOC). A dynamic binary's
+// ld.so mmaps libc/the PIE into this arena, so it MUST start above the initrd or
+// it overwrites the very files the program is reading (this clobbered DOOM1.WAD,
+// breaking real fbDOOM). The Linux-track initrd is small (~8 MiB → ≤136 MiB), so
+// 160 MiB clears it with margin while staying under the 256 MiB identity map.
+const MMAP_BASE: u64 = 0x0A00_0000; // 160 MiB
 const MMAP_CAP:  u64 = 0x1000_0000; // 256 MiB
 static mut BRK_CUR:  u64 = BRK_BASE;
 static mut MMAP_CUR: u64 = MMAP_BASE;
@@ -89,6 +98,7 @@ pub static mut RESTART_DESKTOP: bool = false;
 pub fn reset() {
     unsafe {
         LINUX_ABI = false;
+        RAW_KBD   = false;
         BRK_CUR   = BRK_BASE;
         MMAP_CUR  = MMAP_BASE;
         LKEYS_H   = 0;
@@ -461,7 +471,24 @@ pub fn syscall(nr: u64, a1: u64, a2: u64, a3: u64) -> u64 {
                     }
                     _ => 0,
                 }
-            } else { 0 }
+            } else {
+                // KDGKBTYPE: console apps (DOOM) probe for a keyboard by asking
+                // the console keyboard type on each fd. Report KB_101 and succeed
+                // so the app accepts this fd as its keyboard — we then feed its
+                // read(0) from the PS/2 key ring. Without this, fbDOOM prints
+                // "Unable to find a file descriptor associated with the keyboard"
+                // and exits right after I_InitGraphics.
+                const KDGKBTYPE: u64 = 0x4B33;
+                const KB_101: u8 = 0x02;
+                const KDSKBMODE: u64 = 0x4B45;
+                // K_RAW=0, K_XLATE=1, K_MEDIUMRAW=2, K_UNICODE=3.
+                if a2 == KDGKBTYPE && a3 != 0 {
+                    unsafe { *(a3 as *mut u8) = KB_101; }
+                } else if a2 == KDSKBMODE {
+                    unsafe { RAW_KBD = a3 == 0 || a3 == 2; } // raw / medium-raw
+                }
+                0
+            }
         }
         // arch_prctl(code, addr): set the FS base for TLS.
         158 => unsafe {
