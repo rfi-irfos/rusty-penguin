@@ -4,6 +4,20 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+### Added — Multiproc brick 3b: isolated offscreen rendering (compositing foundation) (2026-06-01)
+
+- The piece between "isolated processes" and "windowed apps": a process renders
+  into an offscreen framebuffer private to it, and the compositor reads it back.
+- `spawn_ring3_elf` gained an optional fb_frame — a kernel-owned frame mapped
+  into the process at FB_VA (0x800000); the process renders there, the kernel
+  reads it via the physmap (no shared writable surface).
+- `offscreen` boot flag → a render program writes a 0xDEADBEEF marker into its
+  private buffer; the boot thread (compositor stand-in) reads it back.
+- Verified in QEMU: the render process runs under preemption with the boot
+  thread, which reads 0xDEADBEEF out of the process's offscreen frame →
+  "OFFSCREEN RENDER PROVEN", zero faults. This is the model a real compositor
+  uses (each app renders to its own surface; the WM blits it into a window).
+
 ### Added — Multiproc brick 3a: real ELF programs as isolated scheduled processes (2026-06-01)
 
 - Bricks 1/2 used synthetic hand-written stubs; this adds the loader path a
