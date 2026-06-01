@@ -37,6 +37,7 @@ mod crypto;
 mod tls;
 mod ahci;
 mod diskfs;
+mod virtio_gpu;
 mod p256;
 
 use ternary_core::{Trit, Tryte};
@@ -404,6 +405,17 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
         diskfs::init();
     } else {
         vga::write_str("  [disk: no AHCI disk]\n", vga::Color::Amber);
+    }
+
+    // virtio-gpu — from-scratch GPU driver (brick 1: transport + display query).
+    // Additive: the VBE framebuffer stays the live display for now.
+    vga::write_str("  [virtio-gpu]\n", vga::Color::Cyan);
+    if virtio_gpu::init() {
+        let (gw, gh) = virtio_gpu::display_dims();
+        if gw > 0 {
+            vga::write_str("  [gpu: virtio-gpu up]\n", vga::Color::Green);
+        }
+        let _ = gh;
     }
 
     // Ternary math demo
