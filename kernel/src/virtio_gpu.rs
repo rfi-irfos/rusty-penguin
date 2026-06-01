@@ -36,7 +36,21 @@ const VIRTQ_DESC_F_WRITE: u16 = 2;
 
 // virtio-gpu control types
 const VIRTIO_GPU_CMD_GET_DISPLAY_INFO: u32 = 0x0100;
+const VIRTIO_GPU_CMD_RESOURCE_CREATE_2D: u32 = 0x0101;
+const VIRTIO_GPU_CMD_RESOURCE_UNREF: u32 = 0x0102;
+const VIRTIO_GPU_CMD_SET_SCANOUT: u32 = 0x0103;
+const VIRTIO_GPU_CMD_RESOURCE_FLUSH: u32 = 0x0104;
+const VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D: u32 = 0x0105;
+const VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING: u32 = 0x0106;
+const VIRTIO_GPU_RESP_OK_NODATA: u32 = 0x1100;
 const VIRTIO_GPU_RESP_OK_DISPLAY_INFO: u32 = 0x1101;
+const VIRTIO_GPU_FORMAT_B8G8R8X8: u32 = 2; // matches the desktop's 0x00RRGGBB pixels
+
+// The scanout resource and its backing. Backing lives in the low identity-mapped
+// scratch zone (55–63 MiB), past the virtqueue rings and clear of the initrd
+// (relocated to 128 MiB). 4 MiB holds 1280×800×4 with room to spare.
+const SCANOUT_RES_ID: u32 = 1;
+const BACKING_PHYS: u64 = 0x0374_0000;
 
 // ── DMA region (fixed low physical addresses, identity-mapped 0–64 MiB, placed
 // just past the AHCI scratch buffers at 0x0370_0000 — same reservation scheme).
@@ -330,6 +344,137 @@ unsafe fn query_display() {
     ser(if enabled != 0 { " (enabled)\n" } else { " (off)\n" });
 }
 
+// ── Brick 2: 2D resource + scanout + dirty-rect flush ───────────────────────
+// Each command builds a struct in the REQ buffer and expects an OK_NODATA hdr.
+
+#[inline]
+unsafe fn put32(off: usize, v: u32) {
+    write_volatile((REQ_PHYS as *mut u8).add(off) as *mut u32, v);
+}
+#[inline]
+unsafe fn put64(off: usize, v: u64) {
+    write_volatile((REQ_PHYS as *mut u8).add(off) as *mut u64, v);
+}
+
+/// Write a virtio_gpu_ctrl_hdr (24 bytes) of the given type at REQ offset 0.
+unsafe fn hdr(cmd: u32) {
+    zero(REQ_PHYS, 80);
+    put32(0, cmd);
+}
+
+unsafe fn resp_ok() -> bool {
+    read_volatile(RESP_PHYS as *const u32) == VIRTIO_GPU_RESP_OK_NODATA
+}
+
+/// RESOURCE_CREATE_2D: allocate a host-side 2D surface of (w,h).
+unsafe fn create_2d(res: u32, w: u32, h: u32) -> bool {
+    hdr(VIRTIO_GPU_CMD_RESOURCE_CREATE_2D);
+    put32(24, res);
+    put32(28, VIRTIO_GPU_FORMAT_B8G8R8X8);
+    put32(32, w);
+    put32(36, h);
+    submit(40, 24);
+    resp_ok()
+}
+
+/// RESOURCE_ATTACH_BACKING: point the surface at one contiguous RAM region.
+unsafe fn attach_backing(res: u32, phys: u64, len: u32) -> bool {
+    hdr(VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING);
+    put32(24, res);
+    put32(28, 1); // nr_entries
+    put64(32, phys); // mem_entry.addr
+    put32(40, len); // mem_entry.length
+    put32(44, 0); // padding
+    submit(48, 24);
+    resp_ok()
+}
+
+/// SET_SCANOUT: bind a scanout (monitor) to the resource over rect (0,0,w,h).
+unsafe fn set_scanout(scanout: u32, res: u32, w: u32, h: u32) -> bool {
+    hdr(VIRTIO_GPU_CMD_SET_SCANOUT);
+    put32(24, 0); // rect.x
+    put32(28, 0); // rect.y
+    put32(32, w); // rect.width
+    put32(36, h); // rect.height
+    put32(40, scanout);
+    put32(44, res);
+    submit(48, 24);
+    resp_ok()
+}
+
+/// TRANSFER_TO_HOST_2D: DMA a rect of the backing into the host surface.
+unsafe fn transfer(res: u32, x: u32, y: u32, w: u32, h: u32, stride: u32) -> bool {
+    hdr(VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D);
+    put32(24, x);
+    put32(28, y);
+    put32(32, w);
+    put32(36, h);
+    put64(40, (y as u64 * stride as u64 + x as u64 * 4)); // offset into backing
+    put32(48, res);
+    put32(52, 0);
+    submit(56, 24);
+    resp_ok()
+}
+
+/// RESOURCE_FLUSH: present a rect of the surface to the screen.
+unsafe fn flush(res: u32, x: u32, y: u32, w: u32, h: u32) -> bool {
+    hdr(VIRTIO_GPU_CMD_RESOURCE_FLUSH);
+    put32(24, x);
+    put32(28, y);
+    put32(32, w);
+    put32(36, h);
+    put32(40, res);
+    put32(44, 0);
+    submit(48, 24);
+    resp_ok()
+}
+
+/// Brick-2 proof: create the scanout surface, paint the ternary triad
+/// (warm-red −1 · stone 0 · spring-green +1) into the RAM backing, and push it
+/// through the GPU pipeline (attach → scanout → transfer → flush). Proves the
+/// full from-scratch display path puts real pixels on the virtio-gpu monitor.
+unsafe fn scanout_selftest() {
+    let w = DISP_W;
+    let h = DISP_H;
+    if w == 0 || h == 0 {
+        return;
+    }
+    let stride = w * 4;
+
+    // Paint the backing in cacheable RAM (fast CPU writes — the whole point).
+    let fb = BACKING_PHYS as *mut u32;
+    let bands = [0x00C0392Bu32, 0x008A938Cu32, 0x006FE18Bu32]; // RR GG BB
+    for y in 0..h {
+        for x in 0..w {
+            let band = (x * 3 / w).min(2) as usize;
+            write_volatile(fb.add((y * w + x) as usize), bands[band]);
+        }
+    }
+    compiler_fence(Ordering::SeqCst);
+
+    if !create_2d(SCANOUT_RES_ID, w, h) {
+        ser("  [virtio-gpu] create_2d failed\n");
+        return;
+    }
+    if !attach_backing(SCANOUT_RES_ID, BACKING_PHYS, w * h * 4) {
+        ser("  [virtio-gpu] attach_backing failed\n");
+        return;
+    }
+    if !set_scanout(0, SCANOUT_RES_ID, w, h) {
+        ser("  [virtio-gpu] set_scanout failed\n");
+        return;
+    }
+    if !transfer(SCANOUT_RES_ID, 0, 0, w, h, stride) {
+        ser("  [virtio-gpu] transfer failed\n");
+        return;
+    }
+    if !flush(SCANOUT_RES_ID, 0, 0, w, h) {
+        ser("  [virtio-gpu] flush failed\n");
+        return;
+    }
+    ser("  [virtio-gpu] scanout self-test OK — painted ternary triad via GPU\n");
+}
+
 /// Probe + initialise the virtio-gpu device. Additive: does not touch the live
 /// VBE framebuffer. Returns true if a device was brought up.
 pub fn init() -> bool {
@@ -355,6 +500,7 @@ pub fn init() -> bool {
             return false;
         }
         query_display();
+        scanout_selftest();
         READY = true;
     }
     true
