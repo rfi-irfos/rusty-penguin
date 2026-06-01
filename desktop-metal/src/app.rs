@@ -1760,6 +1760,28 @@ unsafe fn sys_http_get_raw(host: &[u8], out: &mut [u8]) -> usize {
     n as usize
 }
 
+/// sys_fetch_trust (#36) → trust state of the most recent fetch:
+/// 1 = verified HTTPS (cert chain validated to a trusted root), 0 = plain HTTP,
+/// 2 = none / failed. Drives the address-bar lock indicator.
+unsafe fn sys_fetch_trust() -> u64 {
+    let n: u64;
+    core::arch::asm!(
+        "syscall",
+        inout("rax") 36u64 => n,
+        out("rcx") _, out("r11") _,
+        options(nostack),
+    );
+    n
+}
+
+/// What the lock indicator shows for the current page.
+#[derive(Copy, Clone, PartialEq)]
+enum Security {
+    Secure,    // HTTPS, certificate chain validated
+    Insecure,  // plain HTTP — no transport security
+    None,      // local page / no network fetch
+}
+
 // Max bytes of fetched HTML the browser buffers. Fits in the 24 MiB heap.
 const FETCH_BUF: usize = 32_768;
 
@@ -1823,6 +1845,36 @@ fn html_attr<'a>(tag: &'a [u8], attr: &[u8]) -> &'a [u8] {
         i += 1;
     }
     &[]
+}
+
+/// Pull the text of the first <title>…</title> out of an HTML body (case-insensitive).
+fn extract_title(html: &[u8]) -> String {
+    let lower: Vec<u8> = html.iter().map(|b| b.to_ascii_lowercase()).collect();
+    if let Some(open) = lower.windows(6).position(|w| w == b"<title") {
+        // skip to the '>' that closes the opening tag
+        if let Some(gt) = html[open..].iter().position(|&b| b == b'>') {
+            let start = open + gt + 1;
+            if let Some(close) = lower[start..].windows(7).position(|w| w == b"</title") {
+                let raw = core::str::from_utf8(&html[start..start + close]).unwrap_or("").trim();
+                return collapse_ws(raw);
+            }
+        }
+    }
+    String::new()
+}
+
+/// Draw a small padlock at (lx, ly) in `col`. `closed` = both shackle posts down
+/// (verified HTTPS); open = right post raised (plain HTTP / not secure).
+fn draw_lock(fb: &mut Framebuffer, lx: i32, ly: i32, col: u32, closed: bool) {
+    let sx = lx + 2;
+    fb.fill_rect(sx as u32, ly as u32, 6, 2, col);          // top of the shackle arch
+    fb.fill_rect(sx as u32, (ly + 1) as u32, 2, 5, col);    // left post
+    if closed {
+        fb.fill_rect((sx + 4) as u32, (ly + 1) as u32, 2, 5, col); // right post down = locked
+    } else {
+        fb.fill_rect((sx + 4) as u32, (ly - 1) as u32, 2, 4, col); // right post raised = open
+    }
+    fb.fill_rounded_rect(lx, ly + 5, 10, 8, 2, col);        // lock body
 }
 
 /// Parse HTML bytes into a list of visual nodes.
@@ -2028,6 +2080,10 @@ pub struct Browser {
     // Link hit-test regions populated by the last render call: (y_abs, height, href)
     link_hits:    Vec<(i32, i32, String)>,
     auto_nav:     bool,              // fetch default URL on first tick
+    security:     Security,          // lock indicator state for the live page
+    title:        String,            // <title> of the live page (window/tab label)
+    history:      Vec<String>,       // visited URLs (back stack); current = last
+    fwd:          Vec<String>,       // forward stack (popped from history on Back)
     pub dirty:       bool,
     pub wants_close: bool,
     ansi:         crate::ansi::AnsiParser,
@@ -2067,6 +2123,10 @@ impl Browser {
             scroll_px: 0,
             link_hits: Vec::new(),
             auto_nav: true,
+            security: Security::None,
+            title: String::new(),
+            history: Vec::new(),
+            fwd: Vec::new(),
             dirty: true,
             wants_close: false,
             ansi: crate::ansi::AnsiParser::new(),
@@ -2079,35 +2139,56 @@ impl Browser {
         self.url_len = n;
     }
 
+    /// Navigate to the URL currently in the address bar as a *new* history entry:
+    /// records it on the back stack and clears the forward stack, then fetches.
+    /// Used for typed URLs and link clicks. Reload and Back/Forward bypass this.
     fn navigate(&mut self) {
+        let cur = String::from(core::str::from_utf8(&self.url[..self.url_len]).unwrap_or(""));
+        if !cur.is_empty() && self.history.last() != Some(&cur) {
+            self.history.push(cur);
+            self.fwd.clear();
+        }
+        self.do_fetch();
+    }
+
+    /// Fetch and render whatever is in the address bar — no history bookkeeping.
+    fn do_fetch(&mut self) {
         let url = &self.url[..self.url_len];
         if url.starts_with(b"rustypenguin://") || url.is_empty() {
             let slug = &url[url.iter().position(|&b| b == b'/').map(|p| p + 2).unwrap_or(0)..];
             let slug = if let Some(p) = slug.iter().position(|&b| b == b'/') { &slug[p+1..] } else { slug };
             self.page = match slug { b"about" => 1, b"ternary" => 2, b"roadmap" => 3, _ => 0 };
             self.mode = BrMode::Static;
+            self.security = Security::None;
+            self.title = String::new();
             self.dirty = true;
             return;
         }
-        if url.is_empty() { return; }
         self.mode = BrMode::Loading;
         self.dirty = true;
         let mut buf = alloc::vec![0u8; FETCH_BUF];
         let n = unsafe { sys_http_get_raw(url, &mut buf) };
         if n == 0 {
             self.mode = BrMode::Err;
+            self.security = Security::None;
             self.dirty = true;
             return;
         }
         buf.truncate(n);
         self.resp_buf = buf;
         self.parse_page();
+        // Trust indicator: ask the kernel how the last fetch was secured.
+        self.security = match unsafe { sys_fetch_trust() } {
+            1 => Security::Secure,
+            0 => Security::Insecure,
+            _ => Security::None,
+        };
         self.scroll_px = 0;
         self.mode = BrMode::Live;
         self.dirty = true;
     }
 
-    /// Parse the raw HTTP response in resp_buf into visual HNodes.
+    /// Parse the raw HTTP response in resp_buf into visual HNodes + the <title>.
     fn parse_page(&mut self) {
         self.nodes.clear();
         let data = &self.resp_buf;
@@ -2115,7 +2196,9 @@ impl Browser {
             .map(|p| p + 4)
             .or_else(|| data.windows(2).position(|w| w == b"\n\n").map(|p| p + 2))
             .unwrap_or(0);
-        self.nodes = parse_html(&data[body_start..]);
+        let body = &data[body_start..];
+        self.title = extract_title(body);
+        self.nodes = parse_html(body);
     }
 }
 
@@ -2135,17 +2218,22 @@ impl App for Browser {
         fb.fill_rect(x, y + BR_TOOLBAR_H, w, 1, 0x2A3A50);
         let by = y as i32 + 6;
         // Back button
-        let can_back = self.mode == BrMode::Static && self.page != 0
-                    || self.mode == BrMode::Live || self.mode == BrMode::Err;
+        let can_back = self.can_back();
         let fg_back = if can_back { 0x6FE18B } else { 0x4A5A6A };
         fb.fill_rounded_rect(x as i32 + 6, by, 22, 22, 6,
             if can_back { 0x263040 } else { 0x1A2030 });
         fb.draw_aa(x as i32 + 12, by + 3, "<", fg_back, crate::fb::AA_S);
+        // Forward button
+        let can_fwd = self.can_fwd();
+        let fg_fwd = if can_fwd { 0x6FE18B } else { 0x4A5A6A };
+        fb.fill_rounded_rect(x as i32 + 30, by, 22, 22, 6,
+            if can_fwd { 0x263040 } else { 0x1A2030 });
+        fb.draw_aa(x as i32 + 36, by + 3, ">", fg_fwd, crate::fb::AA_S);
         // Reload
-        fb.fill_rounded_rect(x as i32 + 30, by, 22, 22, 6, 0x1E2A3C);
-        fb.draw_aa(x as i32 + 36, by + 3, "r", 0x4A9EFF, crate::fb::AA_S);
+        fb.fill_rounded_rect(x as i32 + 54, by, 22, 22, 6, 0x1E2A3C);
+        fb.draw_aa(x as i32 + 60, by + 3, "r", 0x4A9EFF, crate::fb::AA_S);
         // Address bar
-        let ax = (x as i32 + 58) as u32;
+        let ax = (x as i32 + 82) as u32;
         let aw = (x + w).saturating_sub(ax + 8);
         fb.fill_rounded_rect(ax as i32, by, aw as i32, 22, 10,
             if self.addr_focused { 0x243550 } else { 0x141E2C });
@@ -2153,17 +2241,20 @@ impl App for Browser {
             if self.addr_focused { 0x4A9EFF } else { 0 });
         fb.fill_rounded_rect(ax as i32, by, aw as i32, 22, 10,
             if self.addr_focused { 0x243550 } else { 0x141E2C });
-        let dot_col = match self.mode {
-            BrMode::Static  => 0x6FE18B,
-            BrMode::Live    => 0x4A9EFF,
-            BrMode::Loading => 0xF5C451,
-            BrMode::Err     => 0xEF4444,
-        };
-        fb.fill_circle(ax as i32 + 12, by + 11, 3, dot_col);
+        // Security indicator: a real padlock when the page came over a validated
+        // HTTPS chain; an amber "not secure" mark for plain HTTP; nothing local.
+        let mut text_x = ax as i32 + 10;
+        match (self.mode, self.security) {
+            (BrMode::Live, Security::Secure)   => { draw_lock(fb, ax as i32 + 8, by + 5, 0x35C46A, true);  text_x = ax as i32 + 24; }
+            (BrMode::Live, Security::Insecure) => { draw_lock(fb, ax as i32 + 8, by + 5, 0xE5A23C, false); text_x = ax as i32 + 24; }
+            (BrMode::Loading, _) => { fb.fill_circle(ax as i32 + 12, by + 11, 3, 0xF5C451); text_x = ax as i32 + 22; }
+            (BrMode::Err, _)     => { fb.fill_circle(ax as i32 + 12, by + 11, 3, 0xEF4444); text_x = ax as i32 + 22; }
+            _ => {}
+        }
         let url_str = core::str::from_utf8(&self.url[..self.url_len]).unwrap_or("");
         let cursor = if self.addr_focused { "\u{258c}" } else { "" };
         let mut ubuf = String::from(url_str); ubuf.push_str(cursor);
-        fb.draw_aa(ax as i32 + 22, by + 4, &ubuf, 0xB8CCE0, crate::fb::AA_S);
+        fb.draw_aa(text_x, by + 4, &ubuf, 0xB8CCE0, crate::fb::AA_S);
 
         // ── Page area ─────────────────────────────────────────────────────────
         let py0  = y + BR_TOOLBAR_H + 1;
@@ -2300,7 +2391,7 @@ impl App for Browser {
         let pressed = (buttons & 1) != 0;
         if !pressed { return; }
         let by = 6i32;
-        let ax = 58i32;
+        let ax = 82i32;
         let aw = (w as i32).saturating_sub(ax + 8);
         // Address bar
         if mx >= ax && mx < ax + aw && my >= by && my < by + 22 {
@@ -2311,9 +2402,13 @@ impl App for Browser {
         if mx >= 6 && mx < 28 && my >= by && my < by + 22 {
             self.go_back(); return;
         }
-        // Reload
+        // Forward button
         if mx >= 30 && mx < 52 && my >= by && my < by + 22 {
-            self.navigate(); return;
+            self.go_forward(); return;
+        }
+        // Reload (re-fetch current page; no new history entry)
+        if mx >= 54 && mx < 76 && my >= by && my < by + 22 {
+            self.do_fetch(); return;
         }
         // Static page links
         if self.mode == BrMode::Static {
@@ -2385,7 +2480,10 @@ impl App for Browser {
     }
 
     fn wants_close(&self) -> bool { self.wants_close }
-    fn title(&self) -> &str { "Web" }
+    fn title(&self) -> &str {
+        // Show the live page's <title> in the window chrome when we have one.
+        if self.mode == BrMode::Live && !self.title.is_empty() { &self.title } else { "Web" }
+    }
 }
 
 impl Browser {
@@ -2420,18 +2518,33 @@ impl Browser {
         }
     }
 
+    fn can_back(&self) -> bool { self.history.len() >= 2 }
+    fn can_fwd(&self)  -> bool { !self.fwd.is_empty() }
+
+    /// Back: pop the current page onto the forward stack and re-fetch the previous.
     fn go_back(&mut self) {
-        match self.mode {
-            BrMode::Live | BrMode::Err => {
-                self.mode = BrMode::Static; self.page = 0;
-                self.update_url_from_page();
-            }
-            BrMode::Static if self.page != 0 => {
-                self.page = 0; self.update_url_from_page();
-            }
-            _ => {}
+        if self.history.len() >= 2 {
+            let cur = self.history.pop().unwrap();
+            self.fwd.push(cur);
+            let prev = self.history.last().unwrap().clone();
+            self.set_url(prev.as_bytes());
+            self.do_fetch();
+        } else {
+            // No history depth — fall back to the local home page.
+            self.mode = BrMode::Static; self.page = 0;
+            self.update_url_from_page();
+            self.security = Security::None;
+            self.dirty = true;
         }
-        self.dirty = true;
+    }
+
+    /// Forward: replay a page we backed out of.
+    fn go_forward(&mut self) {
+        if let Some(next) = self.fwd.pop() {
+            self.history.push(next.clone());
+            self.set_url(next.as_bytes());
+            self.do_fetch();
+        }
     }
     fn update_url_from_page(&mut self) {
         let url = br_page(self.page).url.as_bytes();

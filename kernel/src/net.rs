@@ -817,7 +817,17 @@ static mut NET_UP:  bool            = false;
 /// writing the raw response (headers+body, truncated) into `out`. Returns the
 /// number of bytes written, or `None` if the network is down or the fetch fails.
 /// Backs the `sys_http_get` syscall (brick 6 — the OS lets programs hit the web).
+/// Trust state of the most recent fetch, for the browser's security indicator:
+/// +1 = HTTPS with a certificate chain we validated to a trusted root, 0 = plain
+/// HTTP (no transport security), -1 = no fetch yet or the last one failed (which,
+/// for https, includes a rejected/untrusted certificate). A ternary Trit.
+static mut LAST_FETCH_TRUST: i8 = -1;
+/// Read the last fetch's trust state (see `LAST_FETCH_TRUST`).
+pub fn last_fetch_trust() -> i8 { unsafe { LAST_FETCH_TRUST } }
+fn set_trust(t: i8) { unsafe { LAST_FETCH_TRUST = t; } }
+
 pub fn http_get(target: &str, out: &mut [u8]) -> Option<usize> {
+    set_trust(-1); // pending; promoted on success below
     let (gw, dns) = unsafe {
         if !NET_UP { return None; }
         (GW_MAC?, DNS_MAC?)
@@ -836,7 +846,11 @@ pub fn http_get(target: &str, out: &mut [u8]) -> Option<usize> {
         None => (rest, "/"),
     };
     if is_https {
-        return crate::tls::https_get(in_host, in_path, out);
+        // https_get only returns Some when the cert chain validated to a trusted
+        // root — so bytes back here means a genuinely verified secure channel.
+        let r = crate::tls::https_get(in_host, in_path, out);
+        set_trust(if r.is_some() { 1 } else { -1 });
+        return r;
     }
     // Current target host + path; follow up to MAX_REDIR plain-HTTP 3xx hops.
     let mut hostbuf = [0u8; 128];
@@ -872,7 +886,9 @@ pub fn http_get(target: &str, out: &mut [u8]) -> Option<usize> {
                         let npl = npl.max(1);
                         let nh_path = core::str::from_utf8(&np[..npl]).unwrap_or("/");
                         crate::serial::write_str("  [net] redirect -> https, switching to TLS\n");
-                        return crate::tls::https_get(nh_host, nh_path, out);
+                        let r = crate::tls::https_get(nh_host, nh_path, out);
+                        set_trust(if r.is_some() { 1 } else { -1 });
+                        return r;
                     }
                     Some((false, nhl, npl)) => {
                         hostbuf[..nhl].copy_from_slice(&nh[..nhl]);
@@ -885,10 +901,10 @@ pub fn http_get(target: &str, out: &mut [u8]) -> Option<usize> {
                         crate::serial::write_str("\n");
                         continue;
                     }
-                    None => return Some(n), // no parseable Location → show what we got
+                    None => { set_trust(0); return Some(n); } // no Location → show what we got
                 }
             }
-            _ => return Some(n),
+            _ => { set_trust(0); return Some(n); } // plain HTTP delivered a page
         }
     }
     None

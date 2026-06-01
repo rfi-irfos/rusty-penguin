@@ -621,6 +621,17 @@ pub extern "C" fn syscall_handler(nr: u64, arg1: u64, arg2: u64, arg3: u64) -> u
             // sys_showmenu → 1 if `showmenu` was on the cmdline (screenshot aid), else 0.
             if unsafe { crate::SHOW_MENU } { 1 } else { 0 }
         }
+        36 => {
+            // sys_fetch_trust → trust state of the last http(s) fetch, as a ternary
+            // Trit reinterpreted into u64: 1 = verified-TLS (cert chain validated),
+            // 0 = plain HTTP, 2 = none/failed (we map -1 → 2 to keep it unsigned).
+            // Powers the browser's lock indicator.
+            match crate::net::last_fetch_trust() {
+                1 => 1,
+                0 => 0,
+                _ => 2,
+            }
+        }
         33 => {
             // sys_cpu → CPU busy permille (0..1000) over the last window; resets it.
             crate::sched::cpu_sample() as u64
