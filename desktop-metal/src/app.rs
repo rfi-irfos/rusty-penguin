@@ -2542,6 +2542,150 @@ impl App for MediaPlayer {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Screenshot — capture the composited screen to a PPM in the VFS, with a live
+// preview. The capture buffer is a reused static (the desktop heap is a bump
+// allocator that never frees, so a per-capture Vec would leak). Full-screen
+// capture only in v1; window/region need WM cooperation the app can't see yet.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const SHOT_W: usize = 384;             // saved + preview thumbnail width (16:9)
+const SHOT_H: usize = 216;
+static mut SHOT_BUF: [u32; SHOT_W * SHOT_H] = [0; SHOT_W * SHOT_H];
+static mut SHOT_PPM: [u8; SHOT_W * SHOT_H * 3 + 32] = [0; SHOT_W * SHOT_H * 3 + 32];
+
+pub struct Screenshot {
+    shots: u32,           // capture counter → filename
+    have_shot: bool,
+    pending: bool,        // capture requested (executed in render where fb is live)
+    saved_n: u32,         // index of the last saved file (for the status line)
+    pub dirty: bool,
+    pub wants_close: bool,
+    ansi: crate::ansi::AnsiParser,
+}
+
+impl Screenshot {
+    pub fn new() -> Self {
+        Screenshot { shots: 0, have_shot: false, pending: false, saved_n: 0,
+                     dirty: true, wants_close: false, ansi: crate::ansi::AnsiParser::new() }
+    }
+
+    /// Sample the full composited framebuffer down into SHOT_BUF, encode a PPM
+    /// into SHOT_PPM, and write it to the VFS. Runs inside render() so `fb` holds
+    /// the live scene. The screenshot window itself appears in the shot (an
+    /// in-desktop tool capturing itself) — acceptable for v1.
+    fn capture(&mut self, fb: &mut Framebuffer) {
+        let fw = fb.width as usize;
+        let fh = fb.height as usize;
+        if fw == 0 || fh == 0 { return; }
+        unsafe {
+            for ty in 0..SHOT_H {
+                let sy = (ty * fh / SHOT_H) as u32;
+                for tx in 0..SHOT_W {
+                    let sx = (tx * fw / SHOT_W) as u32;
+                    SHOT_BUF[ty * SHOT_W + tx] = fb.get_pixel(sx, sy);
+                }
+            }
+            // PPM (P6) header.
+            let hdr = b"P6\n384 216\n255\n";
+            let mut p = 0usize;
+            for &b in hdr { SHOT_PPM[p] = b; p += 1; }
+            for i in 0..SHOT_W * SHOT_H {
+                let rgb = SHOT_BUF[i];
+                SHOT_PPM[p]     = ((rgb >> 16) & 0xFF) as u8; p += 1;
+                SHOT_PPM[p]     = ((rgb >> 8) & 0xFF) as u8;  p += 1;
+                SHOT_PPM[p]     = (rgb & 0xFF) as u8;         p += 1;
+            }
+            self.shots += 1;
+            self.saved_n = self.shots;
+            // screenshots/shot-N.ppm — the Files app and a future Image Viewer
+            // can read it back.
+            let mut name = alloc::string::String::from("screenshots/shot-");
+            let mut nb = [0u8; 24];
+            name.push_str(u64_into(&mut nb, self.shots as u64));
+            name.push_str(".ppm");
+            vfs::vfs().write(&name, &SHOT_PPM[..p]);
+        }
+        self.have_shot = true;
+    }
+}
+
+impl App for Screenshot {
+    fn render(&mut self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, h: u32) {
+        if self.pending {
+            self.pending = false;
+            self.capture(fb);
+        }
+        fb.fill_rect(x, y, w, h, 0x1A1F1C);
+        // Header.
+        fb.fill_rect(x, y, w, 28, 0x252E2A);
+        fb.draw_str(x + 12, y + 9, "Screenshot", 0xECEDE5, 0x252E2A);
+        fb.draw_str(x + 110, y + 9, "F or click Capture = full screen", 0x6B756D, 0x252E2A);
+
+        // Capture button.
+        let bx = x + 12; let by = y + 38; let bw = 150u32; let bh = 26u32;
+        fb.fill_rect(bx, by, bw, bh, 0x335C3F);
+        fb.fill_rect(bx, by, bw, 1, 0x6FE18B);
+        fb.draw_str(bx + 14, by + 8, "Capture full screen", 0xECEDE5, 0x335C3F);
+
+        // Preview area.
+        let pvx = x + 12; let pvy = y + 74;
+        let pvw = w.saturating_sub(24);
+        let pvh = h.saturating_sub(74 + 28);
+        fb.fill_rect(pvx, pvy, pvw, pvh, 0x0E1311);
+        if self.have_shot && pvw > 16 && pvh > 16 {
+            // Fit SHOT_BUF (384x216) into the preview, aspect-preserved.
+            let s = ((pvw as usize * 1024 / SHOT_W).min(pvh as usize * 1024 / SHOT_H)).max(1);
+            let outw = SHOT_W * s / 1024; let outh = SHOT_H * s / 1024;
+            let ox = pvx + (pvw - outw as u32) / 2;
+            let oy = pvy + (pvh - outh as u32) / 2;
+            unsafe {
+                for yy in 0..outh {
+                    let sy = yy * SHOT_H / outh;
+                    for xx in 0..outw {
+                        let sx = xx * SHOT_W / outw;
+                        fb.set_pixel(ox + xx as u32, oy + yy as u32, SHOT_BUF[sy * SHOT_W + sx]);
+                    }
+                }
+            }
+        } else {
+            fb.draw_str(pvx + 12, pvy + 12, "No capture yet — press F.", 0x6B756D, 0x0E1311);
+        }
+
+        // Status line.
+        let sy = y + h - 22;
+        fb.fill_rect(x, sy, w, 22, 0x14171A);
+        if self.have_shot {
+            let mut nb = [0u8; 24];
+            fb.draw_str_t(x + 12, sy + 6, "saved  screenshots/shot-", 0xA8B0A6);
+            let nstr = u64_into(&mut nb, self.saved_n as u64);
+            fb.draw_str_t(x + 12 + 25 * 6, sy + 6, nstr, 0x6FE18B);
+            fb.draw_str_t(x + 12 + 25 * 6 + (nstr.len() as u32) * 6, sy + 6, ".ppm  (384x216)", 0xA8B0A6);
+        } else {
+            fb.draw_str_t(x + 12, sy + 6, "ready", 0x6B756D);
+        }
+        self.dirty = false;
+    }
+
+    fn on_key(&mut self, key: u8) {
+        use crate::ansi::Key as AK;
+        match self.ansi.feed(key) {
+            AK::Char(b'f') | AK::Char(b'F') | AK::Char(b' ') => { self.pending = true; self.dirty = true; }
+            _ => {}
+        }
+    }
+
+    fn on_mouse(&mut self, mx: i32, my: i32, _w: u32, _h: u32, buttons: u8) {
+        // The Capture button sits at content (12,38) size 150x26.
+        if buttons & 1 != 0 && mx >= 12 && mx < 162 && my >= 38 && my < 64 {
+            self.pending = true;
+            self.dirty = true;
+        }
+    }
+
+    fn title(&self) -> &str { "Screenshot" }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Games — preinstalled on the Rusty Penguin desktop. Pure-Rust, no_std, no heap
 // churn in the render path (numbers via u64_into, no per-frame format!()).
 // ─────────────────────────────────────────────────────────────────────────────

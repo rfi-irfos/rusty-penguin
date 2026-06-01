@@ -1013,12 +1013,13 @@ const MENU_ITEMS: &[MenuItem] = &[
     MenuItem { label: "Kernel Manager", desc: "Bring & boot your own kernel", color: 0x6FE18B, icon: icons::IC_SETTINGS, kind: MenuLaunch::App(10) },
     MenuItem { label: "Sound",          desc: "Audio mixer + tone player",    color: 0x4A9EFF, icon: icons::IC_CALC,     kind: MenuLaunch::App(11) },
     MenuItem { label: "Media Player",   desc: "Video + audio — the founding clip", color: 0xF5C451, icon: icons::IC_MEDIA, kind: MenuLaunch::App(12) },
-    // games start at index 10
+    MenuItem { label: "Screenshot",     desc: "Capture the screen to a file",  color: 0x8CC6E5, icon: icons::IC_SHOT,  kind: MenuLaunch::App(13) },
+    // games start at index 11
     MenuItem { label: "Snake",        desc: "Classic arcade",             color: 0x4ADE80, icon: icons::IC_SNAKE,    kind: MenuLaunch::App(6) },
     MenuItem { label: "Minesweeper",  desc: "Find the mines",             color: 0xFCD34D, icon: icons::IC_MINES,    kind: MenuLaunch::App(7) },
     MenuItem { label: "Doom",         desc: "E1M1 — shareware DOOM",      color: 0xEF4444, icon: icons::IC_DOOM,     kind: MenuLaunch::App(8) },
 ];
-const MENU_APPS_END: usize = 10;  // items 0..10 = apps, 10..13 = games
+const MENU_APPS_END: usize = 11;  // items 0..11 = apps, 11..14 = games
 
 const MENU_W:       i32 = 280;
 const MENU_HDR_H:   i32 = 54;   // dingir avatar + title + subtitle
@@ -1400,6 +1401,22 @@ fn open_media_player(w: i32, h: i32, n: usize) -> Option<TermWin> {
             win.x = win.x.min(w - mw - 8).max(75);
             Some(TermWin { win, term: t, editor: None, app: Some(mp),
                            win_dirty: true, initial_cmd: None })
+        }
+        Err(_) => None,
+    }
+}
+
+fn open_screenshot(w: i32, h: i32, n: usize) -> Option<TermWin> {
+    match term::Terminal::spawn() {
+        Ok(t) => {
+            let ss = alloc::boxed::Box::new(app::Screenshot::new());
+            let off = n as i32 * 20;
+            let left_margin = 75;
+            let wx = ((w - left_margin - wm::WINDOW_W) / 2 + left_margin + off)
+                .max(left_margin).min(w - wm::WINDOW_W);
+            let wy = ((h - wm::WINDOW_H - 28) / 2 + off).max(TOPBAR_H as i32).min(h - wm::WINDOW_H - 28);
+            Some(TermWin { win: wm::Window::new(wx, wy, "Screenshot"), term: t,
+                           editor: None, app: Some(ss), win_dirty: true, initial_cmd: None })
         }
         Err(_) => None,
     }
@@ -2018,6 +2035,7 @@ pub extern "C" fn _start() -> ! {
                             MenuLaunch::App(10)  => open_kernel_manager(w, h, wins.len()),
                             MenuLaunch::App(11)  => open_sound(w, h, wins.len()),
                             MenuLaunch::App(12)  => open_media_player(w, h, wins.len()),
+                            MenuLaunch::App(13)  => open_screenshot(w, h, wins.len()),
                             MenuLaunch::App(_)   => None,
                         };
                         if let Some(tw) = opened { wins.push(tw); }

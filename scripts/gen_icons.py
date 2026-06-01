@@ -102,10 +102,17 @@ def ic_media(d):
     d.ellipse([cx-s(9),cy-s(9),cx+s(9),cy+s(9)], outline=255, width=W)
     d.polygon([s(9.5),s(7),s(9.5),s(17),s(17),s(12)], fill=255)
 
+def ic_shot(d):
+    # Camera — body + lens + viewfinder bump (screenshot tool).
+    d.rounded_rectangle([s(3),s(8),s(21),s(20)], radius=s(2.5), outline=255, width=W)
+    d.rounded_rectangle([s(8),s(5),s(14),s(8)], radius=s(1), outline=255, width=max(2,W-SS))
+    d.ellipse([s(9),s(11),s(15),s(17)], outline=255, width=W)
+
 ICONS = [
     ("TERM", ic_term), ("FILES", ic_files), ("EDIT", ic_edit), ("CALC", ic_calc),
     ("SETTINGS", ic_settings), ("TIS", ic_tis), ("SNAKE", ic_snake),
     ("MINES", ic_mines), ("DOOM", ic_doom), ("WEB", ic_web), ("MEDIA", ic_media),
+    ("SHOT", ic_shot),
 ]
 
 def main():
