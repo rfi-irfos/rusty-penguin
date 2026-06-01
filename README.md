@@ -159,6 +159,7 @@ velocity equals completion.
 | **Hung-app isolation + watchdog force-quit (a wedged process can't freeze the system; it gets reaped)** | ✅ QEMU-verified behind flags |
 | **Multi-process windowed apps (real ELF processes → isolated offscreen surfaces → compositor → on-screen windows; two apps at once; hung app force-quit)** | ✅ pipeline proven + screenshot-verified behind flags |
 | **The real desktop run as a scheduled, isolated process** | ✅ QEMU-verified (`schedesktop` flag) — the bridge to a multi-process desktop |
+| **The real desktop + a 2nd real app, both scheduled & isolated, no syscall-stack collision** | ✅ QEMU-verified (`schedesktop2` flag) — per-task syscall stack fixes the concurrent-syscall #GP |
 | **ACPI power management — S5 shutdown + reboot** | ✅ QEMU-verified; the Shut Down button powers the machine off |
 | **Multi-user login (SHA-256 passwords, /home/<user>)** | ✅ |
 | In-memory VFS within a session | ✅ |
@@ -266,12 +267,15 @@ A separate GRUB entry, **`Rusty Penguin -- DOOM (demoable)`**, boots straight
 into DOOM without the desktop at all (for maximum performance demo).
 
 **In progress:** running DOOM *windowed, next to the browser*. The kernel now
-has preemptive multitasking, per-process address spaces (CR3) and ring-3
-process isolation (the scheduler foundation, all QEMU-verified — see
-`docs/SCHEDULER.md`). Remaining: a higher-half-kernel VMM migration
-(`docs/VMM_HIGHER_HALF.md`), a virtual `/dev/fb0`, and window compositing.
-Honest status: real DOOM runs fullscreen as a standalone process today; the
-side-by-side windowed form is the next multi-step build.
+has preemptive multitasking, per-process address spaces (CR3), ring-3
+process isolation, and a per-task syscall stack — so the **real desktop and a
+second real app run concurrently** as isolated, preemptively-scheduled
+processes without clobbering each other through the syscall path (the concurrent-
+syscall #GP is fixed; `schedesktop2`, QEMU-verified — see `docs/SCHEDULER.md`).
+Remaining: the desktop compositing a second app's surface into a visible on-screen
+window (a desktop-code change), a virtual `/dev/fb0`, and a higher-half-kernel VMM
+migration (`docs/VMM_HIGHER_HALF.md`). Honest status: real DOOM runs fullscreen as
+a standalone process today; the side-by-side windowed form is the next step.
 
 ---
 

@@ -4,6 +4,32 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+### Fixed — Multiproc brick 5: per-task syscall stack → desktop + a 2nd real app concurrently, no #GP (2026-06-01)
+
+- The genuine scheduler-isolation maturity fix. The SYSCALL trampoline switched
+  to ONE shared kernel stack and stashed the user RSP in ONE global. Under
+  preemption that is unsound: when the desktop blocked in a syscall
+  (`sys_read` → `sti`+`hlt`) and a second app entered a syscall in that window,
+  the second entry clobbered the first's saved frame + user RSP → on resume the
+  trampoline `iretq`/`sysretq`'d with a garbage CS/RSP → kernel **#GP**.
+- Fix: a **per-task syscall stack** (`_cur_syscall_stack`, defaults to the shared
+  stack so the normal single-process boot is byte-for-byte unchanged). The
+  trampoline switches to `[_cur_syscall_stack]` and pushes the user RSP onto that
+  per-task stack (restored via `pop rsp`); `preempt_tick` retargets it to the next
+  task's own kernel stack on every context switch, alongside `TSS.rsp0`. Written
+  via inline asm (direct rip-relative — a plain Rust store to a `global_asm`
+  symbol compiles to a GOT-indirect access whose slot is unmapped in the
+  higher-half kernel → #PF). An 8-byte pad keeps the C call site 16-aligned.
+- `schedesktop2` boot flag (checked before `schedesktop`, a substring): runs the
+  REAL desktop AND a second real ELF app as two independent, preemptively-
+  scheduled, address-space-isolated processes. Verified by QEMU screendump: no
+  #GP, the full desktop renders (16046 non-black cells) while the 2nd app is
+  scheduled. Normal-boot fault profile is identical to baseline (regression-safe).
+  Proof: docs/multiproc-desktop-plus-app-scheduled.png.
+- Remaining toward windowed DOOM: the desktop compositing the 2nd app's surface
+  into a visible on-screen window (a desktop-code change, the easy part now that
+  two real processes coexist safely under the scheduler).
+
 ### Added — Multiproc brick 4: the REAL desktop runs as a scheduled process (2026-06-01)
 
 - The bridge from synthetic test apps (3a–3e) to the real multi-process desktop:
