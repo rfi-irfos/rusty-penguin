@@ -43,6 +43,8 @@ mod bignum;
 mod x509;
 mod test_certs;
 mod ca_roots;
+mod iwlwifi_fw;
+mod iwlwifi;
 
 use ternary_core::{Trit, Tryte};
 use mathematics::{mul_tryte, consensus, scale};
@@ -416,6 +418,14 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
         vga::write_str("  [x509: cert-chain trust OK]\n", vga::Color::Green);
     } else {
         vga::write_str("  [x509: SELF-TEST FAILED]\n", vga::Color::Red);
+    }
+
+    // Intel WiFi probe (brick 1): recognise an iwlwifi card + the firmware it
+    // needs. QEMU has no iwlwifi to emulate, so this only lights up on real metal.
+    if iwlwifi::init() {
+        vga::write_str("  [wifi: Intel WiFi card detected]\n", vga::Color::Green);
+    } else {
+        vga::write_str("  [wifi: no Intel WiFi (QEMU has none)]\n", vga::Color::Amber);
     }
 
     // AHCI/SATA disk + RPFS filesystem — persistent bare-metal storage.
