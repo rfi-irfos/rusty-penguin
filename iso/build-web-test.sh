@@ -53,6 +53,7 @@ QMP=/tmp/rp-web-qmp.sock
 COMMON=( -m "${RP_QEMU_MEM:-2560}" -smp 2 -kernel "$VMLINUZ" -initrd "$WEB_INITRD"
     -append "rp.web console=ttyS0 loglevel=4"
     -vga none -device virtio-gpu-pci -device virtio-keyboard-pci -device virtio-mouse-pci
+    -netdev user,id=n0 -device virtio-net-pci,netdev=n0
     -nographic -serial mon:stdio -qmp unix:$QMP,server,nowait )
 if [ -n "$SHOT" ]; then
     rm -f "$QMP"

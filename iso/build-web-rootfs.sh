@@ -223,16 +223,22 @@ HTML
 # raster on the CPU and present via X SHM — no EGL/GBM/GL needed. /etc/machine-id
 # must be non-empty or some init paths complain; give it one.
 [ -s /etc/machine-id ] || /bin/busybox dd if=/dev/urandom bs=16 count=1 2>/dev/null | /bin/busybox md5sum | /bin/busybox cut -c1-32 > /etc/machine-id
+# The video that triggered this OS (Torvalds, OSS EU 2024), played in real Chrome
+# on Rusty Penguin's Linux-compat track, fetched LIVE over the network. Embed +
+# muted autoplay lands a *playing* frame reliably and skips the EU consent wall,
+# while still showing the title + YouTube branding. Override with RP_URL=...
+RP_URL="${RP_URL:-https://www.youtube.com/embed/OM_8UOPFpqE?autoplay=1&mute=1}"
 DISPLAY=:0 /opt/google/chrome/chrome \
     --no-sandbox --no-zygote --ozone-platform=x11 --disable-gpu --disable-gpu-compositing \
     --disable-dev-shm-usage --no-first-run --no-default-browser-check \
     --disable-features=Translate --user-data-dir=/tmp/cr \
+    --autoplay-policy=no-user-gesture-required \
     --enable-logging=stderr --v=0 \
     --start-maximized --window-size=1280,800 --window-position=0,0 \
-    file:///tmp/rusty.html >/tmp/chrome.log 2>&1 &
+    "$RP_URL" >/tmp/chrome.log 2>&1 &
 CPID=$!
-echo "[start-chrome] chrome launched pid=$CPID; waiting for paint..."
-sleep 30   # cold-start + first paint on a software stack / loaded host
+echo "[start-chrome] chrome launched pid=$CPID url=$RP_URL; waiting for paint..."
+sleep 55   # cold-start + page load + video buffer/play on a software stack
 if /bin/busybox kill -0 "$CPID" 2>/dev/null; then
     echo "[start-chrome] chrome ALIVE after 30s (pid $CPID)"
 else
