@@ -46,6 +46,7 @@ mod test_certs;
 mod ca_roots;
 mod iwlwifi_fw;
 mod iwlwifi;
+mod acpi;
 
 use ternary_core::{Trit, Tryte};
 use mathematics::{mul_tryte, consensus, scale};
@@ -429,6 +430,14 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
         vga::write_str("  [wifi: no Intel WiFi (QEMU has none)]\n", vga::Color::Amber);
     }
 
+    // ACPI power management: parse the firmware tables so we can cleanly power
+    // off (S5) and reboot — a daily-driver basic the kernel lacked entirely.
+    if acpi::init() {
+        vga::write_str("  [power: ACPI shutdown + reboot ready]\n", vga::Color::Green);
+    } else {
+        vga::write_str("  [power: no ACPI]\n", vga::Color::Amber);
+    }
+
     // AHCI/SATA disk + RPFS filesystem — persistent bare-metal storage.
     if ahci::init() {
         if ahci::selftest() {
@@ -510,6 +519,12 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
     }
     if unsafe { mb2_cmdline_contains(mb2, b"fstest") } {
         diskfs::selftest(); // RPFS v2 on real AHCI: persistence + reclamation + dirs
+    }
+    if unsafe { mb2_cmdline_contains(mb2, b"acpipoweroff") } {
+        acpi::poweroff(); // verify ACPI S5 soft-off (QEMU exits cleanly)
+    }
+    if unsafe { mb2_cmdline_contains(mb2, b"acpireboot") } {
+        acpi::reboot(); // verify ACPI/8042 reset
     }
     // autostart=N → desktop opens app N on launch (deterministic GUI screendumps).
     if let Some(n) = unsafe { mb2_cmdline_value(mb2, b"autostart=") } {

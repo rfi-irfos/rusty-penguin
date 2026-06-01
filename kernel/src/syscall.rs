@@ -632,6 +632,14 @@ pub extern "C" fn syscall_handler(nr: u64, arg1: u64, arg2: u64, arg3: u64) -> u
                 _ => 2,
             }
         }
+        37 => {
+            // sys_poweroff → ACPI S5 soft-off. Does not return on success.
+            crate::acpi::poweroff();
+        }
+        38 => {
+            // sys_reboot → ACPI/8042 reset. Does not return on success.
+            crate::acpi::reboot();
+        }
         33 => {
             // sys_cpu → CPU busy permille (0..1000) over the last window; resets it.
             crate::sched::cpu_sample() as u64

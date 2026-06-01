@@ -2508,8 +2508,10 @@ pub extern "C" fn _start() -> ! {
             } else if start_menu_open {
                 if let Some(mi) = start_menu_hit(fb.height, cx, cy) {
                     if mi == 99 {
-                        // Shut Down: call sys_reboot (native syscall 11)
-                        unsafe { core::arch::asm!("syscall", in("rax") 11u64, out("rcx") _, out("r11") _, options(nostack)); }
+                        // Shut Down: real ACPI S5 soft-off (syscall 37). The kernel
+                        // drives the PM1 control register; the machine actually
+                        // powers off. Falls through to halt only if ACPI is absent.
+                        unsafe { core::arch::asm!("syscall", in("rax") 37u64, out("rcx") _, out("r11") _, options(nostack)); }
                         loop { unsafe { core::arch::asm!("hlt", options(nostack)); } }
                     }
                     if mi < MENU_ITEMS.len() {
