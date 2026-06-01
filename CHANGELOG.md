@@ -4,6 +4,39 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+### Added — WiFi brick 1: Intel iwlwifi card detection + firmware parser (2026-06-01)
+
+- Started the hardest brick in the OS, honestly. Native WiFi is firmware-driven
+  and per-chip, and QEMU does not emulate iwlwifi — so device bring-up can only
+  be verified on a real Intel-WiFi laptop. We lead with the host-verifiable parts.
+- `iwlwifi_fw.rs` — parser for Intel's TLV `.ucode` firmware format (magic,
+  version, full walk of instruction/data/section TLVs, truncation guards). Pure
+  `core`, no kernel deps, so it host-tests like `bignum.rs`.
+- `tools/iwlwifi_fw_test.rs` — parses a genuine Intel image. Verified against
+  `iwlwifi-9260-th-b0-jf-b0-34.ucode` (2.6 MB): magic OK, 61 TLVs, 37 loadable
+  sections, 898 KB of instructions, largest section 241 KB (sizes the DMA
+  staging), api v34 matching the `-34` suffix; corrupt magic rejected, truncated
+  image flagged.
+- `iwlwifi.rs` — PCI detection (class 02:80, vendor 8086) + a device-id table
+  mapping common laptop parts (7260 → AX211) to chip + firmware family; boot
+  probe logs the find and the firmware it needs. Under QEMU it honestly reports
+  "no Intel WiFi card".
+- Next (brick 2, needs real hardware): MMIO/prph access, firmware DMA upload +
+  the ALIVE handshake, RX/TX rings, then 802.11 + WPA2.
+
+### Added — Browser build-out: security indicator, back/forward history, page titles (2026-06-01)
+
+- Security indicator wired to the new cert validation: the kernel tracks the
+  last fetch's trust state (`net.rs LAST_FETCH_TRUST`, exposed via
+  `sys_fetch_trust` #36); the address bar draws a green closed padlock for a
+  validated HTTPS page, amber open padlock for plain HTTP. Because `https_get`
+  only returns bytes when the chain validated, "https delivered a page" ==
+  "verified secure". Verified in QEMU (amber lock for google's plain-HTTP
+  redirect target, matching reality).
+- Real back/forward history stack (replaces back-to-home-only); forward button
+  added, both gray out when empty; reload re-fetches without a history entry.
+- `<title>` parsed from the page and shown in the window chrome.
+
 ### Added — TLS certificate-chain trust: the handshake now authenticates *whose* key (2026-06-01)
 
 - The TLS 1.3 handshake did ECDHE + AES/ChaCha correctly but accepted *any*
