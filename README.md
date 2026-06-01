@@ -75,8 +75,9 @@ A from-scratch x86_64 OS, hand-written in Rust top to bottom:
   stone-green visual language. No external UI toolkit; every pixel is drawn by
   our own framebuffer + ternary-CSS engine.
 - **Real apps** — terminal (psh), file manager, text editor, calculator, system
-  monitor, settings, the TIS console, plus Snake, Minesweeper and a pure-Rust
-  DOOM-style raycaster.
+  monitor, settings, the TIS console, a media player (kernel-decoded video +
+  audio, with a Windows-Media-Player-style plasma visualizer easter egg), a
+  screenshot tool, plus Snake, Minesweeper and a pure-Rust DOOM-style raycaster.
 - **A ternary runtime** — balanced-ternary arithmetic and a sparse-skip
   inference engine that physically skips zero-weight multiplications.
 
