@@ -4,6 +4,21 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+### Added — Multiproc brick 3c: compositor blits a process's surface to screen — VISIBLE (2026-06-01)
+
+- The full windowed-app pipeline, end to end and on screen: an isolated,
+  preemptively-scheduled ELF process renders into its OWN offscreen surface, and
+  the kernel compositor blits that surface into a bordered window on the real
+  framebuffer — the exact model a window manager uses.
+- `FILL_STUB` ring-3 program fills its private 32×32 surface with orange;
+  `composite` boot flag → the compositor reads the surface (physmap) and blits it
+  (titlebar + frame) into a window region.
+- Verified by QEMU screendump: exactly 1024 (32×32) orange pixels at the window
+  position, zero faults. Proof: docs/multiproc-compositor-window.png.
+- This closes the conceptual gap to windowed DOOM (isolated process → offscreen
+  render → compositor → on-screen window all work together). Remaining: wire the
+  real desktop + a real app (fbDOOM) through this proven pipeline.
+
 ### Added — Multiproc brick 3b: isolated offscreen rendering (compositing foundation) (2026-06-01)
 
 - The piece between "isolated processes" and "windowed apps": a process renders
