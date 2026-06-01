@@ -4,6 +4,18 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+### Added — Multiproc brick 2: watchdog force-quits a hung process (2026-06-01)
+
+- Brick 1 proved a wedged process can't *freeze* the others; this adds
+  *recovery* — detect a not-responding process and force-quit it.
+- Per-task syscall counter as a liveness signal; `kill_task` drops a task from
+  the schedule (the scheduler already skips dead tasks). `watchdog` boot flag →
+  healthy process A + wedged process B; the kernel watchdog notices B makes no
+  progress and terminates it.
+- Verified in QEMU: "process B NOT RESPONDING — force-quitting", "B terminated",
+  "B syscalls (frozen): 0  A syscalls (still climbing): 11", A keeps running →
+  "RECOVERY PROVEN". (Heuristic is a stand-in; frame reclamation is a follow-up.)
+
 ### Added — Multiproc brick 1: a hung app can't freeze the system (2026-06-01)
 
 - First step toward a multi-process desktop, incremental and behind a flag so
