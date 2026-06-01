@@ -4,6 +4,22 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+### Added — Multiproc brick 1: a hung app can't freeze the system (2026-06-01)
+
+- First step toward a multi-process desktop, incremental and behind a flag so
+  the working single-process desktop is untouched. The kernel already had timer
+  preemption, per-process private address spaces, ring-3, and per-task CR3; this
+  demonstrates the property a multi-process desktop needs — *a wedged process
+  must not stall the others*.
+- `multiproc` boot flag → `selftest_multiproc` spawns two ring-3 processes in
+  separate private address spaces: process A healthy (syscalls periodically),
+  process B HUNG (a pure `jmp $` infinite loop that never yields, so only the
+  preemption timer can take the CPU back).
+- Verified in QEMU: while B spins forever, A's syscall keeps arriving (18×) and
+  the kernel keeps running (12×) → "ISOLATION PROVEN".
+- Next (bigger): spawn a real app (fbDOOM) as a scheduled process alongside the
+  desktop, then migrate desktop apps to the multi-process model one at a time.
+
 ### Added — ACPI power management: clean shutdown + reboot (2026-06-01)
 
 - The kernel had no power management — the only way out was closing the VM or a
