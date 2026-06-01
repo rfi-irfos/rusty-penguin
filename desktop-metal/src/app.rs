@@ -33,6 +33,15 @@ fn sys_meminfo() -> (u32, u32) {
     }
     ((n >> 32) as u32, (n & 0xFFFF_FFFF) as u32)
 }
+/// sys_cpu (#33) → CPU busy permille (0..1000) over the last sampling window.
+fn sys_cpu() -> u32 {
+    let n: u64;
+    unsafe {
+        core::arch::asm!("syscall", inout("rax") 33u64 => n, in("rdi") 0u64,
+            out("rcx") _, out("r11") _, options(nostack));
+    }
+    n as u32
+}
 /// sys_ps (#9) → fills `buf` with up to `max` 32-byte process records
 /// ([pid u64][state u8][7 pad][name 16]); returns the record count.
 unsafe fn sys_ps(buf: &mut [u8], max: usize) -> usize {
@@ -944,9 +953,12 @@ const MON_HIST: usize = 200;   // memory-% history samples (~50s at 4 Hz)
 pub struct ProcessMonitor {
     tab: u8,                       // 0 Resources, 1 Processes
     mem_hist: [u8; MON_HIST],      // memory-used % history (chronological, [len-1]=newest)
+    cpu_hist: [u8; MON_HIST],      // CPU busy % history
     hist_len: usize,
     mem_free: u32, mem_total: u32, // MiB
+    cpu_pct: u32,                  // CPU busy %
     nprocs: usize,
+    sel: usize,                    // selected process row (for kill)
     last_sample: u64,
     pub dirty: bool,
     pub wants_close: bool,
@@ -956,8 +968,8 @@ pub struct ProcessMonitor {
 impl ProcessMonitor {
     pub fn new() -> Self {
         let mut m = ProcessMonitor {
-            tab: 0, mem_hist: [0; MON_HIST], hist_len: 0,
-            mem_free: 0, mem_total: 0, nprocs: 0, last_sample: 0,
+            tab: 0, mem_hist: [0; MON_HIST], cpu_hist: [0; MON_HIST], hist_len: 0,
+            mem_free: 0, mem_total: 0, cpu_pct: 0, nprocs: 0, sel: 0, last_sample: 0,
             dirty: true, wants_close: false, ansi: crate::ansi::AnsiParser::new(),
         };
         m.sample();
@@ -967,15 +979,35 @@ impl ProcessMonitor {
     fn sample(&mut self) {
         let (free, total) = sys_meminfo();
         self.mem_free = free; self.mem_total = total;
-        let used_pct = if total > 0 { ((total - free) as u64 * 100 / total as u64) as u8 } else { 0 };
+        let mem_pct = if total > 0 { ((total - free) as u64 * 100 / total as u64) as u8 } else { 0 };
+        self.cpu_pct = (sys_cpu() / 10).min(100);          // permille → %
+        let cpu = self.cpu_pct as u8;
         if self.hist_len < MON_HIST {
-            self.mem_hist[self.hist_len] = used_pct; self.hist_len += 1;
+            self.mem_hist[self.hist_len] = mem_pct;
+            self.cpu_hist[self.hist_len] = cpu;
+            self.hist_len += 1;
         } else {
-            self.mem_hist.copy_within(1.., 0);
-            self.mem_hist[MON_HIST - 1] = used_pct;
+            self.mem_hist.copy_within(1.., 0); self.mem_hist[MON_HIST - 1] = mem_pct;
+            self.cpu_hist.copy_within(1.., 0); self.cpu_hist[MON_HIST - 1] = cpu;
         }
         let mut buf = [0u8; 16 * 32];
         self.nprocs = unsafe { sys_ps(&mut buf, 16) };
+    }
+
+    /// Draw a scrolling area-chart of `hist[..len]` (newest right) into a box.
+    fn draw_graph(fb: &mut Framebuffer, gx: u32, gy: u32, gw: u32, gh: u32,
+                  hist: &[u8], len: usize, area: u32, line: u32) {
+        fb.fill_rect(gx, gy, gw, gh, 0x0E1311);
+        for q in 1..4 { fb.fill_rect(gx, gy + gh * q / 4, gw, 1, 0x1E2A24); }
+        for col in 0..gw {
+            let back = (gw - 1 - col) as usize;
+            if back >= len { continue; }
+            let v = (hist[len - 1 - back] as u32).min(100);
+            let barh = v * gh / 100;
+            let top = gy + gh - barh;
+            fb.fill_rect(gx + col, top, 1, barh, area);
+            fb.set_pixel(gx + col, top, line);
+        }
     }
 }
 
@@ -1000,75 +1032,93 @@ impl App for ProcessMonitor {
         }
 
         if self.tab == 0 {
-            // ── Resources: live memory graph ───────────────────────────────────
+            // ── Resources: live CPU + memory graphs ────────────────────────────
+            let bg = 0x14171Au32;
+            let gx = x + 14; let gw = w.saturating_sub(28); let gh = 86u32;
+            let mut pb = [0u8; 24];
+            // CPU graph (busy %).
+            fb.draw_str(x + 14, y + 34, "CPU", 0xECEDE5, bg);
+            fb.draw_str(x + w - 70, y + 34, u64_into(&mut pb, self.cpu_pct as u64), 0x8CC6E5, bg);
+            fb.draw_str(x + w - 70 + count_digits(self.cpu_pct.max(1)) * 8, y + 34, "%", 0x8A938C, bg);
+            Self::draw_graph(fb, gx, y + 52, gw, gh, &self.cpu_hist, self.hist_len, 0x1E4A6B, 0x8CC6E5);
+            // Memory graph (used %).
             let used = self.mem_total.saturating_sub(self.mem_free);
             let pct = if self.mem_total > 0 { used * 100 / self.mem_total } else { 0 };
-            fb.draw_str(x + 14, y + 36, "Memory", 0xECEDE5, 0x14171A);
-            // graph box
-            let gx = x + 14; let gy = y + 56; let gw = w.saturating_sub(28); let gh = 120u32;
-            fb.fill_rect(gx, gy, gw, gh, 0x0E1311);
-            // gridlines at 25/50/75%
-            for q in 1..4 { fb.fill_rect(gx, gy + gh * q / 4, gw, 1, 0x1E2A24); }
-            // plot the history right-aligned (newest at the right edge), area chart.
-            for col in 0..gw {
-                let back = (gw - 1 - col) as usize;          // 0 = rightmost = newest
-                if back >= self.hist_len { continue; }
-                let v = self.mem_hist[self.hist_len - 1 - back] as u32; // 0..100
-                let barh = v * gh / 100;
-                let top = gy + gh - barh;
-                fb.fill_rect(gx + col, top, 1, barh, 0x1E5A3E);     // green area
-                fb.set_pixel(gx + col, top, 0x6FE18B);              // bright top line
-            }
-            // readout: used / total + percent + bar.
-            let ry = gy + gh + 14;
-            let mut ub = [0u8; 24]; let mut tb = [0u8; 24]; let mut pb = [0u8; 24];
-            let bg = 0x14171Au32;
-            fb.draw_str(x + 14, ry, u64_into(&mut ub, used as u64), 0x6FE18B, bg);
+            let my = y + 52 + gh + 20;
+            fb.draw_str(x + 14, my - 18, "Memory", 0xECEDE5, bg);
+            let mut ub = [0u8; 24]; let mut tb = [0u8; 24]; let mut mp = [0u8; 24];
+            let rx = x + w - 170;
+            fb.draw_str(rx, my - 18, u64_into(&mut ub, used as u64), 0x6FE18B, bg);
             let uw = (count_digits(used) + 1) * 8;
-            fb.draw_str(x + 14 + uw, ry, "/", 0x8A938C, bg);
-            fb.draw_str(x + 14 + uw + 12, ry, u64_into(&mut tb, self.mem_total as u64), 0xECEDE5, bg);
-            fb.draw_str(x + 14 + uw + 12 + (count_digits(self.mem_total) + 1) * 8, ry, "MiB", 0x8A938C, bg);
-            fb.draw_str(x + w - 70, ry, u64_into(&mut pb, pct as u64), 0xF5C451, bg);
-            fb.draw_str(x + w - 70 + (count_digits(pct)) * 8, ry, "%", 0x8A938C, bg);
-            // usage bar
-            let by = ry + 22; let bw = w.saturating_sub(28);
-            fb.fill_rect(x + 14, by, bw, 10, 0x2A332F);
-            fb.fill_rect(x + 14, by, bw * pct / 100, 10, 0x6FE18B);
+            fb.draw_str(rx + uw, my - 18, "/", 0x8A938C, bg);
+            fb.draw_str(rx + uw + 12, my - 18, u64_into(&mut tb, self.mem_total as u64), 0xECEDE5, bg);
+            fb.draw_str(rx + uw + 12 + (count_digits(self.mem_total) + 1) * 8, my - 18, "MiB", 0x8A938C, bg);
+            fb.draw_str(x + w - 54, my - 18, u64_into(&mut mp, pct as u64), 0xF5C451, bg);
+            fb.draw_str(x + w - 54 + count_digits(pct.max(1)) * 8, my - 18, "%", 0x8A938C, bg);
+            Self::draw_graph(fb, gx, my, gw, gh, &self.mem_hist, self.hist_len, 0x1E5A3E, 0x6FE18B);
             // uptime + process count
             let secs = sys_ticks() / 100;
-            let mut hb = [0u8; 12];
-            fb.draw_str_t(x + 14, by + 18, "Uptime", 0x8A938C);
+            let mut hb = [0u8; 12]; let mut nb = [0u8; 24];
+            let fy = my + gh + 16;
+            fb.draw_str_t(x + 14, fy, "Uptime", 0x8A938C);
             let upt = SystemClock::hms(&mut hb, secs / 3600, secs / 60 % 60, secs % 60);
-            fb.draw_str_t(x + 64, by + 18, upt, 0xA8B0A6);
-            let mut nb = [0u8; 24];
-            fb.draw_str_t(x + w - 150, by + 18, "Processes", 0x8A938C);
-            fb.draw_str_t(x + w - 80, by + 18, u64_into(&mut nb, self.nprocs as u64), 0xA8B0A6);
+            fb.draw_str_t(x + 64, fy, upt, 0xA8B0A6);
+            fb.draw_str_t(x + w - 150, fy, "Processes", 0x8A938C);
+            fb.draw_str_t(x + w - 80, fy, u64_into(&mut nb, self.nprocs as u64), 0xA8B0A6);
         } else {
-            // ── Processes: real list from sys_ps ───────────────────────────────
+            // ── Processes: SYSTEM (kernel, with CPU split) + APPLICATIONS (killable)
             let mut buf = [0u8; 16 * 32];
             let n = unsafe { sys_ps(&mut buf, 16) };
             self.nprocs = n;
-            fb.fill_rect(x, y + 28, w, 18, 0x252E2A);
-            fb.draw_str_t(x + 14, y + 33, "PID", 0x8A938C);
-            fb.draw_str_t(x + 70, y + 33, "NAME", 0x8A938C);
-            fb.draw_str_t(x + 240, y + 33, "STATE", 0x8A938C);
+            fb.draw_str_t(x + 14, y + 32, "SYSTEM", 0x8A938C);
+            fb.fill_rect(x, y + 44, w, 16, 0x252E2A);
+            fb.draw_str_t(x + 14, y + 48, "PID", 0x8A938C);
+            fb.draw_str_t(x + 70, y + 48, "NAME", 0x8A938C);
+            fb.draw_str_t(x + 230, y + 48, "CPU", 0x8A938C);
+            fb.draw_str_t(x + 310, y + 48, "STATE", 0x8A938C);
+            let mut yy = y + 64;
             for i in 0..n {
                 let rec = &buf[i * 32..i * 32 + 32];
                 let pid = u64::from_le_bytes([rec[0],rec[1],rec[2],rec[3],rec[4],rec[5],rec[6],rec[7]]);
                 let state = rec[8];
                 let name_end = rec[16..32].iter().position(|&c| c == 0).unwrap_or(16);
                 let name = core::str::from_utf8(&rec[16..16 + name_end]).unwrap_or("?");
-                let ry = y + 50 + i as u32 * 18;
-                if ry + 18 > y + h { break; }
-                if i % 2 == 1 { fb.fill_rect(x, ry, w, 18, 0x1A1F1C); }
-                let mut pb = [0u8; 24];
-                fb.draw_str(x + 14, ry + 4, u64_into(&mut pb, pid), 0xA8B0A6, if i%2==1 {0x1A1F1C} else {0x14171A});
-                let bg = if i%2==1 {0x1A1F1C} else {0x14171A};
-                fb.draw_str(x + 70, ry + 4, name, 0xECEDE5, bg);
-                // Ternary state: 1=Running(+1 green), 0=Ready(0 amber), 2=Blocked(-1 red).
+                // desktop = busy%, idle = idle%, others 0.
+                let cpu = if name == "desktop" { self.cpu_pct } else if name == "idle" { 100u32.saturating_sub(self.cpu_pct) } else { 0 };
+                let mut pb = [0u8; 24]; let mut cb = [0u8; 24];
+                fb.draw_str(x + 14, yy, u64_into(&mut pb, pid), 0xA8B0A6, 0x14171A);
+                fb.draw_str(x + 70, yy, name, 0xECEDE5, 0x14171A);
+                fb.draw_str(x + 230, yy, u64_into(&mut cb, cpu as u64), 0x8CC6E5, 0x14171A);
+                fb.draw_str(x + 230 + count_digits(cpu.max(1)) * 8, yy, "%", 0x8A938C, 0x14171A);
                 let (lbl, col) = match state { 1 => ("Running", 0x6FE18B), 2 => ("Blocked", 0xEF7575), _ => ("Ready", 0xF5C451) };
-                fb.draw_str(x + 240, ry + 4, lbl, col, bg);
+                fb.draw_str(x + 310, yy, lbl, col, 0x14171A);
+                yy += 18;
             }
+            // Applications — open app windows, selectable + killable.
+            yy += 8;
+            fb.draw_str_t(x + 14, yy, "APPLICATIONS", 0x8A938C);
+            yy += 18;
+            let count = unsafe { crate::APP_COUNT };
+            if count > 0 && self.sel >= count { self.sel = count - 1; }
+            if count == 0 {
+                fb.draw_str_t(x + 18, yy + 4, "(no app windows open)", 0x6B756D);
+            }
+            for i in 0..count {
+                let title = unsafe {
+                    let t = &crate::APP_TITLES[i];
+                    let end = t.iter().position(|&c| c == 0).unwrap_or(20);
+                    core::str::from_utf8(&t[..end]).unwrap_or("?")
+                };
+                let ry = yy + i as u32 * 18;
+                if ry + 18 > y + h - 16 { break; }
+                let sel = i == self.sel;
+                let bg = if sel { 0x2E3C32u32 } else { 0x14171A };
+                if sel { fb.fill_rect(x, ry, w, 18, bg); fb.fill_rect(x + 2, ry + 4, 3, 10, 0x6FE18B); }
+                fb.draw_str(x + 18, ry + 4, title, 0xECEDE5, bg);
+            }
+            // footer hint
+            fb.fill_rect(x, y + h - 16, w, 16, 0x252E2A);
+            fb.draw_str_t(x + 14, y + h - 12, "up/down select   k = kill (force-quit)", 0x6B756D);
         }
         self.dirty = false;
     }
@@ -1079,6 +1129,15 @@ impl App for ProcessMonitor {
             AK::Char(b'1') => { self.tab = 0; self.dirty = true; }
             AK::Char(b'2') => { self.tab = 1; self.dirty = true; }
             AK::Char(b'\t') => { self.tab ^= 1; self.dirty = true; }
+            AK::Up   => { if self.tab == 1 && self.sel > 0 { self.sel -= 1; self.dirty = true; } }
+            AK::Down => { if self.tab == 1 { let c = unsafe { crate::APP_COUNT }; if self.sel + 1 < c { self.sel += 1; self.dirty = true; } } }
+            AK::Char(b'k') | AK::Char(b'K') => {
+                // Force-quit the selected app window (the loop services KILL_IDX).
+                if self.tab == 1 && unsafe { crate::APP_COUNT } > 0 {
+                    unsafe { crate::KILL_IDX = self.sel as i32; }
+                    self.dirty = true;
+                }
+            }
             _ => {}
         }
     }

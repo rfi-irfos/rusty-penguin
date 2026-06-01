@@ -232,6 +232,7 @@ const MENU_BTN_W:   i32 = 88;   // "Menu" button width
 const FAV_TILE:     i32 = 40;   // favourite icon tile
 const FAV_GAP:      i32 = 8;    // gap between favourites
 const PANEL_SOLID:  u32 = 0x333D38;  // dock body — warm stone, lighter than the wall so it floats
+const DOCK_ALPHA:   u32 = 140;       // dock translucency (0=clear..255=opaque) — wallpaper shows through
 const PANEL_EDGE:   u32 = 0x55615A;  // panel hairline / top sheen
 const PANEL_R:      i32 = 14;        // panel corner radius
 
@@ -485,6 +486,13 @@ pub const WP_CUSTOM: u8 = 8;
 /// loop switches to the custom wallpaper. (apps run in-process, so a shared static
 /// is the simplest signal.)
 pub static mut WALLPAPER_SET_REQUEST: bool = false;
+
+/// Open-window titles + count, published each frame for the System Monitor's
+/// Applications list. KILL_IDX, set by the monitor, asks the loop to force-quit
+/// (close) that window. (Apps run in-process, so shared statics are the channel.)
+pub static mut APP_TITLES: [[u8; 20]; 12] = [[0; 20]; 12];
+pub static mut APP_COUNT: usize = 0;
+pub static mut KILL_IDX: i32 = -1;
 
 /// Parse a binary PPM (P6) header → (width, height, pixel_data_offset).
 fn parse_ppm_dims(data: &[u8]) -> Option<(usize, usize, usize)> {
@@ -881,12 +889,11 @@ fn draw_scene_static_v(fb: &mut Framebuffer, variant: u8) {
     // through) plus a crisp hairline border + top sheen so it reads as a single
     // illuminated physical object hovering above the desktop, not a flush bar.
     let px = PANEL_MARGIN; let pw = w as i32 - 2 * PANEL_MARGIN;
-    // soft drop shadow beneath the dock
-    fb.fill_rounded_rect(px + 3, ptop + 6, pw, PANEL_H, PANEL_R + 1, 0x0C100E);
-    fb.fill_rounded_rect(px + 1, ptop + 3, pw, PANEL_H, PANEL_R,     0x0F140F);
-    // opaque body (uniform with the per-frame tray/tasks repaints) — kept light
-    // and warm so it stands clearly above the wall.
-    fb.fill_rounded_rect(px, ptop, pw, PANEL_H, PANEL_R, PANEL_SOLID);
+    // TRANSLUCENT GLASS BAR: the wallpaper shows through the dock itself, while the
+    // buttons/icons drawn on top stay fully opaque. A subtle shadow sliver below
+    // keeps the floating feel without darkening the glass (nothing opaque under it).
+    fb.fill_rect_s(px + PANEL_R, ptop + PANEL_H, pw - 2 * PANEL_R, 3, 0x070A08);
+    fb.fill_rounded_rect_glass(px, ptop, pw, PANEL_H, PANEL_R, PANEL_SOLID, DOCK_ALPHA);
     // hairline border + top light-catch
     draw_round_border(fb, px, ptop, pw, PANEL_H, PANEL_R, PANEL_EDGE);
     fb.fill_rect_s(px + PANEL_R, ptop + 1, pw - 2 * PANEL_R, 1, 0x66726A);
@@ -975,7 +982,9 @@ fn draw_topbar(fb: &mut Framebuffer, time: &str, s: &SysStats, ticks: u64) {
     let ty = ptop + 7;
     let tray_w = 360;
     let trx = (pr - tray_w - 6).max(PANEL_MARGIN + 8);
-    fb.fill_rect_s(trx, ty, pr - trx - 6, 40, PANEL_SOLID);
+    // Restore the cached glass dock (not an opaque fill) so the bar stays
+    // translucent; the tray text/icons are then drawn on top.
+    fb.restore_bg_rect(trx.max(0) as u32, ty.max(0) as u32, (pr - trx - 6).max(0) as u32, 40);
 
     let cyy = ptop + (PANEL_H - 12) / 2;          // vertical centre of the 12px row
     let txt_top = cyy - 1;                         // AA_T baseline sits on that row
@@ -1115,8 +1124,9 @@ fn draw_taskbar_win_btns(fb: &mut Framebuffer, term_wins: &[TermWin]) {
     let pr = PANEL_MARGIN + (fw as i32 - 2 * PANEL_MARGIN);
     let tray_left = pr - 346;            // keep clear of the right tray
     let tx0 = tasks_start_x(fh);
-    // Clear the whole tasks strip each frame (so closed windows leave no ghost).
-    if tray_left > tx0 { fb.fill_rect_s(tx0, ptop + 7, tray_left - tx0, 40, PANEL_SOLID); }
+    // Clear the tasks strip each frame (so closed windows leave no ghost) by
+    // restoring the cached glass dock — keeps the bar translucent.
+    if tray_left > tx0 { fb.restore_bg_rect(tx0.max(0) as u32, (ptop + 7).max(0) as u32, (tray_left - tx0).max(0) as u32, 40); }
 
     let n = term_wins.len();
     for (slot, tw) in term_wins.iter().enumerate() {
@@ -2188,7 +2198,7 @@ pub extern "C" fn _start() -> ! {
     let mut hover_icon: Option<usize> = None;
     let mut wallpaper_variant: u8 = {   // cycles on "Change Background"
         let wp = sys_wallpaper();       // `wallpaper=N` boot override (test + feature)
-        if wp != u64::MAX { (wp as u8) % WALLPAPER_COUNT } else { 0 }
+        if wp != u64::MAX { (wp as u8) % WALLPAPER_COUNT } else { 5 } // default = Nebula
     };
     let mut pending_screenshot = false; // right-click "Take Screenshot" → capture next clean frame
 
@@ -2237,6 +2247,24 @@ pub extern "C" fn _start() -> ! {
             wallpaper_variant = WP_CUSTOM;
             fb.invalidate_bg();
             scene_dirty = true;
+        }
+
+        // Publish the open-window list for the System Monitor, and service a
+        // force-quit request (close the window the monitor selected).
+        unsafe {
+            let n = wins.len().min(12);
+            for (i, tw) in wins.iter().take(12).enumerate() {
+                let t = tw.win.title.as_bytes();
+                let m = t.len().min(19);
+                APP_TITLES[i][..m].copy_from_slice(&t[..m]);
+                for j in m..20 { APP_TITLES[i][j] = 0; }
+            }
+            APP_COUNT = n;
+            if KILL_IDX >= 0 {
+                let idx = KILL_IDX as usize;
+                KILL_IDX = -1;
+                if idx < wins.len() { wins.remove(idx); scene_dirty = true; }
+            }
         }
 
         // Snapshot old cursor position — the unified render uses this for restore.

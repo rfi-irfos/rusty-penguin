@@ -46,13 +46,49 @@ pub fn current_pid() -> u64 {
     unsafe { PROCS[CURRENT].map_or(0, |p| p.pid) }
 }
 
+// ── CPU accounting ────────────────────────────────────────────────────────────
+// We can't measure per-core CPU% on a single cooperative core directly, but we
+// CAN measure how much of the wall-clock the CPU spends halted (idle) vs running.
+// yield_() halts until the next interrupt; we time those halts with the TSC.
+// busy% = 100 · (1 − idle_cycles / total_cycles). Busy is attributed to the
+// running ring-3 process (the desktop), idle to the idle task (pid 0).
+static mut IDLE_CYCLES:  u64 = 0;
+static mut WIN_START_TSC: u64 = 0;
+static mut LAST_BUSY_PM: u32 = 0;   // last sampled busy permille (0..1000)
+
+#[inline]
+pub fn rdtsc() -> u64 {
+    let lo: u32; let hi: u32;
+    unsafe { core::arch::asm!("rdtsc", out("eax") lo, out("edx") hi, options(nomem, nostack)); }
+    ((hi as u64) << 32) | lo as u64
+}
+
+/// Sample busy permille (0..1000) over the window since the last call, and reset
+/// the window. Drives the System Monitor's CPU graph.
+pub fn cpu_sample() -> u32 {
+    unsafe {
+        let now = rdtsc();
+        if WIN_START_TSC == 0 { WIN_START_TSC = now; IDLE_CYCLES = 0; return LAST_BUSY_PM; }
+        let total = now.wrapping_sub(WIN_START_TSC);
+        let idle = IDLE_CYCLES.min(total);
+        LAST_BUSY_PM = if total > 0 { ((total - idle) * 1000 / total) as u32 } else { 0 };
+        WIN_START_TSC = now; IDLE_CYCLES = 0;
+        LAST_BUSY_PM
+    }
+}
+/// Most recent busy permille without resetting (for per-process CPU columns).
+pub fn last_busy_pm() -> u32 { unsafe { LAST_BUSY_PM } }
+
 pub fn yield_() {
     // Wait for the next hardware interrupt (100Hz timer, keyboard, or mouse).
     // This throttles the ring-3 main loop to ≤100 iterations/second instead of
-    // spinning at full CPU speed, which caused topbar/cursor flickering.
+    // spinning at full CPU speed, which caused topbar/cursor flickering. The
+    // halted cycles are counted as idle for the CPU meter.
+    let t0 = rdtsc();
     unsafe {
         core::arch::asm!("sti", options(nostack));
         core::arch::asm!("hlt", options(nostack));
+        IDLE_CYCLES = IDLE_CYCLES.wrapping_add(rdtsc().wrapping_sub(t0));
     }
 }
 
