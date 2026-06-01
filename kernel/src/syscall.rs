@@ -194,6 +194,7 @@ pub extern "C" fn syscall_handler(nr: u64, arg1: u64, arg2: u64, arg3: u64) -> u
         // space calls syscall(0x1337) so the kernel can log that it reached
         // ring 3 and trapped back. arg1 is a tag the task passes (its id).
         0x1337 => {
+            crate::sched::note_syscall(); // liveness signal for the watchdog
             crate::serial::write_str("[sched]   ring-3 syscall reached kernel, tag=");
             crate::serial::write_hex_u64(arg1);
             crate::serial::write_byte(b'\n');

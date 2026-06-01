@@ -530,6 +530,10 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
         // Hung-app isolation: a healthy + a wedged ring-3 process under preemption.
         sched::selftest_multiproc(); // never returns
     }
+    if unsafe { mb2_cmdline_contains(mb2, b"watchdog") } {
+        // Detect + force-quit a hung ring-3 process, then keep running.
+        sched::selftest_watchdog(); // never returns
+    }
     // autostart=N → desktop opens app N on launch (deterministic GUI screendumps).
     if let Some(n) = unsafe { mb2_cmdline_value(mb2, b"autostart=") } {
         unsafe { AUTOSTART_APP = n; }

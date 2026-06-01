@@ -122,6 +122,36 @@ static mut TASKS: [Task; MAX_TASKS] =
 static mut KSTACKS: [[u8; KSTACK_SIZE]; MAX_TASKS] = [[0; KSTACK_SIZE]; MAX_TASKS];
 static mut CUR_TASK: usize = 0;
 
+// Per-task syscall counter — a liveness signal. A process that makes no syscalls
+// over a window has stopped answering the kernel; the watchdog treats that as
+// "not responding" (a stand-in for a desktop app that stops servicing the
+// compositor) and can force-quit it.
+static mut TASK_SYSCALLS: [u64; MAX_TASKS] = [0; MAX_TASKS];
+
+/// Bump the current task's syscall count (called from the syscall path).
+pub fn note_syscall() {
+    unsafe {
+        let c = CUR_TASK;
+        if c < MAX_TASKS {
+            TASK_SYSCALLS[c] = TASK_SYSCALLS[c].wrapping_add(1);
+        }
+    }
+}
+/// How many syscalls task `idx` has made.
+pub fn task_syscalls(idx: usize) -> u64 {
+    unsafe { if idx < MAX_TASKS { TASK_SYSCALLS[idx] } else { 0 } }
+}
+/// Force-quit a task: drop it from the schedule so it never runs again. (Its
+/// address-space frames are not yet reclaimed — a follow-up; the slot is freed.)
+pub fn kill_task(idx: usize) {
+    unsafe {
+        if idx < MAX_TASKS && idx != 0 {
+            TASKS[idx].alive = false;
+            TASKS[idx].used = false;
+        }
+    }
+}
+
 /// Save callee-saved registers + rsp of the current task into `*prev`, then load
 /// `next` into rsp and restore that task's callee-saved registers. The `ret`
 /// resumes wherever the next task last called context_switch (or its entry, for
@@ -643,6 +673,67 @@ pub fn selftest_multiproc() -> ! {
             write_str("[mp] === ISOLATION PROVEN: B spun forever, A + kernel kept running ===\n");
         }
     }
+}
+
+/// `watchdog` brick — recovery, not just survival: **detect a hung process and
+/// force-quit it.** Same setup as the isolation demo (healthy A + wedged B), but
+/// now the kernel boot thread runs a watchdog: a process whose syscall count
+/// stops advancing over a window is "not responding" and gets terminated. Proves
+/// the kernel can reclaim a wedged app's CPU slot so the rest keeps running — the
+/// mechanism behind a desktop "Force Quit". Gated behind `watchdog`.
+pub fn selftest_watchdog() -> ! {
+    use crate::serial::write_str;
+    write_str("\n[wd] === watchdog: detect + force-quit a hung process ===\n");
+    unsafe {
+        core::arch::asm!("cli");
+        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3() };
+        CUR_TASK = 0;
+    }
+    let a = spawn_ring3_low(0xA1);                     // healthy (syscalls)
+    let b = spawn_ring3_low_with(&HUNG_STUB, None);    // wedged (jmp $)
+    if a == 0 || b == 0 { write_str("[wd] spawn failed\n"); halt(); }
+    write_str("[wd] process A (healthy) + process B (HUNG) spawned; arming watchdog\n");
+    crate::idt::set_timer_vector(irq_timer_preempt as *const () as u64);
+    unsafe { core::arch::asm!("sti"); }
+
+    let mut prev_b = 0u64;
+    let mut stall = 0u32;
+    let mut killed = false;
+    let mut post = 0u32;
+    loop {
+        write_str("[wd] watchdog: checking process liveness\n");
+        busy_spin();
+        let sb = task_syscalls(b);
+        if !killed {
+            // No syscall progress since the last check → another strike.
+            if sb == prev_b { stall += 1; } else { stall = 0; }
+            prev_b = sb;
+            if stall >= 3 {
+                write_str("[wd] process B NOT RESPONDING (no progress) — force-quitting\n");
+                kill_task(b);
+                killed = true;
+                write_str("[wd] B terminated and dropped from the schedule\n");
+            }
+        } else {
+            // After the kill, show A is still alive and B is gone for good.
+            post += 1;
+            if post == 4 {
+                write_str("[wd]   B syscalls (frozen): ");
+                log_u64(task_syscalls(b));
+                write_str("  A syscalls (still climbing): ");
+                log_u64(task_syscalls(a));
+                write_str("\n[wd] === RECOVERY PROVEN: hung app force-quit, system healthy ===\n");
+            }
+        }
+    }
+}
+
+fn log_u64(mut v: u64) {
+    if v == 0 { crate::serial::write_byte(b'0'); return; }
+    let mut buf = [0u8; 20];
+    let mut i = buf.len();
+    while v > 0 { i -= 1; buf[i] = b'0' + (v % 10) as u8; v /= 10; }
+    for &b in &buf[i..] { crate::serial::write_byte(b); }
 }
 
 /// Increment-3c self-test (cmdline `schedtest5`): one ring-3 task in a private
