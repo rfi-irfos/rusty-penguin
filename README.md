@@ -17,8 +17,9 @@
 
 *…and then we played that keynote back **on the kernel it triggered**. The actual
 Torvalds/Hohndel talk, decoded by our own from-scratch `.rpv` codec and blitted to
-our own framebuffer — no browser, no Linux, no external codec. See
-[docs/META_VIDEO.md](docs/META_VIDEO.md).*
+our own framebuffer — no browser, no Linux, no external codec. It now ships as a
+windowed **Media Player** app on the desktop (press **V** for a Windows-Media-Player-style
+plasma visualizer). See [docs/META_VIDEO.md](docs/META_VIDEO.md).*
 
 **Rusty Penguin is a complete operating system written from scratch in pure Rust —
 its own bootloader, kernel, drivers, window manager and apps, with no Linux kernel
@@ -127,6 +128,8 @@ velocity equals completion.
 | Window manager, floating dock, start menu, arrow cursor | ✅ |
 | **Quick Settings panel (Wi-Fi/BT/dark/volume tiles, tray-anchored)** | ✅ GNOME-style |
 | Apps: terminal, files, editor, calculator, monitor, settings, TIS console | ✅ |
+| **Media player (kernel-decoded video + audio in a window; WMP plasma visualizer easter egg)** | ✅ QEMU-verified |
+| **Screenshot tool (capture screen → PPM in the VFS)** | ✅ |
 | **NIC drivers: RTL8139, Intel e1000/i219, Realtek r8169** | ✅ ~95% laptop coverage |
 | **TCP/IP stack: ARP/ICMP/UDP/DHCP/DNS/TCP/HTTP** | ✅ fetches real internet |
 | **TLS 1.3 client (X25519 · ChaCha20-Poly1305 · from scratch)** | ✅ real HTTPS, QEMU-verified vs live web |
@@ -267,8 +270,9 @@ sparse ternary inference -- 4 layers x dim 8
 
 This is the same insight behind BitNet and ternary LLM quantization —
 implemented here from first principles in Rust, running bare-metal in a bootable
-OS. Each win is logged, with its honest basis, in
-[`docs/TERNARY_FINDINGS.md`](docs/TERNARY_FINDINGS.md).
+OS. Each win is logged, with its honest basis, in `docs/TERNARY_FINDINGS.md` in
+the [Ternary Intelligence Stack](https://ternlang.com) repo (the shared evidence
+log for the whole stack, not just this OS).
 
 ---
 
