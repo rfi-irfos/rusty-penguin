@@ -538,6 +538,10 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
         // Two REAL ELF programs as preemptively-scheduled, isolated processes.
         sched::selftest_realelf(); // never returns
     }
+    if unsafe { mb2_cmdline_contains(mb2, b"offscreen") } {
+        // A scheduled process renders into an isolated buffer the compositor reads.
+        sched::selftest_offscreen(); // never returns
+    }
     // autostart=N → desktop opens app N on launch (deterministic GUI screendumps).
     if let Some(n) = unsafe { mb2_cmdline_value(mb2, b"autostart=") } {
         unsafe { AUTOSTART_APP = n; }

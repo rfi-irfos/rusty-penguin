@@ -746,10 +746,26 @@ fn log_u64(mut v: u64) {
 // to run each app (e.g. fbDOOM) in its own process. Gated behind `realelf`.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Build a minimal static ET_EXEC ELF (one R+X PT_LOAD segment) that runs the
-/// tagged R3_STUB syscall loop at `load_va`. A non-blocking test program so the
-/// real-ELF scheduled-process path can be verified without a framebuffer/keyboard.
-fn make_test_elf(load_va: u64, tag: u8) -> alloc::vec::Vec<u8> {
+// Offscreen-buffer VA mapped into a render process; its writes land in a frame
+// the kernel (a stand-in for the desktop compositor) reads back.
+const FB_VA: u64 = 0x0080_0000;
+
+// A ring-3 program that writes a marker (0xDEADBEEF) to the offscreen buffer at
+// FB_VA, then syscalls a tag, then spins — proving a process can render into an
+// isolated buffer the compositor can read. Position-independent (immediates only).
+const RENDER_STUB: [u8; 25] = [
+    0xb8, 0x00, 0x00, 0x80, 0x00,       // mov eax, 0x00800000 (FB_VA)
+    0xc7, 0x00, 0xef, 0xbe, 0xad, 0xde, // mov dword [rax], 0xDEADBEEF
+    0xbf, 0xf1, 0x00, 0x00, 0x00,       // mov edi, 0xF1 (tag)
+    0xb8, 0x37, 0x13, 0x00, 0x00,       // mov eax, 0x1337
+    0x0f, 0x05,                         // syscall
+    0xeb, 0xe7,                         // jmp -25 (back to start)
+];
+
+/// Build a minimal static ET_EXEC ELF (one R+X PT_LOAD segment) running `code`
+/// at `load_va`. A non-blocking test program so the real-ELF scheduled-process
+/// path verifies without framebuffer/keyboard contention.
+fn make_elf(load_va: u64, code: &[u8]) -> alloc::vec::Vec<u8> {
     const HDRS: usize = 64 + 56; // Elf64 header + one program header
     let mut e = alloc::vec![0u8; HDRS];
     e[0..4].copy_from_slice(b"\x7fELF");
@@ -770,13 +786,19 @@ fn make_test_elf(load_va: u64, tag: u8) -> alloc::vec::Vec<u8> {
     e[p + 4..p + 8].copy_from_slice(&5u32.to_le_bytes());  // p_flags = R+X
     e[p + 16..p + 24].copy_from_slice(&load_va.to_le_bytes()); // p_vaddr
     e[p + 24..p + 32].copy_from_slice(&load_va.to_le_bytes()); // p_paddr
-    let total = (HDRS + R3_STUB.len()) as u64;
+    let total = (HDRS + code.len()) as u64;
     e[p + 32..p + 40].copy_from_slice(&total.to_le_bytes());   // p_filesz
     e[p + 40..p + 48].copy_from_slice(&total.to_le_bytes());   // p_memsz
     e[p + 48..p + 56].copy_from_slice(&0x1000u64.to_le_bytes()); // p_align
-    e.extend_from_slice(&R3_STUB);
-    e[HDRS + 1] = tag; // patch the `mov edi, imm` tag byte
+    e.extend_from_slice(code);
     e
+}
+
+/// Build the tagged syscall-loop test ELF (R3_STUB with `tag` patched in).
+fn make_test_elf(load_va: u64, tag: u8) -> alloc::vec::Vec<u8> {
+    let mut code = R3_STUB;
+    code[1] = tag; // patch the `mov edi, imm` tag byte
+    make_elf(load_va, &code)
 }
 
 const ELF_STACK_VA: u64 = 0x0070_0000; // private-low user stack for a loaded ELF
@@ -793,7 +815,7 @@ fn rd_u16(b: &[u8], o: usize) -> u16 { u16::from_le_bytes(b[o..o + 2].try_into()
 /// task. Walks the program headers and copies each PT_LOAD segment into freshly
 /// allocated frames mapped into the new space (written via the physmap, so no
 /// CR3 switch is needed). Returns the task index, or 0 on failure.
-fn spawn_ring3_elf(elf: &[u8]) -> usize {
+fn spawn_ring3_elf(elf: &[u8], fb_frame: u64) -> usize {
     unsafe {
         if elf.len() < 64 || &elf[0..4] != b"\x7fELF" { return 0; }
         for i in 1..MAX_TASKS {
@@ -843,6 +865,13 @@ fn spawn_ring3_elf(elf: &[u8]) -> usize {
             core::ptr::write_bytes(crate::vmm::phys_to_virt(stk) as *mut u8, 0, 4096);
             crate::vmm::map_page_in(as_, ELF_STACK_VA, stk, pfw);
 
+            // Optional offscreen framebuffer: a kernel-owned frame mapped into the
+            // process at FB_VA. The process renders into it; the compositor (here,
+            // the boot thread) reads it back via the physmap — isolated rendering.
+            if fb_frame != 0 {
+                crate::vmm::map_page_in(as_, FB_VA, fb_frame, pfw);
+            }
+
             // Prime this task's kernel stack with a ring-3 iret frame at e_entry.
             let base = core::ptr::addr_of_mut!(KSTACKS[i]) as *mut u8;
             let ktop = ((base.add(KSTACK_SIZE) as u64) & !0xF) as u64;
@@ -876,8 +905,8 @@ pub fn selftest_realelf() -> ! {
     }
     let e1 = make_test_elf(0x0050_0000, 0xE1);
     let e2 = make_test_elf(0x0050_0000, 0xE2); // same VA, different private space
-    let a = spawn_ring3_elf(&e1);
-    let b = spawn_ring3_elf(&e2);
+    let a = spawn_ring3_elf(&e1, 0);
+    let b = spawn_ring3_elf(&e2, 0);
     if a == 0 || b == 0 { write_str("[elf] spawn_ring3_elf failed\n"); halt(); }
     write_str("[elf] two real ELF processes @ 0x500000 (isolated); enabling preemption\n");
     crate::idt::set_timer_vector(irq_timer_preempt as *const () as u64);
@@ -890,6 +919,43 @@ pub fn selftest_realelf() -> ! {
         if n == 8 {
             write_str("[elf] === REAL-ELF MULTIPROCESS PROVEN: both ELF tags ran, isolated, preempted ===\n");
         }
+    }
+}
+
+/// `offscreen` brick — isolated rendering: a scheduled ELF process writes a
+/// marker into an offscreen framebuffer that's private to it (mapped at FB_VA
+/// from a kernel-owned frame), and the boot thread — standing in for the desktop
+/// compositor — reads that frame back through the physmap. Proving a process can
+/// render into a buffer the compositor owns is the missing piece between
+/// "isolated processes" (brick 3a) and "windowed apps" (a real compositor blits
+/// each process's buffer into its window). Gated behind `offscreen`.
+pub fn selftest_offscreen() -> ! {
+    use crate::serial::write_str;
+    write_str("\n[fb] === offscreen: a scheduled process renders into a buffer the compositor reads ===\n");
+    unsafe {
+        core::arch::asm!("cli");
+        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3() };
+        CUR_TASK = 0;
+    }
+    let fb_frame = match crate::pmm::alloc_frame() { Some(f) => f, None => { write_str("[fb] no frame\n"); halt(); } };
+    unsafe { core::ptr::write_bytes(crate::vmm::phys_to_virt(fb_frame) as *mut u8, 0, 4096); }
+    let elf = make_elf(0x0050_0000, &RENDER_STUB);
+    let t = spawn_ring3_elf(&elf, fb_frame);
+    if t == 0 { write_str("[fb] spawn failed\n"); halt(); }
+    write_str("[fb] render process spawned with a private offscreen buffer; enabling preemption\n");
+    crate::idt::set_timer_vector(irq_timer_preempt as *const () as u64);
+    unsafe { core::arch::asm!("sti"); }
+    let mut proven = false;
+    loop {
+        busy_spin();
+        // The "compositor" reads the process's offscreen buffer via the physmap.
+        let marker = unsafe { *(crate::vmm::phys_to_virt(fb_frame) as *const u32) };
+        if marker == 0xDEAD_BEEF && !proven {
+            write_str("[fb] compositor read process buffer: 0xDEADBEEF present\n");
+            write_str("[fb] === OFFSCREEN RENDER PROVEN: process rendered into an isolated buffer the compositor read back ===\n");
+            proven = true;
+        }
+        write_str("[fb] boot/compositor tick\n");
     }
 }
 
