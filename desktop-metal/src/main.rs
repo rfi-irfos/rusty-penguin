@@ -171,6 +171,7 @@ fn open_app_by_index(idx: u64, w: i32, h: i32, n: usize) -> Option<TermWin> {
         13 => open_screenshot(w, h, n),
         14 => open_image_viewer(w, h, n),
         15 => open_system_clock(w, h, n),
+        16 => open_process_monitor(w, h, n),
         100 => open_term(w, h, n, &LAUNCHERS[0]),
         _  => None,
     }
@@ -1398,12 +1399,13 @@ const MENU_ITEMS: &[MenuItem] = &[
     MenuItem { label: "Screenshot",     desc: "Capture the screen to a file",  color: 0x8CC6E5, icon: icons::IC_SHOT,  kind: MenuLaunch::App(13) },
     MenuItem { label: "Image Viewer",   desc: "View PPM images & screenshots",  color: 0x8CC6E5, icon: icons::IC_IMAGE, kind: MenuLaunch::App(14) },
     MenuItem { label: "Clock",          desc: "Time, stopwatch, timer, world",  color: 0x6FE18B, icon: icons::IC_CLOCK, kind: MenuLaunch::App(15) },
-    // games start at index 13
+    MenuItem { label: "Task Manager",   desc: "Processes, CPU & memory",        color: 0x8CC6E5, icon: icons::IC_TASKS, kind: MenuLaunch::App(16) },
+    // games start at index 14
     MenuItem { label: "Snake",        desc: "Classic arcade",             color: 0x4ADE80, icon: icons::IC_SNAKE,    kind: MenuLaunch::App(6) },
     MenuItem { label: "Minesweeper",  desc: "Find the mines",             color: 0xFCD34D, icon: icons::IC_MINES,    kind: MenuLaunch::App(7) },
     MenuItem { label: "Doom",         desc: "E1M1 — shareware DOOM",      color: 0xEF4444, icon: icons::IC_DOOM,     kind: MenuLaunch::App(8) },
 ];
-const MENU_APPS_END: usize = 13;  // items 0..13 = apps, 13..16 = games
+const MENU_APPS_END: usize = 14;  // items 0..14 = apps, 14..17 = games
 
 const MENU_W:       i32 = 280;
 const MENU_HDR_H:   i32 = 54;   // dingir avatar + title + subtitle
@@ -2479,6 +2481,7 @@ pub extern "C" fn _start() -> ! {
                             MenuLaunch::App(13)  => open_screenshot(w, h, wins.len()),
                             MenuLaunch::App(14)  => open_image_viewer(w, h, wins.len()),
                             MenuLaunch::App(15)  => open_system_clock(w, h, wins.len()),
+                            MenuLaunch::App(16)  => open_process_monitor(w, h, wins.len()),
                             MenuLaunch::App(_)   => None,
                         };
                         if let Some(tw) = opened { wins.push(tw); }

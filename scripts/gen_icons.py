@@ -123,11 +123,18 @@ def ic_clock(d):
     d.line([cx,cy,cx,cy-s(5.5)], fill=255, width=W+SS)    # hour hand
     d.line([cx,cy,cx+s(4.5),cy+s(2)], fill=255, width=W)  # minute hand
 
+def ic_tasks(d):
+    # System monitor — a frame with activity bars (task manager).
+    d.rounded_rectangle([s(3),s(4),s(21),s(20)], radius=s(2), outline=255, width=W)
+    d.rectangle([s(7),s(13),s(9),s(17)], fill=255)
+    d.rectangle([s(11),s(9),s(13),s(17)], fill=255)
+    d.rectangle([s(15),s(11),s(17),s(17)], fill=255)
+
 ICONS = [
     ("TERM", ic_term), ("FILES", ic_files), ("EDIT", ic_edit), ("CALC", ic_calc),
     ("SETTINGS", ic_settings), ("TIS", ic_tis), ("SNAKE", ic_snake),
     ("MINES", ic_mines), ("DOOM", ic_doom), ("WEB", ic_web), ("MEDIA", ic_media),
-    ("SHOT", ic_shot), ("IMAGE", ic_image), ("CLOCK", ic_clock),
+    ("SHOT", ic_shot), ("IMAGE", ic_image), ("CLOCK", ic_clock), ("TASKS", ic_tasks),
 ]
 
 def main():
