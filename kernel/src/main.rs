@@ -39,6 +39,10 @@ mod ahci;
 mod diskfs;
 mod virtio_gpu;
 mod p256;
+mod bignum;
+mod x509;
+mod test_certs;
+mod ca_roots;
 
 use ternary_core::{Trit, Tryte};
 use mathematics::{mul_tryte, consensus, scale};
@@ -403,6 +407,15 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
         vga::write_str("  [crypto: TLS primitives OK]\n", vga::Color::Green);
     } else {
         vga::write_str("  [crypto: SELF-TEST FAILED]\n", vga::Color::Red);
+    }
+
+    // X.509 certificate-chain validation — the trust half of TLS (RSA-PKCS#1 +
+    // ECDSA-P256, chain walk to an embedded root, expiry + hostname). Validates an
+    // embedded leaf->int->root chain and confirms a tampered copy is rejected.
+    if x509::selftest() {
+        vga::write_str("  [x509: cert-chain trust OK]\n", vga::Color::Green);
+    } else {
+        vga::write_str("  [x509: SELF-TEST FAILED]\n", vga::Color::Red);
     }
 
     // AHCI/SATA disk + RPFS filesystem — persistent bare-metal storage.

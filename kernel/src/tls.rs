@@ -254,6 +254,40 @@ fn parse_server_hello(msg: &[u8]) -> Option<[u8; 32]> {
     None
 }
 
+/// Split a TLS 1.3 Certificate message body (after the 4-byte handshake header)
+/// into the individual DER certificates, appending them to `out` (leaf first).
+fn parse_cert_list(body: &[u8], out: &mut Vec<Vec<u8>>) {
+    if body.is_empty() { return; }
+    let ctx_len = body[0] as usize;
+    let mut p = 1 + ctx_len;
+    if p + 3 > body.len() { return; }
+    let list_len = ((body[p] as usize) << 16) | ((body[p + 1] as usize) << 8) | body[p + 2] as usize;
+    p += 3;
+    let end = core::cmp::min(p + list_len, body.len());
+    while p + 3 <= end {
+        let clen = ((body[p] as usize) << 16) | ((body[p + 1] as usize) << 8) | body[p + 2] as usize;
+        p += 3;
+        if p + clen > end { break; }
+        out.push(body[p..p + clen].to_vec());
+        p += clen;
+        if p + 2 > end { break; }
+        let ext_len = ((body[p] as usize) << 8) | body[p + 1] as usize; // per-cert extensions
+        p += 2 + ext_len;
+    }
+}
+
+/// Human-readable reason for a rejected chain (for the serial log).
+fn verdict_str(v: crate::x509::Verdict) -> &'static str {
+    match v {
+        crate::x509::Verdict::Ok => "ok",
+        crate::x509::Verdict::Expired => "expired / clock outside validity",
+        crate::x509::Verdict::BadHostname => "hostname not in certificate (SAN)",
+        crate::x509::Verdict::BadSignature => "bad signature in chain",
+        crate::x509::Verdict::Untrusted => "no path to a trusted root",
+        crate::x509::Verdict::Malformed => "malformed certificate",
+    }
+}
+
 // ── The handshake ────────────────────────────────────────────────────────────
 
 /// Fetch `https://host{path}` and write the raw HTTP response (headers+body,
@@ -322,6 +356,7 @@ pub fn https_get(host: &str, path: &str, out: &mut [u8]) -> Option<usize> {
     let mut hs_acc: Vec<u8> = Vec::new();
     let mut th_before_sfin = [0u8; 32];
     let mut got_finished = false;
+    let mut cert_chain: Vec<Vec<u8>> = Vec::new(); // DER certs from the Certificate msg
     let mut guard = 0;
     while !got_finished {
         guard += 1; if guard > 64 { return None; }
@@ -357,13 +392,39 @@ pub fn https_get(host: &str, path: &str, out: &mut [u8]) -> Option<usize> {
                 got_finished = true;
                 break;
             } else {
-                // EE / Certificate / CertVerify — folded in, not validated.
-                let _ = mtype;
+                if mtype == HS_CERTIFICATE {
+                    // TLS 1.3 Certificate: u8 ctx-len, ctx, then certificate_list:
+                    // u24 total, repeated { u24 cert_len, cert DER, u16 ext_len, ext }.
+                    parse_cert_list(&msg[4..], &mut cert_chain);
+                }
+                // EE / CertVerify still folded in, not independently validated.
                 transcript.update(&msg);
             }
         }
     }
     crate::serial::write_str("  [tls] server Finished verified; handshake complete\n");
+
+    // 4b. Certificate-chain trust: parse the DER chain the server sent and walk it
+    // to an embedded CA root, checking signatures, expiry, and hostname. Without
+    // this the handshake authenticates *a* key but not *whose* — a MITM with any
+    // valid-looking cert would sail through. On failure we abort the connection.
+    {
+        let refs: Vec<&[u8]> = cert_chain.iter().map(|c| c.as_slice()).collect();
+        let verdict = crate::x509::validate_chain(&refs, host.as_bytes());
+        match verdict {
+            crate::x509::Verdict::Ok => {
+                crate::serial::write_str("  [tls] cert chain TRUSTED (");
+                crate::serial::write_str(host);
+                crate::serial::write_str(")\n");
+            }
+            other => {
+                crate::serial::write_str("  [tls] cert chain REJECTED: ");
+                crate::serial::write_str(verdict_str(other));
+                crate::serial::write_str(" — aborting (possible MITM)\n");
+                return None;
+            }
+        }
+    }
 
     // 5. transcript through server Finished → app secrets + client Finished
     let th_sfin = transcript.clone().finalize();

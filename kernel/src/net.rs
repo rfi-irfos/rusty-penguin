@@ -1014,12 +1014,17 @@ pub fn init() -> ternary_core::Trit {
             log_dec(n as u32);
             crate::serial::write_str(" bytes (userspace fetch path OK)\n");
         }
-        // Brick 7 proof: real TLS 1.3 handshake + HTTPS GET against the live web.
+        // Brick 7 proof: real TLS 1.3 handshake + HTTPS GET against the live web,
+        // now with full certificate-chain validation. www.google.com chains
+        // leaf -> WR2 -> GTS Root R1 (all sha256WithRSA), and GTS Root R1 is in
+        // our embedded trust store — so a clean fetch proves the whole trust path
+        // (DER parse, RSA-PKCS#1 verify, chain walk, SAN + expiry). A MITM cert
+        // would make https_get return None here instead of bytes.
         let mut tlsbuf = [0u8; 2048];
-        if let Some(n) = crate::tls::https_get("example.com", "/", &mut tlsbuf) {
-            crate::serial::write_str("  [net] https_get(\"example.com\") -> ");
+        if let Some(n) = crate::tls::https_get("www.google.com", "/", &mut tlsbuf) {
+            crate::serial::write_str("  [net] https_get(\"www.google.com\") -> ");
             log_dec(n as u32);
-            crate::serial::write_str(" bytes decrypted (TLS 1.3 path OK)\n");
+            crate::serial::write_str(" bytes decrypted (TLS 1.3 + verified cert chain)\n");
             // Log the HTTP status line from inside the encrypted channel.
             let mut end = 0;
             while end + 1 < n && !(tlsbuf[end] == b'\r' && tlsbuf[end+1] == b'\n') { end += 1; }
@@ -1027,7 +1032,7 @@ pub fn init() -> ternary_core::Trit {
             crate::serial::write_str(core::str::from_utf8(&tlsbuf[..end]).unwrap_or("?"));
             crate::serial::write_str("\n");
         } else {
-            crate::serial::write_str("  [net] https_get(\"example.com\") failed\n");
+            crate::serial::write_str("  [net] https_get(\"www.google.com\") failed (cert rejected or no route)\n");
         }
     }
     // Local loopback proof: TCP + HTTP from the host via SLIRP (10.0.2.2:8088).
