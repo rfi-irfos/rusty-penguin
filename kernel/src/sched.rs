@@ -833,6 +833,13 @@ fn rd_u16(b: &[u8], o: usize) -> u16 { u16::from_le_bytes(b[o..o + 2].try_into()
 /// allocated frames mapped into the new space (written via the physmap, so no
 /// CR3 switch is needed). Returns the task index, or 0 on failure.
 fn spawn_ring3_elf(elf: &[u8], fb_frame: u64) -> usize {
+    spawn_ring3_elf_cfg(elf, ELF_STACK_TOP, 1, fb_frame)
+}
+
+/// Like `spawn_ring3_elf` but with a configurable user stack (`stack_top`,
+/// `stack_pages`) — real programs (the desktop) want a multi-page stack at their
+/// expected VA, not the single test-program page.
+fn spawn_ring3_elf_cfg(elf: &[u8], stack_top: u64, stack_pages: u32, fb_frame: u64) -> usize {
     unsafe {
         if elf.len() < 64 || &elf[0..4] != b"\x7fELF" { return 0; }
         for i in 1..MAX_TASKS {
@@ -877,10 +884,15 @@ fn spawn_ring3_elf(elf: &[u8], fb_frame: u64) -> usize {
                 }
             }
 
-            // User stack page.
-            let stk = match crate::pmm::alloc_frame() { Some(f) => f, None => return 0 };
-            core::ptr::write_bytes(crate::vmm::phys_to_virt(stk) as *mut u8, 0, 4096);
-            crate::vmm::map_page_in(as_, ELF_STACK_VA, stk, pfw);
+            // User stack: `stack_pages` pages ending at `stack_top` (grows down).
+            let stack_bottom = stack_top - (stack_pages as u64) * 4096;
+            let mut sva = stack_bottom;
+            while sva < stack_top {
+                let stk = match crate::pmm::alloc_frame() { Some(f) => f, None => return 0 };
+                core::ptr::write_bytes(crate::vmm::phys_to_virt(stk) as *mut u8, 0, 4096);
+                crate::vmm::map_page_in(as_, sva, stk, pfw);
+                sva += 4096;
+            }
 
             // Optional offscreen framebuffer: a kernel-owned frame mapped into the
             // process at FB_VA. The process renders into it; the compositor (here,
@@ -894,9 +906,9 @@ fn spawn_ring3_elf(elf: &[u8], fb_frame: u64) -> usize {
             let ktop = ((base.add(KSTACK_SIZE) as u64) & !0xF) as u64;
             let mut sp = ktop;
             let push = |sp: &mut u64, v: u64| { *sp -= 8; *(*sp as *mut u64) = v; };
-            push(&mut sp, 0x1b);          // ss
-            push(&mut sp, ELF_STACK_TOP); // user rsp
-            push(&mut sp, 0x202);         // rflags IF=1
+            push(&mut sp, 0x1b);              // ss
+            push(&mut sp, stack_top - 8);     // user rsp (16-aligned-ish, room for the program)
+            push(&mut sp, 0x202);             // rflags IF=1
             push(&mut sp, 0x23);          // cs
             push(&mut sp, entry);         // rip
             for _ in 0..15 { push(&mut sp, 0); }
@@ -1116,6 +1128,41 @@ pub fn selftest_recover_win() -> ! {
                 closed = true;
             }
         }
+    }
+}
+
+/// `schedesktop` brick — run the REAL desktop as a preemptively-scheduled process
+/// in its own private address space, instead of the normal single-process launch.
+/// This proves the spawn_ring3_elf loader handles a real, complex 11 MB program
+/// (24 MiB heap, multi-page stack, hundreds of syscalls) — the bridge from the
+/// synthetic test apps (3a–3e) to the real multi-process desktop. The boot thread
+/// idles; the desktop gets CPU via the timer and renders normally. Gated behind
+/// `schedesktop` (the default desktop boot path is untouched).
+pub fn selftest_schedesktop() -> ! {
+    use crate::serial::write_str;
+    write_str("\n[mpd] === schedesktop: the REAL desktop as a scheduled ring-3 process ===\n");
+    let elf = match crate::ramfs::find(b"bin/desktop") {
+        Some(e) => e,
+        None => { write_str("[mpd] bin/desktop not in initrd\n"); halt(); }
+    };
+    unsafe {
+        core::arch::asm!("cli");
+        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3() };
+        CUR_TASK = 0;
+    }
+    write_str("[mpd] loading real desktop into a private address space (24 MiB heap)...\n");
+    let d = spawn_ring3_elf_cfg(elf, crate::vmm::USER_STACK_TOP, crate::vmm::USER_STACK_PAGES as u32, 0);
+    if d == 0 { write_str("[mpd] spawn_ring3_elf failed (out of frames?)\n"); halt(); }
+    write_str("[mpd] desktop scheduled; clearing screen + enabling preemption\n");
+    // Match the normal launch: hand the desktop a black canvas.
+    if crate::fb::is_live() {
+        crate::fb::fill(0, 0, crate::fb::width(), crate::fb::height(), 0x000000);
+    }
+    crate::idt::set_timer_vector(irq_timer_preempt as *const () as u64);
+    unsafe { core::arch::asm!("sti"); }
+    // Boot thread idles; the desktop process gets the CPU and renders.
+    loop {
+        busy_spin();
     }
 }
 

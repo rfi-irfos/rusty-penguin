@@ -554,6 +554,10 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
         // A hung windowed app is force-quit; the healthy one keeps running.
         sched::selftest_recover_win(); // never returns
     }
+    if unsafe { mb2_cmdline_contains(mb2, b"schedesktop") } {
+        // The REAL desktop loaded + run as a scheduled process (not the default path).
+        sched::selftest_schedesktop(); // never returns
+    }
     // autostart=N → desktop opens app N on launch (deterministic GUI screendumps).
     if let Some(n) = unsafe { mb2_cmdline_value(mb2, b"autostart=") } {
         unsafe { AUTOSTART_APP = n; }
