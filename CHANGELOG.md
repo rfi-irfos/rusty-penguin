@@ -4,6 +4,23 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+### Fixed — Real DOOM was broken by an mmap/initrd overlap; in-OS Doom faced the wrong way (2026-06-01)
+
+- Real fbDOOM on the bare-metal kernel opened DOOM1.WAD and bailed with "doesn't
+  have IWAD or PWAD id". Root cause: the Linux `MMAP_BASE` arena started at the
+  exact address the initrd is relocated to (128 MiB), so ld.so's library mmaps
+  **overwrote the WAD in place**. Moved the arena to 160 MiB. Real fbDOOM now
+  loads the WAD, runs W_Init/R_Init, and reaches I_InitGraphics with the real
+  1920×1080 framebuffer (serial-verified). Also added `KDGKBTYPE`/`KDSKBMODE`
+  ioctls + raw-scancode delivery so its keyboard initializes, and re-enable the
+  PS/2 keyboard in `enter()` so IRQs keep flowing to a console app. (A headless
+  QMP input nuance still blocks the final pre-game calibration; needs a real
+  keyboard to confirm fully playable.)
+- The in-desktop "Doom" app (WadDoom, real E1M1 geometry) rendered a flat color:
+  the world Y axis is negated but the facing angle wasn't, pointing the camera
+  into the wall behind the spawn. Negated the angle to match — it now faces and
+  navigates correctly. (Still a basic flat-shaded wall renderer, not fbDOOM.)
+
 ### Added — Multiproc brick 2: watchdog force-quits a hung process (2026-06-01)
 
 - Brick 1 proved a wedged process can't *freeze* the others; this adds
