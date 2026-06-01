@@ -526,6 +526,10 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
     if unsafe { mb2_cmdline_contains(mb2, b"acpireboot") } {
         acpi::reboot(); // verify ACPI/8042 reset
     }
+    if unsafe { mb2_cmdline_contains(mb2, b"multiproc") } {
+        // Hung-app isolation: a healthy + a wedged ring-3 process under preemption.
+        sched::selftest_multiproc(); // never returns
+    }
     // autostart=N → desktop opens app N on launch (deterministic GUI screendumps).
     if let Some(n) = unsafe { mb2_cmdline_value(mb2, b"autostart=") } {
         unsafe { AUTOSTART_APP = n; }

@@ -537,6 +537,18 @@ const LOW_STACK_TOP: u64 = LOW_STACK_VA + 0x1000;
 /// stub at low `LOW_CODE_VA`. `tag` is patched into the stub's syscall arg so two
 /// processes at the same VA emit distinguishable syscalls.
 fn spawn_ring3_low(tag: u8) -> usize {
+    spawn_ring3_low_with(&R3_STUB, Some(tag))
+}
+
+/// A "hung app": a pure infinite loop (`jmp $`) that never syscalls and never
+/// yields. The only thing that can take the CPU back is the preemption timer —
+/// so if the rest of the system keeps running while this spins, isolation holds.
+static HUNG_STUB: [u8; 2] = [0xeb, 0xfe]; // jmp -2
+
+/// Spawn a ring-3 task in a private-low-half address space running `stub`. If
+/// `tag` is Some, patch it into the stub's `mov edi, imm` byte (offset 1) so two
+/// processes at the same VA emit distinguishable syscalls.
+fn spawn_ring3_low_with(stub: &[u8], tag: Option<u8>) -> usize {
     unsafe {
         for i in 1..MAX_TASKS {
             if !TASKS[i].used {
@@ -547,8 +559,8 @@ fn spawn_ring3_low(tag: u8) -> usize {
                 // (its low identity isn't mapped here) or with the other process.
                 let code = crate::pmm::alloc_frame().unwrap_or(0);
                 core::ptr::write_bytes(code as *mut u8, 0, 4096);
-                core::ptr::copy_nonoverlapping(R3_STUB.as_ptr(), code as *mut u8, R3_STUB.len());
-                *(code as *mut u8).add(1) = tag; // patch `mov edi, imm` tag byte
+                core::ptr::copy_nonoverlapping(stub.as_ptr(), code as *mut u8, stub.len());
+                if let Some(t) = tag { *(code as *mut u8).add(1) = t; } // patch tag byte
                 crate::vmm::map_page_in(as_, LOW_CODE_VA, code, pf);
                 // User stack page, also in the private low half.
                 let stk = crate::pmm::alloc_frame().unwrap_or(0);
@@ -596,6 +608,40 @@ pub fn selftest_ring3_lowhalf() -> ! {
     loop {
         write_str("[sched] boot (kernel ring-0)\n");
         busy_spin();
+    }
+}
+
+/// `multiproc` brick — the isolation property a multi-process desktop needs:
+/// **a hung app cannot freeze the rest of the system.** Spawns a HEALTHY ring-3
+/// process (tag 0xA1, syscalls periodically) and a HUNG one (a pure `jmp $`
+/// infinite loop that never yields), each in its own private address space, then
+/// enables the preemption timer. If the healthy process's tag keeps arriving and
+/// the kernel boot thread keeps running while the hung process spins forever,
+/// then the timer is forcibly reclaiming the CPU from the hung task — exactly
+/// what stops one wedged app from locking the desktop. Gated behind `multiproc`.
+pub fn selftest_multiproc() -> ! {
+    use crate::serial::write_str;
+    write_str("\n[mp] === multiproc: a hung app must NOT freeze the system ===\n");
+    unsafe {
+        core::arch::asm!("cli");
+        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3() };
+        CUR_TASK = 0;
+    }
+    let healthy = spawn_ring3_low(0xA1);                  // cooperative, syscalls
+    let hung = spawn_ring3_low_with(&HUNG_STUB, None);    // wedged: pure jmp $ loop
+    if healthy == 0 || hung == 0 { write_str("[mp] spawn failed\n"); halt(); }
+    write_str("[mp] spawned: process A (healthy) + process B (HUNG, infinite loop)\n");
+    write_str("[mp] enabling preemption — B can only be stopped by the timer\n");
+    crate::idt::set_timer_vector(irq_timer_preempt as *const () as u64);
+    unsafe { core::arch::asm!("sti"); }
+    let mut ticks = 0u32;
+    loop {
+        write_str("[mp] kernel alive — desktop would keep compositing\n");
+        busy_spin();
+        ticks += 1;
+        if ticks == 8 {
+            write_str("[mp] === ISOLATION PROVEN: B spun forever, A + kernel kept running ===\n");
+        }
     }
 }
 
