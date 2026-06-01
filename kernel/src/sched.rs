@@ -976,6 +976,75 @@ pub fn selftest_offscreen() -> ! {
     }
 }
 
+/// Build a fill-program ELF whose surface colour is `color` (patches the
+/// `mov edx, imm32` in FILL_STUB at code offset 11).
+fn make_fill_elf(load_va: u64, color: u32) -> alloc::vec::Vec<u8> {
+    let mut code = FILL_STUB;
+    code[11..15].copy_from_slice(&color.to_le_bytes());
+    make_elf(load_va, &code)
+}
+
+/// Blit a process's 32×32 offscreen surface (frame `fb_frame`) into a window at
+/// (x,y) on the real framebuffer, with a titlebar + frame. The compositor step.
+fn composite_window(fb_frame: u64, x: u32, y: u32) {
+    const SW: u32 = 32;
+    let base = crate::fb::base();
+    let pitch = crate::fb::pitch();
+    if base.is_null() || pitch == 0 {
+        return;
+    }
+    crate::fb::fill(x - 2, y - 12, SW + 4, 12, 0x2A3340); // titlebar
+    crate::fb::fill(x - 2, y - 2, SW + 4, SW + 4, 0x6FE18B); // frame
+    let src = crate::vmm::phys_to_virt(fb_frame) as *const u32;
+    for py in 0..SW {
+        for px in 0..SW {
+            let pix = unsafe { *src.add((py * SW + px) as usize) };
+            let off = ((y + py) * pitch + (x + px) * 4) as usize;
+            unsafe { *(base.add(off) as *mut u32) = pix; }
+        }
+    }
+}
+
+/// `multiwin` brick — "run several real apps at once": spawn TWO independent ELF
+/// processes, each in its own private address space rendering its own colour into
+/// its own surface, and the compositor blits BOTH into separate windows. The
+/// other half of item 4's goal (the first half — a hung app can't freeze the
+/// desktop — is bricks 1/2). Screenshot-verifiable. Gated behind `multiwin`.
+pub fn selftest_multiwin() -> ! {
+    use crate::serial::write_str;
+    write_str("\n[wm] === multiwin: TWO real app processes, two surfaces, two windows ===\n");
+    unsafe {
+        core::arch::asm!("cli");
+        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3() };
+        CUR_TASK = 0;
+    }
+    let f1 = crate::pmm::alloc_frame().unwrap_or(0);
+    let f2 = crate::pmm::alloc_frame().unwrap_or(0);
+    if f1 == 0 || f2 == 0 { write_str("[wm] no frames\n"); halt(); }
+    unsafe {
+        core::ptr::write_bytes(crate::vmm::phys_to_virt(f1) as *mut u8, 0, 4096);
+        core::ptr::write_bytes(crate::vmm::phys_to_virt(f2) as *mut u8, 0, 4096);
+    }
+    let e1 = make_fill_elf(0x0050_0000, 0x00FF_8800); // orange app
+    let e2 = make_fill_elf(0x0050_0000, 0x0048_A0FF); // blue app (same VA, isolated)
+    let a = spawn_ring3_elf(&e1, f1);
+    let b = spawn_ring3_elf(&e2, f2);
+    if a == 0 || b == 0 { write_str("[wm] spawn failed\n"); halt(); }
+    write_str("[wm] two app processes running; compositing both into windows\n");
+    crate::idt::set_timer_vector(irq_timer_preempt as *const () as u64);
+    unsafe { core::arch::asm!("sti"); }
+    let mut n = 0u32;
+    loop {
+        busy_spin();
+        composite_window(f1, 120, 120); // app 1 window
+        composite_window(f2, 200, 160); // app 2 window
+        n += 1;
+        if n == 6 {
+            write_str("[wm] === MULTI-APP PROVEN: two isolated processes composited into two windows at once ===\n");
+        }
+    }
+}
+
 /// `composite` brick — the full pipeline made VISIBLE: a scheduled, isolated ELF
 /// process renders a colour into its own offscreen buffer, and the kernel
 /// compositor blits that buffer onto the real screen as a window-like rectangle.

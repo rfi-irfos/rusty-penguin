@@ -546,6 +546,10 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
         // Process renders offscreen; kernel compositor blits its surface to screen.
         sched::selftest_composite(); // never returns
     }
+    if unsafe { mb2_cmdline_contains(mb2, b"multiwin") } {
+        // Two isolated app processes composited into two windows at once.
+        sched::selftest_multiwin(); // never returns
+    }
     // autostart=N → desktop opens app N on launch (deterministic GUI screendumps).
     if let Some(n) = unsafe { mb2_cmdline_value(mb2, b"autostart=") } {
         unsafe { AUTOSTART_APP = n; }
