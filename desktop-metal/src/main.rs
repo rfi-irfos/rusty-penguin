@@ -477,6 +477,57 @@ fn draw_scene_static(fb: &mut Framebuffer) { draw_scene_static_v(fb, 0); }
 // assets (every pixel is ours). These are STATIC (cached) so per-pixel cost is a
 // one-time draw.
 pub const WALLPAPER_COUNT: u8 = 8;
+/// Index of the custom-image wallpaper (loaded from VFS "wallpaper.ppm"); only in
+/// the cycle when that file exists. Set via the Image Viewer's "W" key.
+pub const WP_CUSTOM: u8 = 8;
+/// The Image Viewer sets this (same process) when the user presses W; the desktop
+/// loop switches to the custom wallpaper. (apps run in-process, so a shared static
+/// is the simplest signal.)
+pub static mut WALLPAPER_SET_REQUEST: bool = false;
+
+/// Parse a binary PPM (P6) header → (width, height, pixel_data_offset).
+fn parse_ppm_dims(data: &[u8]) -> Option<(usize, usize, usize)> {
+    if data.len() < 2 || &data[0..2] != b"P6" { return None; }
+    let mut i = 2usize; let mut nums = [0usize; 3]; let mut ni = 0usize;
+    while ni < 3 && i < data.len() {
+        while i < data.len() {
+            let c = data[i];
+            if c == b'#' { while i < data.len() && data[i] != b'\n' { i += 1; } }
+            else if c == b' ' || c == b'\t' || c == b'\n' || c == b'\r' { i += 1; }
+            else { break; }
+        }
+        let mut v = 0usize; let mut any = false;
+        while i < data.len() && data[i].is_ascii_digit() { v = v * 10 + (data[i] - b'0') as usize; any = true; i += 1; }
+        if !any { return None; }
+        nums[ni] = v; ni += 1;
+    }
+    if ni < 3 { return None; }
+    if i < data.len() { i += 1; }
+    Some((nums[0], nums[1], i))
+}
+
+/// Custom wallpaper — decode VFS "wallpaper.ppm" (any P6) and scale it to FILL the
+/// screen (cover + centre-crop). Falls back to the default if absent/invalid.
+fn draw_bg_custom(fb: &mut Framebuffer) {
+    let data = match vfs::vfs().read("wallpaper.ppm") { Some(d) => d, None => { draw_bg_stone(fb); return; } };
+    let (iw, ih, off) = match parse_ppm_dims(data) { Some(v) => v, None => { draw_bg_stone(fb); return; } };
+    if iw == 0 || ih == 0 { draw_bg_stone(fb); return; }
+    let w = fb.width as usize; let h = fb.height as usize;
+    let s = ((w * 1000 / iw).max(h * 1000 / ih)).max(1);   // cover scale ×1000
+    let outw = (iw * s / 1000).max(w); let outh = (ih * s / 1000).max(h);
+    let ox = (outw - w) / 2; let oy = (outh - h) / 2;       // centre-crop offset
+    for py in 0..h {
+        let sy = ((py + oy) * ih / outh).min(ih - 1);
+        for px in 0..w {
+            let sx = ((px + ox) * iw / outw).min(iw - 1);
+            let p = off + (sy * iw + sx) * 3;
+            if p + 2 < data.len() {
+                fb.set_pixel(px as u32, py as u32,
+                    ((data[p] as u32) << 16) | ((data[p+1] as u32) << 8) | data[p+2] as u32);
+            }
+        }
+    }
+}
 
 #[inline] fn lerp8(a: u32, b: u32, t: u64) -> u32 {
     ((a as i64) + ((b as i64) - (a as i64)) * (t as i64) / 255) as u32
@@ -796,6 +847,7 @@ fn draw_scene_static_v(fb: &mut Framebuffer, variant: u8) {
         5 => draw_bg_nebula(fb),
         6 => draw_bg_mountains(fb),
         7 => draw_bg_sakura(fb),
+        8 => draw_bg_custom(fb),     // user image from VFS "wallpaper.ppm"
         _ => draw_bg_stone(fb),
     }
 
@@ -2171,6 +2223,15 @@ pub extern "C" fn _start() -> ! {
         let keys = input::poll(&mut mouse, w, h);
         let btn = mouse.buttons;
 
+        // The Image Viewer (same process) requested "set as wallpaper" — switch
+        // to the custom image and repaint the desktop.
+        if unsafe { WALLPAPER_SET_REQUEST } {
+            unsafe { WALLPAPER_SET_REQUEST = false; }
+            wallpaper_variant = WP_CUSTOM;
+            fb.invalidate_bg();
+            scene_dirty = true;
+        }
+
         // Snapshot old cursor position — the unified render uses this for restore.
         let prev_cx = cx; let prev_cy = cy;
 
@@ -2375,7 +2436,9 @@ pub extern "C" fn _start() -> ! {
                             pending_screenshot = true;
                         }
                         4 => { // Change Background — cycle wallpaper variant
-                            wallpaper_variant = (wallpaper_variant + 1) % WALLPAPER_COUNT; // 8 system backgrounds
+                            // 8 system backgrounds + the custom image when one is set.
+                            let count = if vfs::vfs().read("wallpaper.ppm").is_some() { WALLPAPER_COUNT + 1 } else { WALLPAPER_COUNT };
+                            wallpaper_variant = (wallpaper_variant + 1) % count;
                             fb.invalidate_bg();
                         }
                         5 => { // Display Settings

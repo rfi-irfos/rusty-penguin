@@ -65,6 +65,7 @@ for k in keys:
     for m in parts[:-1]: kev(m, True)
     kev(parts[-1], True); time.sleep(0.1); kev(parts[-1], False)
     for m in reversed(parts[:-1]): kev(m, False)
+    for m in ("ctrl","shift","alt","altgr"): kev(m, False)  # ensure no stuck modifier
     time.sleep(0.5)
 if len(sys.argv)>3 and sys.argv[3]=="1":
     # nudge the mouse so the PS/2 packet stream is live, then HOLD right ~0.3s so

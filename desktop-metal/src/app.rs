@@ -2959,7 +2959,7 @@ impl App for ImageViewer {
         fb.draw_str_t(x + 150, y + 9, u64_into(&mut nb, self.cur as u64), 0x8CC6E5);
         fb.draw_str_t(x + 174, y + 9, "/", 0x6B756D);
         fb.draw_str_t(x + 184, y + 9, u64_into(&mut tb, shot_count() as u64), 0x6B756D);
-        fb.draw_str_t(x + w - 96, y + 9, "N/P cycle", 0x6B756D);
+        fb.draw_str_t(x + w - 150, y + 9, "N/P cycle   W set wallpaper", 0x6B756D);
 
         let vx = x; let vy = y + 26; let vw = w; let vh = h.saturating_sub(26);
         fb.fill_rect(vx, vy, vw, vh, 0x0A0D0B);
@@ -3007,6 +3007,17 @@ impl App for ImageViewer {
             }
             AK::Char(b'p') | AK::Char(b'P') | AK::Left => {
                 if self.cur > 1 { self.cur -= 1; self.dirty = true; }
+            }
+            AK::Char(b'w') | AK::Char(b'W') => {
+                // Set the current image as the desktop wallpaper: copy it to
+                // VFS "wallpaper.ppm" and signal the desktop (same process).
+                let mut namebuf = [0u8; 40];
+                let name = self.filename(&mut namebuf);
+                let copy = vfs::vfs().read(name).map(|d| d.to_vec());
+                if let Some(c) = copy {
+                    vfs::vfs().write("wallpaper.ppm", &c);
+                    unsafe { crate::WALLPAPER_SET_REQUEST = true; }
+                }
             }
             _ => {}
         }
