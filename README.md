@@ -75,10 +75,13 @@ A from-scratch x86_64 OS, hand-written in Rust top to bottom:
   maximize), a floating dock, a start menu, an arrow cursor, and a warm
   stone-green visual language. No external UI toolkit; every pixel is drawn by
   our own framebuffer + ternary-CSS engine.
-- **Real apps** — terminal (psh), file manager, text editor, calculator, system
-  monitor, settings, the TIS console, a media player (kernel-decoded video +
-  audio, with a Windows-Media-Player-style plasma visualizer easter egg), a
-  screenshot tool, plus Snake, Minesweeper and a pure-Rust DOOM-style raycaster.
+- **Real apps** — terminal (psh), file manager (sortable, with a status bar),
+  text editor (line numbers + Ln/Col status bar), calculator, system monitor,
+  settings, the TIS console, a media player (kernel-decoded video + audio, with a
+  Windows-Media-Player-style plasma visualizer easter egg), a screenshot tool
+  (also right-click → Take Screenshot), an image viewer, a clock (live time +
+  stopwatch + timer + world clocks), plus Snake, Minesweeper and a pure-Rust
+  DOOM-style raycaster.
 - **A ternary runtime** — balanced-ternary arithmetic and a sparse-skip
   inference engine that physically skips zero-weight multiplications.
 
@@ -128,8 +131,12 @@ velocity equals completion.
 | Window manager, floating dock, start menu, arrow cursor | ✅ |
 | **Quick Settings panel (Wi-Fi/BT/dark/volume tiles, tray-anchored)** | ✅ GNOME-style |
 | Apps: terminal, files, editor, calculator, monitor, settings, TIS console | ✅ |
+| **File manager: sortable columns (name/size) + status bar** | ✅ |
+| **Text editor: line numbers + Ln/Col/modified status bar** | ✅ QEMU-verified |
 | **Media player (kernel-decoded video + audio in a window; WMP plasma visualizer easter egg)** | ✅ QEMU-verified |
-| **Screenshot tool (capture screen → PPM in the VFS)** | ✅ |
+| **Screenshot tool (capture screen → PPM; also right-click → Take Screenshot, Ctrl+P)** | ✅ QEMU-verified |
+| **Image viewer (decodes PPM from the VFS; Ctrl+G)** | ✅ QEMU-verified |
+| **Clock: live time + stopwatch + timer + world clocks** | ✅ QEMU-verified |
 | **NIC drivers: RTL8139, Intel e1000/i219, Realtek r8169** | ✅ ~95% laptop coverage |
 | **TCP/IP stack: ARP/ICMP/UDP/DHCP/DNS/TCP/HTTP** | ✅ fetches real internet |
 | **TLS 1.3 client (X25519 · ChaCha20-Poly1305 · from scratch)** | ✅ real HTTPS, QEMU-verified vs live web |
