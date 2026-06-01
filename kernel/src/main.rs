@@ -542,6 +542,10 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
         // A scheduled process renders into an isolated buffer the compositor reads.
         sched::selftest_offscreen(); // never returns
     }
+    if unsafe { mb2_cmdline_contains(mb2, b"composite") } {
+        // Process renders offscreen; kernel compositor blits its surface to screen.
+        sched::selftest_composite(); // never returns
+    }
     // autostart=N → desktop opens app N on launch (deterministic GUI screendumps).
     if let Some(n) = unsafe { mb2_cmdline_value(mb2, b"autostart=") } {
         unsafe { AUTOSTART_APP = n; }

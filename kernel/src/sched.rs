@@ -762,6 +762,23 @@ const RENDER_STUB: [u8; 25] = [
     0xeb, 0xe7,                         // jmp -25 (back to start)
 ];
 
+// A ring-3 program that FILLS its offscreen buffer (1024 px) with a solid colour
+// (0x00FF8800 orange), then syscalls a tag, then re-fills forever. Used to make
+// the compositor path visible on screen. Immediates only (position-independent).
+const FILL_STUB: [u8; 38] = [
+    0xb8, 0x00, 0x00, 0x80, 0x00,       // mov eax, 0x00800000 (FB_VA)
+    0xb9, 0x00, 0x04, 0x00, 0x00,       // mov ecx, 1024
+    0xba, 0x00, 0x88, 0xff, 0x00,       // mov edx, 0x00FF8800 (orange)
+    0x89, 0x10,                         // .l: mov [rax], edx
+    0x83, 0xc0, 0x04,                   //     add eax, 4
+    0xff, 0xc9,                         //     dec ecx
+    0x75, 0xf7,                         //     jnz .l
+    0xbf, 0xf2, 0x00, 0x00, 0x00,       // mov edi, 0xF2 (tag)
+    0xb8, 0x37, 0x13, 0x00, 0x00,       // mov eax, 0x1337
+    0x0f, 0x05,                         // syscall
+    0xeb, 0xda,                         // jmp -38 (refill)
+];
+
 /// Build a minimal static ET_EXEC ELF (one R+X PT_LOAD segment) running `code`
 /// at `load_va`. A non-blocking test program so the real-ELF scheduled-process
 /// path verifies without framebuffer/keyboard contention.
@@ -956,6 +973,55 @@ pub fn selftest_offscreen() -> ! {
             proven = true;
         }
         write_str("[fb] boot/compositor tick\n");
+    }
+}
+
+/// `composite` brick — the full pipeline made VISIBLE: a scheduled, isolated ELF
+/// process renders a colour into its own offscreen buffer, and the kernel
+/// compositor blits that buffer onto the real screen as a window-like rectangle.
+/// This is the end-to-end model for windowed apps (each app → its own surface →
+/// the WM blits it into a window). Screenshot-verifiable. Gated behind `composite`.
+pub fn selftest_composite() -> ! {
+    use crate::serial::write_str;
+    write_str("\n[wm] === composite: process renders offscreen -> compositor blits to screen ===\n");
+    unsafe {
+        core::arch::asm!("cli");
+        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3() };
+        CUR_TASK = 0;
+    }
+    let fb_frame = match crate::pmm::alloc_frame() { Some(f) => f, None => { write_str("[wm] no frame\n"); halt(); } };
+    unsafe { core::ptr::write_bytes(crate::vmm::phys_to_virt(fb_frame) as *mut u8, 0, 4096); }
+    let elf = make_elf(0x0050_0000, &FILL_STUB);
+    let t = spawn_ring3_elf(&elf, fb_frame);
+    if t == 0 { write_str("[wm] spawn failed\n"); halt(); }
+    write_str("[wm] render process spawned; compositing its surface into a window\n");
+    crate::idt::set_timer_vector(irq_timer_preempt as *const () as u64);
+    unsafe { core::arch::asm!("sti"); }
+
+    // Window position/size for the 1024-pixel (32x32) surface.
+    const WIN_X: u32 = 120;
+    const WIN_Y: u32 = 120;
+    const SW: u32 = 32;
+    loop {
+        busy_spin();
+        // Compositor: read the process's offscreen surface (physmap) and blit it
+        // into the window region on the real framebuffer.
+        let src = crate::vmm::phys_to_virt(fb_frame) as *const u32;
+        let base = crate::fb::base();
+        let pitch = crate::fb::pitch();
+        if !base.is_null() && pitch > 0 {
+            // window chrome: a border around the surface
+            crate::fb::fill(WIN_X - 2, WIN_Y - 12, SW + 4, 12, 0x2A3340); // titlebar
+            crate::fb::fill(WIN_X - 2, WIN_Y - 2, SW + 4, SW + 4, 0x6FE18B); // frame
+            for py in 0..SW {
+                for px in 0..SW {
+                    let pix = unsafe { *src.add((py * SW + px) as usize) };
+                    let off = ((WIN_Y + py) * pitch + (WIN_X + px) * 4) as usize;
+                    unsafe { *(base.add(off) as *mut u32) = pix; }
+                }
+            }
+        }
+        write_str("[wm] composited process surface -> window @ 120,120\n");
     }
 }
 
