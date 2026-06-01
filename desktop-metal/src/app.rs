@@ -2933,12 +2933,18 @@ impl ImageViewer {
         Some((nums[0], nums[1], i))
     }
 
-    fn filename(&self) -> alloc::string::String {
-        let mut name = alloc::string::String::from("screenshots/shot-");
-        let mut nb = [0u8; 24];
-        name.push_str(u64_into(&mut nb, self.cur as u64));
-        name.push_str(".ppm");
-        name
+    /// Build "screenshots/shot-N.ppm" into a stack buffer — no heap. (render()
+    /// runs whenever any other window animates, so a per-render String would
+    /// steadily leak the never-freeing bump heap.)
+    fn filename<'a>(&self, buf: &'a mut [u8; 40]) -> &'a str {
+        let prefix = b"screenshots/shot-";
+        let mut i = 0;
+        for &b in prefix { buf[i] = b; i += 1; }
+        let mut tmp = [0u8; 12]; let mut j = 0; let mut v = self.cur;
+        if v == 0 { tmp[0] = b'0'; j = 1; } else { while v > 0 { tmp[j] = b'0' + (v % 10) as u8; v /= 10; j += 1; } }
+        while j > 0 { j -= 1; buf[i] = tmp[j]; i += 1; }
+        for &b in b".ppm" { buf[i] = b; i += 1; }
+        core::str::from_utf8(&buf[..i]).unwrap_or("")
     }
 }
 
@@ -2958,8 +2964,9 @@ impl App for ImageViewer {
         let vx = x; let vy = y + 26; let vw = w; let vh = h.saturating_sub(26);
         fb.fill_rect(vx, vy, vw, vh, 0x0A0D0B);
 
-        let name = self.filename();
-        let img = vfs::vfs().read(&name);
+        let mut namebuf = [0u8; 40];
+        let name = self.filename(&mut namebuf);
+        let img = vfs::vfs().read(name);
         match img.and_then(|d| Self::parse_ppm(d).map(|(iw, ih, off)| (d, iw, ih, off))) {
             Some((data, iw, ih, off)) if iw > 0 && ih > 0 => {
                 // Fit the image into the view, aspect-preserved.
@@ -3868,7 +3875,8 @@ impl WadDoom {
 
         // Load PLAYPAL (first palette)
         for (ofs, size, name) in &lumps {
-            if lump_name_eq(name, b"PLAYPAL") && *size >= 768 {
+            if lump_name_eq(name, b"PLAYPAL") && *size >= 768
+                && (*ofs as usize).saturating_add(768) <= wad.len() {
                 let pal_bytes = &wad[*ofs as usize..*ofs as usize + 768];
                 self.pal = (0..256).map(|i| {
                     let r = pal_bytes[i*3] as u32;
@@ -3894,7 +3902,11 @@ impl WadDoom {
             for i in e1m1_idx+1..e1m1_idx+15 {
                 if i >= lumps.len() { break; }
                 if lump_name_eq(&lumps[i].2, name) {
-                    return Some((lumps[i].0 as usize, lumps[i].1 as usize));
+                    let ofs = lumps[i].0 as usize; let size = lumps[i].1 as usize;
+                    // Defensive: a corrupt WAD could point a lump past the buffer,
+                    // which would panic the later &wad[ofs..ofs+size] slices.
+                    if ofs.checked_add(size).map_or(true, |end| end > n) { return None; }
+                    return Some((ofs, size));
                 }
             }
             None
