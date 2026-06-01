@@ -96,10 +96,16 @@ def ic_web(d):
     d.line([cx-s(8.5),cy+s(3.5),cx+s(8.5),cy+s(3.5)], fill=255, width=max(2,W-SS))
     d.line([cx,cy-s(9),cx,cy+s(9)], fill=255, width=max(2,W-SS))
 
+def ic_media(d):
+    # Classic media "play" button — triangle inside a ring.
+    cx, cy = s(12), s(12)
+    d.ellipse([cx-s(9),cy-s(9),cx+s(9),cy+s(9)], outline=255, width=W)
+    d.polygon([s(9.5),s(7),s(9.5),s(17),s(17),s(12)], fill=255)
+
 ICONS = [
     ("TERM", ic_term), ("FILES", ic_files), ("EDIT", ic_edit), ("CALC", ic_calc),
     ("SETTINGS", ic_settings), ("TIS", ic_tis), ("SNAKE", ic_snake),
-    ("MINES", ic_mines), ("DOOM", ic_doom), ("WEB", ic_web),
+    ("MINES", ic_mines), ("DOOM", ic_doom), ("WEB", ic_web), ("MEDIA", ic_media),
 ]
 
 def main():

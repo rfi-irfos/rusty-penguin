@@ -565,6 +565,29 @@ pub extern "C" fn syscall_handler(nr: u64, arg1: u64, arg2: u64, arg3: u64) -> u
                 None => u64::MAX,
             }
         }
+        30 => {
+            // sys_video_open() → packed dims (w<<48)|(h<<32)|(fps<<24)|nframes, or 0.
+            // Opens bin/meta.rpv (the founding clip) for windowed playback and
+            // primes the audio ring. Drives the desktop Media app.
+            crate::rpv::service_open()
+        }
+        31 => {
+            // sys_video_advance() → (audio_level<<32)|frame_index.
+            // Decode the next frame + stream a frame of audio; loops at the end.
+            crate::rpv::service_advance()
+        }
+        32 => {
+            // sys_video_blit(back_base, packed_rect)
+            // arg1 = desktop backbuffer pointer.
+            // arg2 packs the content rect: (dx<<48)|(dy<<32)|(dw<<16)|dh (16 bits each).
+            // Scales the current frame into the backbuffer, letterboxed.
+            let dx = ((arg2 >> 48) & 0xFFFF) as usize;
+            let dy = ((arg2 >> 32) & 0xFFFF) as usize;
+            let dw = ((arg2 >> 16) & 0xFFFF) as usize;
+            let dh = (arg2 & 0xFFFF) as usize;
+            crate::rpv::service_blit(arg1, dx, dy, dw, dh);
+            0
+        }
         39 => {
             // sys_getpid → current PID
             crate::sched::current_pid()

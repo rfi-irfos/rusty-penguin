@@ -105,6 +105,139 @@ fn blit(w: usize, h: usize, scale: usize) {
     }
 }
 
+// ── Windowed video service — the desktop Media app drives this via syscalls ───
+// The kernel owns the decoder + the (large) .rpv in ramfs + the HDA ring, so the
+// ring-3 desktop never loads 58 MiB into its heap: it draws the window chrome,
+// asks the kernel to step a frame (decoding + streaming a frame's worth of audio),
+// then asks it to scale the current frame straight into the desktop's backbuffer.
+struct VideoState {
+    data: *const u8, len: usize,
+    w: usize, h: usize, nframes: usize, fps: usize,
+    frames_start: usize, cur_off: usize, cur_frame: usize, open: bool,
+    // Audio (PCM blob between header and frames). Streamed one frame at a time.
+    pcm_off: usize, pcm_len: usize, apos: usize, ring: usize,
+    arate: usize, have_audio: bool,
+}
+static mut VS: VideoState = VideoState {
+    data: core::ptr::null(), len: 0, w: 0, h: 0, nframes: 0, fps: 0,
+    frames_start: 0, cur_off: 0, cur_frame: 0, open: false,
+    pcm_off: 0, pcm_len: 0, apos: 0, ring: 0, arate: 0, have_audio: false,
+};
+
+/// Open bin/meta.rpv for windowed playback and prime the audio ring. Returns
+/// packed dims (w<<48)|(h<<32)|(fps<<24)|(nframes & 0xFFFFFF), or 0 if unavailable.
+pub fn service_open() -> u64 {
+    let data = match crate::ramfs::find(b"bin/meta.rpv") { Some(d) => d, None => return 0 };
+    let h = match parse_header(data) { Some(h) => h, None => return 0 };
+    let pcm_off = 32usize;
+    let pcm_bytes = (h.asamps as usize) * (h.ach as usize) * 2;
+    let pcm_len = if pcm_off + pcm_bytes <= data.len() { pcm_bytes } else { 0 };
+    let frames_start = pcm_off + pcm_bytes;
+    let have_audio = pcm_len > 0 && crate::hda::is_ready() && h.ach == 2 && h.arate == 44100;
+    unsafe {
+        VS = VideoState { data: data.as_ptr(), len: data.len(), w: h.width, h: h.height,
+            nframes: h.nframes as usize, fps: h.fps as usize, frames_start,
+            cur_off: frames_start, cur_frame: 0, open: true,
+            pcm_off, pcm_len, apos: 0, ring: 0, arate: h.arate as usize, have_audio };
+        for p in FRAME.iter_mut() { *p = 0; }
+        if have_audio {
+            let pcm = core::slice::from_raw_parts(data.as_ptr().add(pcm_off), pcm_len);
+            let ring_sz = crate::hda::audio_ring_bytes();
+            let prime = pcm.len().min(ring_sz);
+            crate::hda::audio_write(&pcm[..prime], 0);
+            VS.apos = prime; VS.ring = prime % ring_sz.max(1);
+        }
+    }
+    ((h.width as u64) << 48) | ((h.height as u64) << 32) | ((h.fps as u64) << 24) | ((h.nframes as u64) & 0xFF_FFFF)
+}
+
+/// Step to the next frame: decode it into FRAME and stream a frame's worth of
+/// audio just ahead of the play cursor, looping at the end. Returns
+/// (level << 32) | frame_index, where `level` is a 0..255 RMS of the audio
+/// chunk just queued — the desktop visualizer pulses to it.
+pub fn service_advance() -> u64 {
+    unsafe {
+        if !VS.open { return 0; }
+        let data = core::slice::from_raw_parts(VS.data, VS.len);
+        if VS.cur_frame >= VS.nframes {
+            VS.cur_off = VS.frames_start; VS.cur_frame = 0;
+            VS.apos = 0; VS.ring = 0;
+            for p in FRAME.iter_mut() { *p = 0; }
+        }
+        let o = VS.cur_off;
+        if o + 4 > data.len() { return VS.cur_frame as u64; }
+        let seglen = rd_u32(data, o) as usize;
+        if o + 4 + seglen > data.len() { return VS.cur_frame as u64; }
+        apply_frame(&data[o + 4..o + 4 + seglen], VS.w * VS.h);
+        VS.cur_off = o + 4 + seglen;
+        VS.cur_frame += 1;
+
+        let mut level: u64 = 0;
+        if VS.have_audio && VS.fps > 0 {
+            let pcm = core::slice::from_raw_parts(VS.data.add(VS.pcm_off), VS.pcm_len);
+            let bpf = (VS.arate * 4) / VS.fps; // stereo s16 = 4 bytes/sample-frame
+            if bpf > 0 && VS.apos < pcm.len() {
+                let end = (VS.apos + bpf).min(pcm.len());
+                let chunk = &pcm[VS.apos..end];
+                // Rough peak amplitude over the chunk → 0..255 visualizer drive.
+                let mut peak: i32 = 0;
+                let mut i = 0;
+                while i + 1 < chunk.len() {
+                    let s = i16::from_le_bytes([chunk[i], chunk[i + 1]]) as i32;
+                    let a = s.abs();
+                    if a > peak { peak = a; }
+                    i += 64; // sparse sample — peak detection only
+                }
+                level = ((peak * 255) / 32768) as u64;
+                let ring_sz = crate::hda::audio_ring_bytes().max(1);
+                crate::hda::audio_write(chunk, VS.ring);
+                VS.ring = (VS.ring + chunk.len()) % ring_sz;
+                VS.apos = end;
+            }
+        }
+        (level << 32) | (VS.cur_frame as u64 & 0xFFFF_FFFF)
+    }
+}
+
+/// Scale the current FRAME into the desktop's backbuffer (user memory), centred
+/// and aspect-preserved (letterbox) inside the (dw×dh) content rect at (dx,dy).
+/// `back_base` is the desktop's backbuffer pointer; it shares the hardware fb's
+/// pitch/bpp, so we reuse the kernel's fb geometry to address it.
+pub fn service_blit(back_base: u64, dx: usize, dy: usize, dw: usize, dh: usize) {
+    let (w, h) = unsafe { if !VS.open { return; } (VS.w, VS.h) };
+    if w == 0 || h == 0 || dw == 0 || dh == 0 || back_base == 0 { return; }
+    let pitch = fb::pitch() as usize;
+    let bpp   = (fb::bpp() / 8) as usize;
+    let fw    = fb::width() as usize;
+    let fh    = fb::height() as usize;
+    if bpp < 3 || pitch == 0 { return; }
+    // Fit (×1024 fixed point to avoid divide-by-w underflow on small windows).
+    let s = (dw * 1024 / w).min(dh * 1024 / h);
+    let outw = w * s / 1024; let outh = h * s / 1024;
+    if outw == 0 || outh == 0 { return; }
+    let ox = dx + (dw - outw) / 2; let oy = dy + (dh - outh) / 2;
+    let base = back_base as *mut u8;
+    unsafe {
+        for yy in 0..outh {
+            let py = oy + yy;
+            if py >= fh { break; }
+            let sy = yy * h / outh;
+            let row = py * pitch;
+            for xx in 0..outw {
+                let px = ox + xx;
+                if px >= fw { continue; }
+                let sx = xx * w / outw;
+                let rgb = FRAME[sy * w + sx];
+                let off = row + px * bpp;
+                *base.add(off)     = (rgb & 0xFF) as u8;          // B
+                *base.add(off + 1) = ((rgb >> 8) & 0xFF) as u8;   // G
+                *base.add(off + 2) = ((rgb >> 16) & 0xFF) as u8;  // R
+                if bpp == 4 { *base.add(off + 3) = 0xFF; }
+            }
+        }
+    }
+}
+
 /// Busy-wait roughly `ms` milliseconds using the PIT tick counter (paces fps).
 fn delay_ms(ms: u32) {
     let start = crate::idt::ticks();
@@ -185,6 +318,52 @@ pub fn play_from_initrd() -> ! {
     }
     write_str("[rpv] === playback complete ===\n");
     // Leave the last frame on screen.
+    halt();
+}
+
+/// Self-test for the windowed service (boot flag `videowin`): exercise the exact
+/// path the desktop Media app drives — service_open → service_advance (decode +
+/// audio) → service_blit (scale into a window-sized rect) — but draw straight onto
+/// the real framebuffer with a faux window chrome so it can be screendumped
+/// headlessly. Proves the syscall plumbing end-to-end without the GUI/mouse.
+pub fn selftest_window() -> ! {
+    use crate::serial::{write_str, write_hex_u64};
+    write_str("\n[rpv] === windowed service self-test (videowin) ===\n");
+    let packed = service_open();
+    if packed == 0 { write_str("[rpv] service_open failed — bin/meta.rpv missing?\n"); halt(); }
+    let w = (packed >> 48) & 0xFFFF;
+    let h = (packed >> 32) & 0xFFFF;
+    let fps = (packed >> 24) & 0xFF;
+    let nf = packed & 0xFF_FFFF;
+    write_str("[rpv] open ok w="); write_hex_u64(w);
+    write_str(" h="); write_hex_u64(h);
+    write_str(" fps="); write_hex_u64(fps);
+    write_str(" nframes="); write_hex_u64(nf); write_str("\n");
+
+    // Centred window rect (mimics the desktop Media window: 560x386 incl. chrome).
+    let fw = fb::width() as usize;
+    let fh = fb::height() as usize;
+    let win_w = 560.min(fw);
+    let win_h = 386.min(fh);
+    let wx = (fw - win_w) / 2;
+    let wy = (fh - win_h) / 2;
+    let bar = 26;
+    let content_h = win_h - bar;
+    let base = fb::base() as u64; // blit straight onto the real fb (no backbuffer)
+
+    // Faux chrome: dark titlebar + black content backing.
+    fb::fill(wx as u32, wy as u32, win_w as u32, win_h as u32, 0x14171A);
+    fb::fill(wx as u32, (wy + bar) as u32, win_w as u32, content_h as u32, 0x000000);
+
+    let mut total: u64 = 0;
+    for _ in 0..nf {
+        let r = service_advance();
+        let level = (r >> 32) & 0xFF;
+        total = total.wrapping_add(level);
+        service_blit(base, wx, wy + bar, win_w, content_h);
+        delay_ms(if fps > 0 { (1000 / fps) as u32 } else { 33 });
+    }
+    write_str("[rpv] window self-test complete, level-sum="); write_hex_u64(total); write_str("\n");
     halt();
 }
 

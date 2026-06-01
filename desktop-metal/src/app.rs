@@ -2310,6 +2310,238 @@ impl App for Sound {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Media — the founding clip (Linus Torvalds, OSS EU 2024) plays IN a window on
+// the OS it triggered. The kernel owns the decoder + the HDA ring + the 58 MiB
+// .rpv (syscalls 30/31/32); this app draws the chrome, paces the frames, and
+// asks the kernel to scale each frame straight into the backbuffer. Press V for
+// the Windows-Media-Player "Plasma" visualizer — a from-scratch easter egg that
+// pulses to the audio amplitude the kernel reports each frame.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// sys_video_open (#30) → packed dims (w<<48)|(h<<32)|(fps<<24)|nframes, or 0.
+unsafe fn sys_video_open() -> u64 {
+    let n: u64;
+    core::arch::asm!("syscall", inout("rax") 30u64 => n, in("rdi") 0u64,
+        out("rcx") _, out("r11") _, options(nostack));
+    n
+}
+/// sys_video_advance (#31) → (audio_level<<32)|frame_index.
+unsafe fn sys_video_advance() -> u64 {
+    let n: u64;
+    core::arch::asm!("syscall", inout("rax") 31u64 => n, in("rdi") 0u64,
+        out("rcx") _, out("r11") _, options(nostack));
+    n
+}
+/// sys_video_blit (#32): scale the current frame into the backbuffer at `base`.
+/// `rect` packs (dx<<48)|(dy<<32)|(dw<<16)|dh, each 16 bits.
+unsafe fn sys_video_blit(base: u64, rect: u64) {
+    core::arch::asm!("syscall", in("rax") 32u64, in("rdi") base, in("rsi") rect,
+        out("rcx") _, out("r11") _, options(nostack));
+}
+
+/// Integer sine over a 256-step circle, returning roughly -1024..=1024. Reuses
+/// the quarter-sine QSINE table (no float / no libm in the render path).
+fn vsin(phase: i32) -> i32 {
+    let p = ((phase % 256) + 256) % 256;     // 0..255
+    let quad = p / 64;
+    let t = ((p % 64) * 25 / 64) as usize;    // 0..24 into QSINE (rising quarter)
+    let rise = QSINE[t.min(25)] as i32;
+    let fall = QSINE[(25 - t).min(25)] as i32;
+    let v = match quad { 0 => rise, 1 => fall, 2 => -rise, _ => -fall };
+    v >> 5
+}
+
+pub struct MediaPlayer {
+    avail: bool,        // bin/meta.rpv present in initrd
+    w: u32, h: u32,     // native video dims
+    fps: u32,
+    nframes: u32,
+    frame: u32,         // current frame index
+    playing: bool,
+    last_step: u64,     // tick of last frame advance
+    last_viz: u64,      // tick of last visualizer animation step
+    interval: u64,      // ticks between frames (100 Hz / fps)
+    viz: bool,          // WMP visualizer easter egg active
+    level: u32,         // last reported audio amplitude 0..255
+    t: i32,             // visualizer animation time
+    pub dirty: bool,
+    pub wants_close: bool,
+    ansi: crate::ansi::AnsiParser,
+}
+
+impl MediaPlayer {
+    pub fn new() -> Self {
+        let packed = unsafe { sys_video_open() };
+        let w = ((packed >> 48) & 0xFFFF) as u32;
+        let h = ((packed >> 32) & 0xFFFF) as u32;
+        let fps = ((packed >> 24) & 0xFF) as u32;
+        let nframes = (packed & 0xFF_FFFF) as u32;
+        let avail = packed != 0 && w > 0 && h > 0;
+        let interval = if fps > 0 { (100 / fps as u64).max(1) } else { 4 };
+        MediaPlayer {
+            avail, w, h, fps, nframes, frame: 0,
+            playing: avail,              // autoplay the founding clip
+            last_step: 0, last_viz: 0, interval,
+            viz: false, level: 0, t: 0,
+            dirty: true, wants_close: false,
+            ansi: crate::ansi::AnsiParser::new(),
+        }
+    }
+
+    /// Draw the Windows-Media-Player "Plasma" visualizer into the content area.
+    /// Rotating rainbow plasma + an audio-reactive oscilloscope sweep. Cell-based
+    /// (8 px) so the cost stays bounded even at large window sizes.
+    fn draw_visualizer(&self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, h: u32) {
+        let cell = 8u32;
+        let lvl = self.level as i32;
+        let cols = w / cell;
+        let rows = h / cell;
+        for ry in 0..rows {
+            let cy = (ry * cell) as i32;
+            for rx in 0..cols {
+                let cx = (rx * cell) as i32;
+                // Three interfering plasma waves + audio drive → hue rotation.
+                let v = vsin(cx / 3 + self.t)
+                      + vsin(cy / 3 - self.t / 2)
+                      + vsin((cx + cy) / 4 + self.t * 2)
+                      + lvl * 6;
+                let phase = v / 6 + self.t + lvl * 3;
+                let r = ((vsin(phase) + 1024) * 255 / 2048) as u32;
+                let g = ((vsin(phase + 85) + 1024) * 255 / 2048) as u32;
+                let b = ((vsin(phase + 170) + 1024) * 255 / 2048) as u32;
+                fb.fill_rect(x + rx * cell, y + ry * cell, cell, cell, (r << 16) | (g << 8) | b);
+            }
+        }
+        // Audio-reactive oscilloscope sweeping the mid-line — amplitude tracks
+        // the kernel-reported level so it visibly jumps to Linus's voice.
+        let mid = y as i32 + h as i32 / 2;
+        let amp = (lvl + 12) * (h as i32 / 3) / 255;
+        let mut px = -1i32;
+        let mut py = mid;
+        let mut i = 0u32;
+        while i < w {
+            let xi = x as i32 + i as i32;
+            let yi = mid - vsin(i as i32 * 3 + self.t * 4) * amp / 1024
+                         + vsin(i as i32 * 7 - self.t * 3) * amp / 2048;
+            if px >= 0 {
+                let (ya, yb) = if py <= yi { (py, yi) } else { (yi, py) };
+                let mut yy = ya;
+                while yy <= yb {
+                    if yy >= y as i32 && yy < (y + h) as i32 {
+                        fb.set_pixel(xi as u32, yy as u32, 0xF5F5F7);
+                    }
+                    yy += 1;
+                }
+            }
+            px = xi; py = yi;
+            i += 2;
+        }
+    }
+
+    fn draw_transport(&self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, bar_h: u32) {
+        fb.fill_rect(x, y, w, bar_h, 0x14171A);
+        // Play/pause glyph (pure SVG-style rects/triangle — no emoji).
+        let gx = x + 10; let gy = y + bar_h / 2;
+        if self.playing {
+            fb.fill_rect(gx, gy - 5, 3, 10, 0x6FE18B);
+            fb.fill_rect(gx + 5, gy - 5, 3, 10, 0x6FE18B);
+        } else {
+            for r in 0..10 {
+                let half = (10 - r) / 2;
+                fb.fill_rect(gx, gy - 5 + r, half.max(1), 1, 0x6FE18B);
+            }
+        }
+        // Progress bar.
+        let bx = x + 28; let bw = w.saturating_sub(150);
+        fb.fill_rect(bx, gy - 2, bw, 4, 0x2A332F);
+        if self.nframes > 0 {
+            let fill = (self.frame.min(self.nframes) as u64 * bw as u64 / self.nframes as u64) as u32;
+            fb.fill_rect(bx, gy - 2, fill, 4, 0x6FE18B);
+        }
+        // Frame counter + hint.
+        let mut fb_buf = [0u8; 24];
+        let mut nf_buf = [0u8; 24];
+        let tx = x + 32 + bw;
+        fb.draw_str_t(tx, y + 5, u64_into(&mut fb_buf, self.frame as u64), 0xA8B0A6);
+        fb.draw_str_t(tx + 40, y + 5, u64_into(&mut nf_buf, self.nframes as u64), 0x6B756D);
+        let hint = if self.viz { "V: video" } else { "V: visualizer" };
+        fb.draw_str_t(x + 10, y + bar_h - 12, hint, 0x6B756D);
+    }
+}
+
+impl App for MediaPlayer {
+    fn tick(&mut self, ticks: u64) -> bool {
+        if !self.avail { return false; }
+        let mut changed = false;
+        if self.playing && ticks.wrapping_sub(self.last_step) >= self.interval {
+            self.last_step = ticks;
+            let r = unsafe { sys_video_advance() };
+            self.level = ((r >> 32) & 0xFF) as u32;
+            self.frame = (r & 0xFFFF_FFFF) as u32;
+            changed = true;
+        }
+        // Animate the visualizer at ~25 fps independently of the video cadence.
+        if self.viz && ticks.wrapping_sub(self.last_viz) >= 4 {
+            self.last_viz = ticks;
+            self.t = self.t.wrapping_add(6);
+            changed = true;
+        }
+        changed
+    }
+
+    fn render(&mut self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, h: u32) {
+        let bar_h = 26u32;
+        let vh = h.saturating_sub(bar_h);
+
+        if !self.avail {
+            fb.fill_rect(x, y, w, h, 0x14171A);
+            fb.draw_str(x + 16, y + 20, "Media Player", 0xECEDE5, 0x14171A);
+            fb.draw_str(x + 16, y + 44, "bin/meta.rpv not found in this build.", 0xA8B0A6, 0x14171A);
+            self.dirty = false;
+            return;
+        }
+
+        if self.viz {
+            self.draw_visualizer(fb, x, y, w, vh);
+        } else {
+            // Letterbox backing, then the kernel scales the frame into the rect.
+            fb.fill_rect(x, y, w, vh, 0x000000);
+            let rect = ((x as u64 & 0xFFFF) << 48)
+                     | ((y as u64 & 0xFFFF) << 32)
+                     | ((w as u64 & 0xFFFF) << 16)
+                     | (vh as u64 & 0xFFFF);
+            unsafe { sys_video_blit(fb.data as u64, rect); }
+        }
+        self.draw_transport(fb, x, y + vh, w, bar_h);
+        self.dirty = false;
+    }
+
+    fn on_key(&mut self, key: u8) {
+        use crate::ansi::Key as AK;
+        match self.ansi.feed(key) {
+            AK::Char(b' ') => { self.playing = !self.playing; self.dirty = true; }
+            AK::Char(b'v') | AK::Char(b'V') => { self.viz = !self.viz; self.dirty = true; }
+            AK::Char(b'r') | AK::Char(b'R') => {
+                // Restart from the top.
+                unsafe { sys_video_open(); }
+                self.frame = 0; self.playing = true; self.dirty = true;
+            }
+            _ => {}
+        }
+    }
+
+    fn on_mouse(&mut self, mx: i32, my: i32, _w: u32, h: u32, buttons: u8) {
+        // Click the lower transport strip toggles play/pause.
+        if buttons & 1 != 0 && my >= (h as i32 - 26) && mx >= 0 {
+            self.playing = !self.playing;
+            self.dirty = true;
+        }
+    }
+
+    fn title(&self) -> &str { "Media Player" }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Games — preinstalled on the Rusty Penguin desktop. Pure-Rust, no_std, no heap
 // churn in the render path (numbers via u64_into, no per-frame format!()).
 // ─────────────────────────────────────────────────────────────────────────────

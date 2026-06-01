@@ -356,6 +356,16 @@ if [ -f "$DOOM_ASSETS/fbdoom" ] && [ -f "$DOOM_ASSETS/doom1.wad" ]; then
     done
     echo "[build]   + bin/fbdoom + doom1.wad + ld.so + libc (real DOOM, desktop-launchable)"
 fi
+# Bundle the founding clip (Linus Torvalds, OSS EU 2024) so the desktop Media
+# app — and the fullscreen `metavideo` path — can play it from ramfs. ~58 MiB,
+# regenerable via scripts/make_meta_video.sh; the kernel relocates the initrd to
+# 128 MiB so the large blob clears the desktop image/heap/stack/audio buffer.
+if [ -f "$ISO_DIR/assets/meta.rpv" ]; then
+    cp "$ISO_DIR/assets/meta.rpv" "$BARE_INITRAMFS_DIR/bin/meta.rpv"
+    echo "[build]   + bin/meta.rpv (founding clip, $(du -sh "$ISO_DIR/assets/meta.rpv" | cut -f1))"
+else
+    echo "[build]   ! iso/assets/meta.rpv missing — Media app will show 'not found' (run scripts/make_meta_video.sh)"
+fi
 
 BARE_INITRD="$ISO_DIR/initrd-bare.img"
 (cd "$BARE_INITRAMFS_DIR" && find . | cpio -o -H newc 2>/dev/null > "$BARE_INITRD")

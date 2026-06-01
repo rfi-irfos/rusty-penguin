@@ -412,6 +412,9 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
     if unsafe { mb2_cmdline_contains(mb2, b"metavideo") } {
         rpv::play_from_initrd(); // play the founding clip on the kernel that it triggered
     }
+    if unsafe { mb2_cmdline_contains(mb2, b"videowin") } {
+        rpv::selftest_window(); // windowed service path (desktop Media app drives this)
+    }
     if unsafe { mb2_cmdline_contains(mb2, b"schedtest6") } {
         sched::selftest_ring3_lowhalf(); // private low half per process (Increment 3d)
     }
