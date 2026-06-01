@@ -122,6 +122,11 @@ static mut TASKS: [Task; MAX_TASKS] =
 static mut KSTACKS: [[u8; KSTACK_SIZE]; MAX_TASKS] = [[0; KSTACK_SIZE]; MAX_TASKS];
 static mut CUR_TASK: usize = 0;
 
+// `_cur_syscall_stack` (defined in syscall.rs global_asm) is the kernel stack the
+// SYSCALL trampoline switches to. preempt_tick retargets it per task on each
+// context switch (via inline asm — see there) so concurrent syscalls from two
+// tasks don't share one stack and clobber each other's frames.
+
 // Per-task syscall counter — a liveness signal. A process that makes no syscalls
 // over a window has stopped answering the kernel; the watchdog treats that as
 // "not responding" (a stand-in for a desktop app that stops servicing the
@@ -310,6 +315,17 @@ extern "C" fn preempt_tick(cur_rsp: u64) -> u64 {
         // task and the timer interrupts it, the CPU lands the frame on that
         // task's own kernel stack (Increment 3c). Harmless for ring-0 tasks.
         crate::gdt::set_rsp0(kstack_top(nxt));
+        // ...and point the SYSCALL trampoline at the same per-task kernel stack,
+        // so two tasks in syscalls at once (one preempted mid-syscall, another
+        // entering) don't share one stack and clobber each other's frames.
+        // Written via inline asm (direct rip-relative): a plain Rust store to this
+        // global_asm symbol compiles to a GOT-indirect access whose slot is unmapped
+        // in the higher-half kernel (→ #PF). The asm form references it directly.
+        let kt = kstack_top(nxt);
+        core::arch::asm!(
+            "mov qword ptr [rip + _cur_syscall_stack], {0}",
+            in(reg) kt, options(nostack, preserves_flags),
+        );
         TASKS[nxt].rsp
     }
 }
@@ -1161,6 +1177,53 @@ pub fn selftest_schedesktop() -> ! {
     crate::idt::set_timer_vector(irq_timer_preempt as *const () as u64);
     unsafe { core::arch::asm!("sti"); }
     // Boot thread idles; the desktop process gets the CPU and renders.
+    loop {
+        busy_spin();
+    }
+}
+
+/// `schedesktop2` brick — the REAL desktop AND a second real ELF app running as
+/// two independent, preemptively-scheduled, address-space-isolated processes at
+/// the same time. This is the scenario that previously triggered a #GP: when the
+/// desktop blocked in a syscall (sys_read → sti+hlt) and the second app entered a
+/// syscall in that window, they shared ONE kernel syscall stack and clobbered
+/// each other's saved frame. With the per-task `_cur_syscall_stack` fix each task
+/// has its own syscall stack, so concurrent syscalls no longer collide.
+///
+/// Pass criterion: the desktop renders AND stays rendering (no #GP / triple fault)
+/// while the second app is also scheduled and makes its own syscalls.
+pub fn selftest_schedesktop2() -> ! {
+    use crate::serial::write_str;
+    write_str("\n[mpd2] === schedesktop2: real desktop + a second real app, both scheduled ===\n");
+    let elf = match crate::ramfs::find(b"bin/desktop") {
+        Some(e) => e,
+        None => { write_str("[mpd2] bin/desktop not in initrd\n"); halt(); }
+    };
+    unsafe {
+        core::arch::asm!("cli");
+        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3() };
+        CUR_TASK = 0;
+    }
+    write_str("[mpd2] loading real desktop into a private address space (24 MiB heap)...\n");
+    let d = spawn_ring3_elf_cfg(elf, crate::vmm::USER_STACK_TOP, crate::vmm::USER_STACK_PAGES as u32, 0);
+    if d == 0 { write_str("[mpd2] desktop spawn failed (out of frames?)\n"); halt(); }
+    // Second app: a real ELF in its OWN address space, rendering to its own
+    // offscreen surface and making liveness syscalls — entirely independent of
+    // the desktop. Its very existence + concurrent syscalls is the test.
+    let fb_frame = match crate::pmm::alloc_frame() {
+        Some(f) => f, None => { write_str("[mpd2] no frame for app surface\n"); halt(); }
+    };
+    unsafe { core::ptr::write_bytes(crate::vmm::phys_to_virt(fb_frame) as *mut u8, 0, 4096); }
+    let app_elf = make_elf(0x0050_0000, &FILL_STUB);
+    let a = spawn_ring3_elf(&app_elf, fb_frame);
+    if a == 0 { write_str("[mpd2] second-app spawn failed\n"); halt(); }
+    write_str("[mpd2] desktop + second app both scheduled; clearing screen + enabling preemption\n");
+    if crate::fb::is_live() {
+        crate::fb::fill(0, 0, crate::fb::width(), crate::fb::height(), 0x000000);
+    }
+    crate::idt::set_timer_vector(irq_timer_preempt as *const () as u64);
+    unsafe { core::arch::asm!("sti"); }
+    // Boot thread idles; the desktop renders and the second app runs concurrently.
     loop {
         busy_spin();
     }

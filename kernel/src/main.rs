@@ -554,6 +554,11 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
         // A hung windowed app is force-quit; the healthy one keeps running.
         sched::selftest_recover_win(); // never returns
     }
+    if unsafe { mb2_cmdline_contains(mb2, b"schedesktop2") } {
+        // The REAL desktop + a second real app, both preemptively scheduled and
+        // isolated. Checked BEFORE `schedesktop` (which is a substring).
+        sched::selftest_schedesktop2(); // never returns
+    }
     if unsafe { mb2_cmdline_contains(mb2, b"schedesktop") } {
         // The REAL desktop loaded + run as a scheduled process (not the default path).
         sched::selftest_schedesktop(); // never returns

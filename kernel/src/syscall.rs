@@ -103,6 +103,12 @@ core::arch::global_asm!(
     ".section .data",
     ".align 8",
     "_user_rsp: .quad 0",
+    // The kernel stack syscall_entry switches to. Defaults to the shared stack
+    // (correct for a single process). With preemptive multitasking the scheduler
+    // points this at the CURRENT task's own kernel stack each switch, so two
+    // tasks in syscalls at once don't clobber each other's frames.
+    ".global _cur_syscall_stack",
+    "_cur_syscall_stack: .quad _syscall_kstack_top",
     // Linux ABI args 4–6 (r10/r8/r9) stashed for the current syscall.
     ".global _lx_a4",
     ".global _lx_a5",
@@ -119,9 +125,15 @@ core::arch::global_asm!(
     ".global syscall_entry",
     "syscall_entry:",
 
-    // 1. Save user RSP, switch to kernel stack
+    // 1. Save user RSP, switch to the CURRENT TASK's kernel stack, then push the
+    //    user RSP onto that stack so it survives even if this syscall is preempted
+    //    and another task syscalls in the meantime (the _user_rsp global would be
+    //    clobbered; the per-task stack slot is not). IF is masked here (FMASK), so
+    //    the two-instruction window before the push can't be preempted.
     "mov qword ptr [rip + _user_rsp], rsp",
-    "lea rsp, [rip + _syscall_kstack_top]",
+    "mov rsp, [rip + _cur_syscall_stack]",
+    "push qword ptr [rip + _user_rsp]",
+    "sub rsp, 8",   // padding: keep the C call site 16-byte aligned (push made it odd)
 
     // 1b. Stash Linux args 4–6 (r10/r8/r9) and user RIP (rcx) before the
     //     Rust call clobbers them. Harmless for native syscalls.
@@ -176,8 +188,11 @@ core::arch::global_asm!(
     "pop rcx",           // user RIP → rcx (consumed by sysretq)
     "pop r11",           // user RFLAGS → r11 (consumed by sysretq)
 
-    // 5. Restore user RSP, return to ring-3
-    "mov rsp, qword ptr [rip + _user_rsp]",
+    // 5. Restore user RSP from the per-task kernel stack (pushed at entry), return.
+    //    Discard the alignment padding first, then `pop rsp` loads rsp from [rsp]
+    //    — i.e. rsp := the saved user RSP.
+    "add rsp, 8",
+    "pop rsp",
     "sysretq",
 );
 
