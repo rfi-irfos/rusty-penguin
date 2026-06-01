@@ -17,8 +17,6 @@
 
 </p>
 
-> "Binary hardware. Ternary mind."
-
 > *"I'm sure some clueless young person will decide 'how hard can it be?' and
 > start his own operating system in Rust..."* — Linus Torvalds, Open Source
 > Summit Europe 2024 ([keynote, 16:59](https://www.youtube.com/watch?v=OM_8UOPFpqE&t=1019s)).
