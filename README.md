@@ -157,7 +157,8 @@ velocity equals completion.
 | **id Software's real DOOM (fbDOOM) on the pure-Rust kernel via the Linux ABI** | ✅ boots + renders, QEMU-verified |
 | **Preemptive multitasking + per-process address spaces (CR3) + ring-3 isolation** | ✅ scheduler foundation, QEMU-verified |
 | **Hung-app isolation + watchdog force-quit (a wedged process can't freeze the system; it gets reaped)** | ✅ QEMU-verified behind flags |
-| **Multi-process windowed apps (real ELF processes → isolated offscreen surfaces → compositor → on-screen windows; two apps at once)** | ✅ pipeline proven + screenshot-verified behind flags |
+| **Multi-process windowed apps (real ELF processes → isolated offscreen surfaces → compositor → on-screen windows; two apps at once; hung app force-quit)** | ✅ pipeline proven + screenshot-verified behind flags |
+| **The real desktop run as a scheduled, isolated process** | ✅ QEMU-verified (`schedesktop` flag) — the bridge to a multi-process desktop |
 | **ACPI power management — S5 shutdown + reboot** | ✅ QEMU-verified; the Shut Down button powers the machine off |
 | **Multi-user login (SHA-256 passwords, /home/<user>)** | ✅ |
 | In-memory VFS within a session | ✅ |

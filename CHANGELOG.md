@@ -4,6 +4,24 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+### Added — Multiproc brick 4: the REAL desktop runs as a scheduled process (2026-06-01)
+
+- The bridge from synthetic test apps (3a–3e) to the real multi-process desktop:
+  load the actual 11 MB desktop-metal ELF through `spawn_ring3_elf` and run it as
+  a preemptively-scheduled ring-3 process in its own private address space.
+- `spawn_ring3_elf_cfg` generalizes the loader with a configurable multi-page
+  user stack at the program's expected VA (the desktop wants its 16-page stack at
+  USER_STACK_TOP).
+- `schedesktop` boot flag → load bin/desktop into a private AS (24 MiB heap
+  mapped + zeroed via the physmap), schedule it, enable preemption; the boot
+  thread idles while the desktop gets the CPU and renders.
+- Verified by QEMU screendump: the full desktop UI renders (wallpaper, hero card,
+  dock — 11773 non-black cells, same as the normal boot), zero faults. Proof:
+  docs/multiproc-real-desktop-scheduled.png.
+- So the real complex desktop runs correctly under the scheduler in an isolated
+  address space. Remaining toward windowed DOOM: a SECOND real app alongside it +
+  the desktop compositing that app's surface (a desktop-code change).
+
 ### Added — Multiproc brick 3e: hung windowed app force-quit, others keep running (2026-06-01)
 
 - Item 4's entire goal in one scene, combining isolation (1/2) + watchdog (2) +
