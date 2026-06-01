@@ -4,6 +4,37 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+### Added — TLS certificate-chain trust: the handshake now authenticates *whose* key (2026-06-01)
+
+- The TLS 1.3 handshake did ECDHE + AES/ChaCha correctly but accepted *any*
+  certificate — the Certificate message was folded into the transcript and
+  thrown away. A man-in-the-middle with any valid-looking cert was invisible.
+  Now the server's certificate chain is parsed and validated to an embedded CA
+  root before any application data flows; on failure the connection is aborted.
+- `bignum.rs` — Montgomery (CIOS) modular exponentiation for RSA signature
+  verification (`sig^e mod n`). Host-fuzzed against OpenSSL at 2048 and 4096
+  bits. The half of a trust store that P-256 doesn't cover.
+- `x509.rs` — from-scratch DER/ASN.1 parser → certificate fields; RSA-PKCS#1
+  v1.5 verify (EMSA padding + SHA-256 DigestInfo) via `bignum`; ECDSA-P256 via
+  `p256.rs`; chain walk leaf → intermediate(s) → a trusted root; SAN hostname
+  match (incl. single-label wildcard) and notBefore/notAfter expiry against the
+  CMOS real-time clock. An anchor is matched by subject + public key, so a root
+  the server sends in-band is trusted only if it equals our embedded copy.
+- `ca_roots.rs` — real embedded trust anchors: GTS Root R1 (Google) and ISRG
+  Root X1 (Let's Encrypt).
+- `tls.rs` — splits the Certificate message's `certificate_list` into DER blobs
+  and calls `x509::validate_chain` after the handshake completes; rejects with a
+  human-readable reason (expired / bad hostname / bad signature / untrusted /
+  malformed). This is the exact path the browser's HTTPS fetches use.
+- Boot self-test fetches **www.google.com** end to end: leaf → WR2 → GTS Root
+  R1 (all `sha256WithRSAEncryption`), validated, then `HTTP/1.1 200 OK` over the
+  trusted channel. Verified in QEMU:
+  `[tls] cert chain TRUSTED (www.google.com)` and
+  `[x509] chain self-test OK (valid chain trusted, tampered rejected)`.
+- Scope, honestly: signature + chain + validity + hostname. Not yet:
+  basicConstraints CA flags, keyUsage, name constraints, the leaf
+  CertificateVerify signature, or revocation (CRL/OCSP). Real, and next.
+
 ### Changed — Desktop v2 visual redesign from Simeon's mockup (2026-05-29)
 
 - Adopted the warm-stone-green palette from `docs/design/rusty-penguin-os-mockup.html`
