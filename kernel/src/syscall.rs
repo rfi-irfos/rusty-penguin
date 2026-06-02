@@ -751,6 +751,20 @@ pub extern "C" fn syscall_handler(nr: u64, arg1: u64, arg2: u64, arg3: u64) -> u
             }
             pos as u64
         }
+        46 => {
+            // sys_net_info(out_ptr) → writes 19 bytes, returns bytes written.
+            // Layout: [up:1][mac:6][ip:4][gateway:4][dns:4]. Backs ifconfig/ip.
+            let out_ptr = arg1 as *mut u8;
+            if out_ptr.is_null() { return 0; }
+            let (up, mac, ip, gw, dns) = crate::net::net_info();
+            let out = unsafe { core::slice::from_raw_parts_mut(out_ptr, 19) };
+            out[0] = up as u8;
+            out[1..7].copy_from_slice(&mac);
+            out[7..11].copy_from_slice(&ip);
+            out[11..15].copy_from_slice(&gw);
+            out[15..19].copy_from_slice(&dns);
+            19
+        }
         // sys_et_phone_home (0x4E - Brick 48)
         0x4e => {
             let path_ptr = arg1 as *const u8;

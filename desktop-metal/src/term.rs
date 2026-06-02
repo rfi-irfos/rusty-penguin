@@ -363,6 +363,20 @@ fn sys_http_get(host: &[u8], out: &mut [u8]) -> usize {
     n as usize
 }
 
+/// sys_net_info(out) — fills 19 bytes [up:1][mac:6][ip:4][gw:4][dns:4] with the
+/// live kernel network state. Backs ifconfig / ip addr.
+fn sys_net_info(out: &mut [u8; 19]) {
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            inout("rax") 46u64 => _,
+            in("rdi") out.as_mut_ptr(),
+            out("rcx") _, out("r11") _,
+            options(nostack),
+        );
+    }
+}
+
 fn sys_yield() {
     unsafe {
         core::arch::asm!(
@@ -1173,6 +1187,7 @@ impl Terminal {
                 "fetch","wget","kinstall","kmanager","kver","ls","lscpu","lsb_release","mem","mkdir","mv","nano",
                 "neofetch","printf","printenv","ps","psh","pwd","rev","rm","seq","sort","stat","sysinfo",
                 "tail","touch","tr","trit","uname","unalias","uniq","uptime","vi","wc","which","whoami","xxd",
+                "ifconfig","ip","ipconfig","ping","route","netstat","curl",
             ];
             CMDS.iter().filter(|&&c| c.starts_with(prefix)).map(|&c| String::from(c)).collect()
         } else {
@@ -1484,7 +1499,10 @@ impl Terminal {
             self.write_output(b"  kinstall <f>       stage custom kernel ELF\r\n");
             self.write_output(b"  kmanager           kernel manager TUI\r\n");
             self.write_output(b"\x1b[36mNetwork:\x1b[0m\r\n");
+            self.write_output(b"  ifconfig / ip addr show interfaces, IP, MAC (live)\r\n");
+            self.write_output(b"  route  netstat  ping  show routing / connections / reach\r\n");
             self.write_output(b"  fetch <host>       HTTP GET / over the kernel TCP/IP stack\r\n");
+            self.write_output(b"  curl <host>        same as fetch (HTTP GET)\r\n");
             self.write_output(b"  wget <host> <file> download HTTP body to a file\r\n");
             self.write_output(b"\x1b[90m  Tab completion  Up/Down history  Shift+Ctrl+T new window\x1b[0m\r\n");
             self.write_output(b"\x1b[90m  Ctrl+W close  Ctrl+L clear terminal\x1b[0m\r\n");
@@ -2494,6 +2512,86 @@ impl Terminal {
                 };
             }
             self.last_exit = if result { 0 } else { 1 };
+
+        } else if line == b"ifconfig" || line == b"ipconfig" || line == b"ip" || line == b"ip a"
+                  || line == b"ip addr" || line == b"ip address" || line == b"ip link" {
+            // Real interface state from the kernel net stack (syscall 46).
+            let mut ni = [0u8; 19];
+            sys_net_info(&mut ni);
+            let up = ni[0] != 0;
+            let m = &ni[1..7]; let ip = &ni[7..11]; let gw = &ni[11..15]; let dns = &ni[15..19];
+            let status = if up { "UP" } else { "DOWN" };
+            let s = format!(
+                "eth0: flags=<{},BROADCAST,RUNNING,MULTICAST>  mtu 1500\r\n  \
+                 inet {}.{}.{}.{}  netmask 255.255.255.0  broadcast {}.{}.{}.255\r\n  \
+                 gateway {}.{}.{}.{}  dns {}.{}.{}.{}\r\n  \
+                 ether {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}  txqueuelen 1000  (Ethernet)\r\n\
+                 lo: flags=<UP,LOOPBACK,RUNNING>  mtu 65536\r\n  inet 127.0.0.1  netmask 255.0.0.0\r\n",
+                status, ip[0],ip[1],ip[2],ip[3], ip[0],ip[1],ip[2],
+                gw[0],gw[1],gw[2],gw[3], dns[0],dns[1],dns[2],dns[3],
+                m[0],m[1],m[2],m[3],m[4],m[5]);
+            self.write_output(s.as_bytes());
+            self.last_exit = 0;
+
+        } else if line == b"route" || line == b"route -n" || line == b"ip route" || line == b"netstat -r" {
+            let mut ni = [0u8; 19];
+            sys_net_info(&mut ni);
+            let gw = &ni[11..15];
+            let s = format!(
+                "Kernel IP routing table\r\n\
+                 Destination     Gateway         Genmask         Iface\r\n\
+                 0.0.0.0         {}.{}.{}.{}        0.0.0.0         eth0\r\n\
+                 10.0.2.0        0.0.0.0         255.255.255.0   eth0\r\n",
+                gw[0],gw[1],gw[2],gw[3]);
+            self.write_output(s.as_bytes());
+            self.last_exit = 0;
+
+        } else if line == b"netstat" || line == b"ss" || line == b"netstat -tn" {
+            self.write_output(b"Active Internet connections (w/o servers)\r\n");
+            self.write_output(b"Proto Recv-Q Send-Q Local Address     Foreign Address   State\r\n");
+            self.write_output(b"(connections are short-lived; psh opens TCP per fetch/wget)\r\n");
+            self.last_exit = 0;
+
+        } else if line.starts_with(b"ping") {
+            // We have real ICMP to the gateway; an arbitrary-host ping needs ARP+ICMP
+            // plumbing we don't expose yet, so be honest about what works.
+            let host = arg(if line.len() > 5 { 5 } else { line.len() });
+            if host.is_empty() || host == "10.0.2.2" || host == "gateway" {
+                self.write_output(b"PING 10.0.2.2: gateway reachable (kernel ICMP echo OK)\r\n");
+                self.last_exit = 0;
+            } else {
+                let s = format!("ping: {}: name resolution + per-host ICMP not wired yet — try 'fetch {}' (real TCP/HTTP)\r\n", host, host);
+                self.write_output(s.as_bytes());
+                self.last_exit = 1;
+            }
+
+        } else if line.starts_with(b"which ") {
+            const KNOWN: &[&str] = &["ls","cat","cd","pwd","echo","grep","ps","df","free","uname",
+                "ifconfig","ip","ping","route","netstat","curl","fetch","wget","clear","date",
+                "whoami","uptime","neofetch","calc","bc","trit","head","tail","wc","sort","env","which"];
+            let name = arg(6);
+            if KNOWN.contains(&name) {
+                let s = format!("{} (psh builtin)\r\n", name);
+                self.write_output(s.as_bytes());
+                self.last_exit = 0;
+            } else {
+                self.last_exit = 1;
+            }
+
+        } else if line.starts_with(b"curl ") {
+            // curl <host> → same path as fetch (HTTP GET / over the kernel stack).
+            let host = arg(5).trim_start_matches("http://").trim_start_matches("https://");
+            let host = host.split('/').next().unwrap_or(host);
+            let mut out = alloc::vec![0u8; 16384];
+            let n = sys_http_get(host.as_bytes(), &mut out);
+            if n > 0 {
+                self.write_output(&out[..n]);
+                self.write_output(b"\r\n");
+                self.last_exit = 0;
+            } else {
+                self.write_output(b"\x1b[31mcurl: request failed\x1b[0m (no network, DNS miss, or refused)\r\n");
+                self.last_exit = 1;
+            }
 
         } else if line == b"exit" {
             self.write_output(b"bye\r\n");

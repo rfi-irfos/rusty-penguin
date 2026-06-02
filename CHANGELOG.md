@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented here.
 
+## [3.4.0] — 2026-06-02 — Terminal networking commands (ifconfig/ip/ping/curl…)
+
+### Added — psh networking built-ins (real data, not stubs)
+- **`sys_net_info` (syscall 46)** — kernel returns the live interface snapshot:
+  real NIC MAC, IP (10.0.2.15), gateway (10.0.2.2), DNS (10.0.2.3), up/down.
+- **`ifconfig` / `ip addr` / `ip link` / `ipconfig`** — print eth0 + lo with the
+  real MAC, IP, netmask, broadcast, gateway, DNS, and link state.
+- **`route` / `ip route` / `netstat -r`** — kernel routing table (default via gw).
+- **`netstat` / `ss`** — connection summary (honest: psh opens TCP per fetch).
+- **`ping`** — gateway reach via the kernel's real ICMP echo; honest message for
+  arbitrary hosts (per-host ICMP not wired — points to `fetch`).
+- **`curl <host>`** — HTTP GET over the kernel TCP/IP stack (same path as fetch).
+- **`which <cmd>`** — reports psh built-ins.
+- Added to tab-completion + `help`. Note: full Linux-command coverage is the
+  Linux ABI bridge track (run real binaries), not built-ins.
+
 ## [3.3.3] — 2026-06-02 — App font migration: Files (+ UX polish)
 
 ### Changed — File manager

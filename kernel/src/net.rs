@@ -50,6 +50,14 @@ fn nic() -> Option<Nic> { active_mac().map(|m| Nic { mac: m }) }
 // QEMU user-mode networking (SLIRP) defaults: guest 10.0.2.15, gateway 10.0.2.2.
 const OUR_IP: [u8; 4] = [10, 0, 2, 15];
 const GW_IP:  [u8; 4] = [10, 0, 2, 2];
+
+/// Public net snapshot for userspace (ifconfig/ip): (up, mac, ip, gateway, dns).
+/// MAC is the real NIC hardware address; IP/GW/DNS are the live SLIRP config.
+pub fn net_info() -> (bool, [u8; 6], [u8; 4], [u8; 4], [u8; 4]) {
+    let up = unsafe { NET_UP };
+    let mac = active_mac().unwrap_or([0; 6]);
+    (up, mac, OUR_IP, GW_IP, DNS_IP)
+}
 const BCAST:  [u8; 6] = [0xFF; 6];
 const ETHERTYPE_ARP: u16 = 0x0806;
 const ETHERTYPE_IP:  u16 = 0x0800;
