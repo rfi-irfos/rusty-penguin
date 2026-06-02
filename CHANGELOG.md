@@ -2,6 +2,57 @@
 
 All notable changes to this project will be documented here.
 
+## [3.1.0] — 2026-06-02 — RustyPhone, Deep Azure theme, scientific calc, Notes, psh pipes
+
+### Added — RustyPhone (Zabih's vision: Rusty Penguin on any device)
+- **RustyPhone app (App 18):** Full SIP soft-phone — Dialer / Recent / Account tabs.
+  12-key keypad (digits + ABC sublabels), Call/End/Mute action row, per-call timer,
+  recent-calls ring buffer. Adaptive layout: portrait mode at ≤340px window width,
+  desktop mode wider. The UI scales to phone, tablet, laptop, or PC without restart.
+- **Phone number verification flow:** Account tab lets you enter your number, receive
+  a 6-digit code, enter it, and get verified — architecture for Twilio SMS API ready.
+- **sys_https_post (nr=45):** New kernel syscall wrapping the TLS 1.3 stack for HTTPS
+  POST (Twilio, REST APIs). Descriptor: `host\0path\0content-type\0body`.
+- **tls::https_post:** `https_get` refactored into shared `https_request` internal;
+  both GET and POST share the full TLS 1.3 + cert-chain-validation handshake.
+
+### Added — Scientific Calculator (replacing the basic 4-op calc)
+- **Full scientific mode:** sin/cos/tan/sqrt/ln/log/exp/x^y/1/x/π using libm.
+  Memory (M+/MC/MR), ±, DEG/RAD toggle. 5×6 button grid.
+- **Balanced-ternary result panel:** Every result shows its {+/0/-} ternary encoding
+  below the decimal. No other OS calculator does this.
+
+### Added — Notes app (App 17)
+- Full keyboard text editor: cursor movement, scroll, insert/delete. Ctrl+S saves to
+  VFS (`notes.txt`) which persists via RPFS across reboots. Unsaved indicator [+].
+
+### Added — psh pipes + wine command
+- **Pipe operator:** `ls | grep foo`, `ls | wc`, `cat file | head` all work via
+  kernel fork/pipe/dup2/waitpid (syscalls 22/57/33/61).
+- **`wine <path>`:** Execute Windows PE binaries via the native Wine engine.
+- **`grep`, `ls`, `rm`, `wc`, `head`:** Five new psh commands with real implementations.
+  `ls` backed by new `sys_ls` (nr=44) which enumerates ramfs inodes.
+
+### Changed — Deep Azure theme (Zabih's direction: away from olive/stone-green)
+- **Palette:** Midnight blue-black base (#0B0F19), azure primary (#38BDF8),
+  rose/pink accent (#F472B6), cyan-turquoise (#2DD4BF), slate ternary zero (#64748B).
+- **wm.rs:** Azure active window border, rose close button, turquoise max button.
+- **Background:** Azure nebula bloom (top-right) + teal glow (bottom-left) + rose hint
+  (bottom-centre) + deep corner vignette. Deep space energy.
+- Stone-green palette preserved as a named alternate preset.
+
+### Fixed
+- `.global _user_rsp` missing — Wine linker was failing silently.
+- `pub mod mobile` not declared in `drivers/mod.rs` — undefined symbol at link.
+- Wine `NtWriteFile` now routes the buffer to kernel serial (Windows PE stdout visible).
+- `hello-win` rewritten as a console app (WriteFile/ExitProcess, no MessageBoxA).
+
+### Docs
+- `docs/` reorganised: 50 screenshots → `docs/screenshots/`, 7 serial logs → `docs/logs/`.
+- `CONTRIBUTING.md`: dead `rfi-irfos.org` link replaced with `ternlang.com`.
+
+---
+
 ## [3.0.0] — 2026-06-03 — Project TritKernel & Mobile Daily-Driver Readiness
 
 ### Added — Mobile Telephony (Project RustyPhone)
