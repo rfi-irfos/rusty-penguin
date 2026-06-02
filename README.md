@@ -289,15 +289,15 @@ syscall #GP is fixed; `schedesktop2`, QEMU-verified — see `docs/SCHEDULER.md`)
 The desktop — itself a scheduled process — now **composites a second real app's
 live surface into a titled on-screen window** (`sys_app_surface`, QEMU-verified),
 so the full windowed multi-app model is proven end to end with a synthetic app.
-And the whole windowed-**Linux**-app pipeline is now proven end to end: a
-dynamically-linked Linux binary runs as a scheduled process (`linuxdyn`), gets a
-private `/dev/fb0` surface it renders into (`linuxfb`), and the desktop composites
-that surface into a titled on-screen window (`linuxwin`, screendump
-`docs/multiproc-linux-app-windowed.png`) — all QEMU-verified, 0 faults. Honest
-status: real DOOM runs fullscreen as a standalone process today, and a *synthetic*
-Linux app now runs **in a desktop window**; the only step left for windowed DOOM
-is swapping that synthetic app for the real fbdoom binary (a dynamic PIE that loads
-via the same path) and shaking out its DOOM-specific syscalls.
+**And DOOM now runs windowed.** Real id Software DOOM (fbdoom, a dynamic PIE) runs
+as an isolated, preemptively-scheduled Linux process — loaded via our ld.so +
+glibc, rendering into a private 640×400 `/dev/fb0` surface, which the desktop
+composites into a titled on-screen window: E1M1, the marine view, the full HUD, in
+a window on the bare-metal pure-Rust desktop, 0 faults
+(`docs/doom-windowed-on-desktop.png`, `linuxwin`). The whole chain is QEMU-verified
+brick by brick: a dynamic Linux binary scheduled in its own address space
+(`linuxdyn`), a private virtual framebuffer (`linuxfb`), desktop compositing
+(`linuxwin`).
 
 ---
 

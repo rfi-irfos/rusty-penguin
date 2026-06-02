@@ -4,6 +4,20 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+### Added — WINDOWED DOOM: real id Software DOOM runs in a desktop window (2026-06-02)
+
+- **The headline goal.** id Software DOOM (fbdoom, a dynamic PIE) runs as an
+  isolated, preemptively-scheduled Linux process in its own address space (ld.so +
+  glibc), renders into a private 640×400 `/dev/fb0` surface, and the real desktop
+  composites that surface into a titled on-screen window — E1M1, the marine view,
+  the full HUD, in a window on the bare-metal pure-Rust desktop. 0 faults.
+  Proof: docs/doom-windowed-on-desktop.png.
+- DOOM-specific shakeout: `FBIOGET` reports the 640×400 surface for scheduled
+  processes; a scheduled app's stdout goes to serial only (not the fb console);
+  and `write()`/`lseek` to `/dev/fb0` (fbdoom's frame blit) now copies pixels into
+  the surface. `selftest_linuxwin` uses the dynamic loader, so `linuxwin` runs the
+  static fb-test or the real fbdoom. Fullscreen DOOM (enter) regression-checked.
+
 ### Added — Windowed-DOOM brick 4: desktop composites a scheduled Linux app into a window (2026-06-02)
 
 - The whole windowed-Linux-app pipeline, end to end and **visible**. The real

@@ -59,10 +59,13 @@ is present (as under QEMU).
     surface it renders into; kernel reads it back fully orange (`linuxfb`, 0 faults,
     `89e8ea3`). Added `pmm::alloc_frames` (contiguous);
   - brick 4 ✅ the desktop composites the scheduled Linux app's 640×400 surface
-    into a titled on-screen window (`linuxwin`, screendump, 0 faults, `c44286d`).
-    **The whole windowed-Linux-app pipeline is proven end-to-end with a synthetic
-    app.** Only step left for windowed DOOM: swap the fb-test for the real fbdoom
-    binary (a dynamic PIE — loads via brick 2b) + shake out its private-AS syscalls.
+    into a titled on-screen window (`linuxwin`, 0 faults, `c44286d`).
+  - **✅✅ WINDOWED DOOM (`45e942b`): real id Software DOOM runs in a desktop
+    window** — fbdoom (dynamic PIE) scheduled + isolated, rendering E1M1 + HUD into
+    its private surface, composited into an on-screen window, 0 faults. Proof
+    `docs/doom-windowed-on-desktop.png`. DOOM shakeout: FBIOGET reports 640×400 for
+    scheduled procs; windowed stdout → serial; fbdoom's write()/lseek-to-/dev/fb0
+    frame blit copied into the surface. **Item 4's headline ("windowed DOOM") DONE.**
 - **5. Power management** — 🟡 ACPI S5 shutdown+reboot ✅; software brightness ✅;
   real battery ✅ wired. Remaining: hardware backlight control + S3 suspend/resume
   (large, and largely **hardware-bound** / not meaningfully verifiable under QEMU).
