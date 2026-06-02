@@ -1,5 +1,5 @@
 <p align="center">
-<img width="1536" height="1024" alt="Jun 2, 2026, 09_34_21 PM" src="https://github.com/user-attachments/assets/f76c2b10-e7f0-478f-8f70-af13580032f8" />
+  <img src="https://github.com/user-attachments/assets/f76c2b10-e7f0-478f-8f70-af13580032f8" width="32" alt="Smaller Icon">
 </p>
 
 <h1 align="center">Rusty Penguin</h1>
