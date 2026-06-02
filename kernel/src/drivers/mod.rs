@@ -5,6 +5,7 @@ pub mod thermal;
 pub mod nvme;
 pub mod soc;
 pub mod hid;
+pub mod mobile;
 pub mod audio {
     pub mod mixer;
     pub mod alsa;

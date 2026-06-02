@@ -177,6 +177,38 @@ fn sys_exit(code: u64) -> ! {
     }
 }
 
+fn sys_delete(path: &[u8]) -> u64 {
+    let n: u64;
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            inout("rax") 15u64 => n,
+            in("rdi") path.as_ptr(),
+            in("rsi") path.len(),
+            out("rcx") _,
+            out("r11") _,
+            options(nostack),
+        );
+    }
+    n
+}
+
+fn sys_ls(buf: &mut [u8]) -> usize {
+    let n: u64;
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            inout("rax") 44u64 => n,
+            in("rdi") buf.as_mut_ptr(),
+            in("rsi") buf.len(),
+            out("rcx") _,
+            out("r11") _,
+            options(nostack),
+        );
+    }
+    n as usize
+}
+
 fn write(s: &[u8]) {
     let mut off = 0;
     while off < s.len() {
@@ -263,6 +295,132 @@ fn split_args(line: &[u8]) -> ([&[u8]; 4], usize) {
         }
     }
     (parts, count)
+}
+
+// ── ls command ───────────────────────────────────────────────────────────────
+
+fn cmd_ls() {
+    let mut buf = [0u8; 4096];
+    let n = sys_ls(&mut buf);
+    if n == 0 { write(b"(empty)\n"); return; }
+    write(&buf[..n]);
+}
+
+// ── rm command ───────────────────────────────────────────────────────────────
+
+fn cmd_rm(path: &[u8]) {
+    if path.is_empty() { write(b"usage: rm <path>\n"); return; }
+    let r = sys_delete(path);
+    if r == u64::MAX { write(b"rm: not found\n"); }
+    else { write(b"removed\n"); }
+}
+
+// ── grep command ─────────────────────────────────────────────────────────────
+
+fn cmd_grep(args: &[u8]) {
+    let (parts, count) = split_args(args);
+    if count < 2 { write(b"usage: grep <pattern> <file>\n"); return; }
+    let pattern = parts[0];
+    let path    = parts[1];
+
+    let fd = sys_open(path);
+    if fd == u64::MAX { write(b"grep: file not found\n"); return; }
+
+    let mut file_buf = [0u8; 4096];
+    let n = sys_read_fd(fd, &mut file_buf);
+    sys_close(fd);
+
+    // Walk lines and print those containing the pattern.
+    let data = &file_buf[..n];
+    let mut line_start = 0;
+    let mut matched = 0u64;
+    while line_start <= data.len() {
+        let line_end = data[line_start..]
+            .iter()
+            .position(|&b| b == b'\n')
+            .map(|p| line_start + p)
+            .unwrap_or(data.len());
+        let line = &data[line_start..line_end];
+        if contains(line, pattern) {
+            write(line);
+            write(b"\n");
+            matched += 1;
+        }
+        if line_end >= data.len() { break; }
+        line_start = line_end + 1;
+    }
+    if matched == 0 { write(b"(no matches)\n"); }
+}
+
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    if needle.is_empty() { return true; }
+    if needle.len() > haystack.len() { return false; }
+    haystack.windows(needle.len()).any(|w| w == needle)
+}
+
+// ── wc command ───────────────────────────────────────────────────────────────
+
+fn cmd_wc(path: &[u8]) {
+    if path.is_empty() { write(b"usage: wc <path>\n"); return; }
+    let fd = sys_open(path);
+    if fd == u64::MAX { write(b"wc: not found\n"); return; }
+
+    let mut buf = [0u8; 4096];
+    let n = sys_read_fd(fd, &mut buf);
+    sys_close(fd);
+
+    let data = &buf[..n];
+    let lines = data.iter().filter(|&&b| b == b'\n').count();
+    let words = {
+        let mut w = 0u64;
+        let mut in_word = false;
+        for &b in data {
+            let space = b == b' ' || b == b'\t' || b == b'\n' || b == b'\r';
+            if !space && !in_word { w += 1; in_word = true; }
+            else if space { in_word = false; }
+        }
+        w
+    };
+    write_u64(lines as u64); write(b" lines  ");
+    write_u64(words);        write(b" words  ");
+    write_u64(n as u64);     write(b" bytes\n");
+}
+
+// ── head command ─────────────────────────────────────────────────────────────
+
+fn cmd_head(args: &[u8]) {
+    let (parts, count) = split_args(args);
+    if count == 0 { write(b"usage: head [-n N] <file>\n"); return; }
+
+    let (n_lines, path) = if parts[0] == b"-n" && count >= 3 {
+        let n = parse_i64(parts[1]).unwrap_or(10).max(1) as usize;
+        (n, parts[2])
+    } else {
+        (10, parts[0])
+    };
+
+    let fd = sys_open(path);
+    if fd == u64::MAX { write(b"head: not found\n"); return; }
+
+    let mut buf = [0u8; 4096];
+    let total = sys_read_fd(fd, &mut buf);
+    sys_close(fd);
+
+    let data = &buf[..total];
+    let mut line_start = 0;
+    let mut printed = 0;
+    while line_start <= data.len() && printed < n_lines {
+        let line_end = data[line_start..]
+            .iter()
+            .position(|&b| b == b'\n')
+            .map(|p| line_start + p)
+            .unwrap_or(data.len());
+        write(&data[line_start..line_end]);
+        write(b"\n");
+        printed += 1;
+        if line_end >= data.len() { break; }
+        line_start = line_end + 1;
+    }
 }
 
 // ── trit command ─────────────────────────────────────────────────────────────
@@ -366,17 +524,22 @@ pub extern "C" fn _start() -> ! {
             sys_exit(0);
         } else if line == b"help" {
             write(b"commands:\n");
-            write(b"  echo <text>       print text\n");
-            write(b"  uname             kernel info\n");
-            write(b"  whoami            current context + pid\n");
-            write(b"  ps                process table (ternary states)\n");
-            write(b"  cat <path>        print file from VFS\n");
-            write(b"  clear             clear screen\n");
-            write(b"  reboot            reboot machine\n");
-            write(b"  uptime            seconds since boot\n");
-            write(b"  mem               memory usage\n");
-            write(b"  trit <op> <a> [b] ternary arithmetic\n");
-            write(b"  exit              exit shell\n");
+            write(b"  echo <text>         print text\n");
+            write(b"  uname               kernel info\n");
+            write(b"  whoami              current context + pid\n");
+            write(b"  ps                  process table (ternary states)\n");
+            write(b"  ls                  list VFS entries\n");
+            write(b"  cat <path>          print file from VFS\n");
+            write(b"  grep <pat> <file>   search lines in file\n");
+            write(b"  rm <path>           delete VFS entry\n");
+            write(b"  wc <path>           line/word/byte count\n");
+            write(b"  head [-n N] <path>  print first N lines (default 10)\n");
+            write(b"  clear               clear screen\n");
+            write(b"  reboot              reboot machine\n");
+            write(b"  uptime              seconds since boot\n");
+            write(b"  mem                 memory usage\n");
+            write(b"  trit <op> <a> [b]   ternary arithmetic\n");
+            write(b"  exit                exit shell\n");
         } else if line == b"uname" {
             write(b"Rusty Penguin 1.0.0 x86_64 ternary-kernel\n");
             write(b"Binary hardware. Ternary mind. No Linux.\n");
@@ -411,6 +574,24 @@ pub extern "C" fn _start() -> ! {
         } else if line == b"reboot" {
             write(b"rebooting...\n");
             sys_reboot();
+        } else if line == b"ls" || line == b"ls /" {
+            cmd_ls();
+        } else if line.starts_with(b"rm ") {
+            cmd_rm(&line[3..]);
+        } else if line == b"rm" {
+            write(b"usage: rm <path>\n");
+        } else if line.starts_with(b"grep ") {
+            cmd_grep(&line[5..]);
+        } else if line == b"grep" {
+            write(b"usage: grep <pattern> <file>\n");
+        } else if line.starts_with(b"wc ") {
+            cmd_wc(&line[3..]);
+        } else if line == b"wc" {
+            write(b"usage: wc <path>\n");
+        } else if line.starts_with(b"head ") {
+            cmd_head(&line[5..]);
+        } else if line == b"head" {
+            write(b"usage: head [-n N] <path>\n");
         } else if line.starts_with(b"cat ") {
             cmd_cat(&line[4..]);
         } else if line == b"cat" {

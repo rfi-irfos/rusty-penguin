@@ -111,6 +111,7 @@ core::arch::global_asm!(
 
     ".section .data",
     ".align 8",
+    ".global _user_rsp",
     "_user_rsp: .quad 0",
     // The kernel stack syscall_entry switches to. Defaults to the shared stack
     // (correct for a single process). With preemptive multitasking the scheduler
@@ -707,6 +708,29 @@ pub extern "C" fn syscall_handler(nr: u64, arg1: u64, arg2: u64, arg3: u64) -> u
                 }
             }
             u64::MAX
+        }
+        44 => {
+            // sys_ls(buf_ptr, buf_len) → bytes written
+            // Fills buf with newline-separated VFS entry names from the ramfs.
+            // Leading "./" is stripped. Deleted inodes are skipped.
+            let buf_ptr = arg1 as *mut u8;
+            let buf_len = (arg2 as usize).min(8192);
+            if buf_ptr.is_null() || buf_len == 0 { return 0; }
+            let buf = unsafe { core::slice::from_raw_parts_mut(buf_ptr, buf_len) };
+            let mut pos = 0usize;
+            for i in 0..crate::ramfs::inode_count() {
+                if let Some(ino) = crate::ramfs::inode(i) {
+                    let name = &ino.name[..ino.name_len];
+                    let name = if name.starts_with(b"./") { &name[2..] } else { name };
+                    if name.is_empty() { continue; }
+                    if pos + name.len() + 1 >= buf_len { break; }
+                    buf[pos..pos + name.len()].copy_from_slice(name);
+                    pos += name.len();
+                    buf[pos] = b'\n';
+                    pos += 1;
+                }
+            }
+            pos as u64
         }
         // sys_et_phone_home (0x4E - Brick 48)
         0x4e => {
