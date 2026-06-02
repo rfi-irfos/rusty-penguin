@@ -714,13 +714,17 @@ impl Settings {
 
 impl App for Settings {
     fn render(&mut self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, h: u32) {
-        // Draw header
-        fb.fill_rect(x, y, w, 24, 0x2C2C38);
-        fb.draw_str(x + 8, y + 7, "System Settings", 0xF5F5F7, 0x2C2C38);
-        fb.fill_rect(x, y + 24, w, 1, 0x3C3C48);
+        let xi = x as i32; let yi = y as i32; let wi = w as i32;
+        const TEAL: u32 = 0x2DD4BF;
+        let line = Framebuffer::aa_line(crate::fb::AA_S);
 
-        // Settings rows — labels + values drawn separately to avoid format!()
-        let labels = ["Theme:", "Window Snap:", "Taskbar:", "Auto-Save:"];
+        // Body + header band.
+        fb.fill_rect(x, y, w, h, 0x14181F);
+        fb.fill_rect(x, y, w, 30, 0x1B2230);
+        fb.draw_aa(xi + 14, yi + 6, "System Settings", 0xEAF4F0, crate::fb::AA_S);
+        fb.fill_rect(x, y + 30, w, 1, 0x2C3A38);
+
+        let labels = ["Theme", "Window Snap", "Taskbar", "Auto-Save"];
         let theme_v   = if self.theme { "Dark" } else { "Light" };
         let snap_v    = if self.window_snap { "On" } else { "Off" };
         let taskbar_v = if self.taskbar_bottom { "Bottom" } else { "Top" };
@@ -728,36 +732,42 @@ impl App for Settings {
         let mut sbuf = [0u8; 24];
         let interval_str = u64_into(&mut sbuf, self.auto_save_interval as u64);
 
+        let row_h: i32 = 34;
+        let top = yi + 38;
         for i in 0..4 {
-            let y_pos = y + 32 + (i as u32 * 20);
-            if y_pos + 20 > y + h { break; }
-
-            let bg_color = if i == self.selected { 0x4A5568 } else if i % 2 == 0 { 0x1A1A24 } else { 0x232333 };
-            fb.fill_rect(x, y_pos, w, 20, bg_color);
-            let text_color = if i == self.selected { 0xF5F5F7 } else { 0xB8B8B8 };
-
-            // Label
-            fb.draw_str(x + 12, y_pos + 5, labels[i], text_color, bg_color);
-            // Value (offset 140px right of label)
-            let vx = x + 140;
-            match i {
-                0 => fb.draw_str(vx, y_pos + 5, theme_v, text_color, bg_color),
-                1 => fb.draw_str(vx, y_pos + 5, snap_v, text_color, bg_color),
-                2 => fb.draw_str(vx, y_pos + 5, taskbar_v, text_color, bg_color),
-                3 => if self.auto_save_enabled {
-                    fb.draw_str(vx, y_pos + 5, interval_str, text_color, bg_color);
-                    fb.draw_str(vx + (interval_str.len() as u32 * 8), y_pos + 5, "s", text_color, bg_color);
-                } else {
-                    fb.draw_str(vx, y_pos + 5, "Off", text_color, bg_color);
-                },
-                _ => {}
+            let ry = top + i as i32 * row_h;
+            if (ry + row_h) as u32 > y + h { break; }
+            let selected = i == self.selected;
+            if selected {
+                fb.fill_rounded_rect(xi + 6, ry, wi - 12, row_h - 4, 8, 0x243442);
+                fb.fill_rect_s(xi + 8, ry + 6, 3, row_h - 16, TEAL);
             }
+            let ty = ry + (row_h - 4 - line) / 2;
+            let lcol = if selected { 0xEAF4F0 } else { 0xB8C2CC };
+            fb.draw_aa(xi + 18, ty, labels[i], lcol, crate::fb::AA_S);
+
+            // Value, right-aligned. Auto-Save composes "<n>s" into a buffer.
+            let mut vbuf = [0u8; 16];
+            let val: &str = match i {
+                0 => theme_v,
+                1 => snap_v,
+                2 => taskbar_v,
+                _ => if self.auto_save_enabled {
+                    let mut n = 0usize;
+                    for &b in interval_str.as_bytes() { if n < 15 { vbuf[n] = b; n += 1; } }
+                    if n < 15 { vbuf[n] = b's'; n += 1; }
+                    core::str::from_utf8(&vbuf[..n]).unwrap_or("")
+                } else { "Off" },
+            };
+            let vw = Framebuffer::aa_w(val, crate::fb::AA_S);
+            let on = matches!((i, val), (0, "Dark") | (1, "On") | (2, "Bottom")) || (i == 3 && self.auto_save_enabled);
+            let vcol = if on { TEAL } else { 0x90A0AA };
+            fb.draw_aa(xi + wi - vw - 16, ty, val, vcol, crate::fb::AA_S);
         }
 
-        // Draw hint at bottom
-        let hint = "(UP/DOWN to select, ENTER to toggle)";
-        if y + h > 100 {
-            fb.draw_str(x + 12, y + h - 24, hint, 0x808080, 0x0A0E27);
+        // Hint at the bottom.
+        if h > 110 {
+            fb.draw_aa(xi + 14, yi + h as i32 - 24, "UP/DOWN to select   .   ENTER to toggle", 0x6B7B85, crate::fb::AA_T);
         }
 
         self.dirty = false;

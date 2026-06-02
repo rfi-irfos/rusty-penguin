@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented here.
 
+## [3.3.2] — 2026-06-02 — App font migration begins: Settings
+
+### Changed
+- **Settings app → antialiased sans.** First app migrated off the legacy 8×8
+  bitmap font onto the smooth AA sans used across the desktop chrome. Re-laid-out
+  for the taller font: 34px rows with a rounded mint-accented selection, labels
+  left + values right-aligned (mint when "on"), softer header band and hint.
+  (Rest of the apps to follow, one at a time, each QEMU-verified.)
+
 ## [3.3.1] — 2026-06-02 — Card highlight cleanup + in-OS version sync
 
 ### Fixed
