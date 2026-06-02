@@ -420,6 +420,16 @@ pub fn syscall_handler(nr: u64, _a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64
             serial::write_str("  [wine] NtGdiFlush stub\n");
             0 // STATUS_SUCCESS
         }
+        // NtCreateTimer (Brick 31)
+        0x45 => {
+            serial::write_str("  [wine] NtCreateTimer stub\n");
+            alloc_handle(WinObject::Timer)
+        }
+        // NtSetTimer (Brick 31)
+        0x46 => {
+            serial::write_str("  [wine] NtSetTimer stub\n");
+            0 // STATUS_SUCCESS
+        }
         0x2c => {
 
 fn is_dormant_syscall(nr: u64) -> bool {
@@ -517,6 +527,7 @@ pub enum WinObject {
     Token,
     Socket,
     Window,
+    Timer,
 }
 
 const MAX_HANDLES: usize = 256;
