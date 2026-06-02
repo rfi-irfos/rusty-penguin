@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented here.
 
+## [3.3.3] — 2026-06-02 — App font migration: Files (+ UX polish)
+
+### Changed — File manager
+- Migrated to the antialiased sans (26px rows, re-laid-out for the taller font;
+  mouse hit-test updated to match).
+- **Human-readable sizes** — raw byte counts now render as `B / KB / MB / GB`,
+  right-aligned.
+- **Per-row file glyph** — a small document icon on each entry.
+- Cleaner header (path), column header with sort markers, and a status bar with
+  count · sort mode · key hints (now including Enter open / Bksp up).
+
+### Known gap (Files)
+- Directory navigation is effectively inert: the kernel's `sys_listdir`
+  (syscall 14) enumerates only **leaf files** in the exact directory —
+  subdirectories aren't emitted as entries, so "Enter to open folder" has
+  nothing to descend into. Fix is a kernel change (synthesize dir entries from
+  path prefixes + emit a type byte). Scoped as a follow-up.
+
 ## [3.3.2] — 2026-06-02 — App font migration begins: Settings
 
 ### Changed

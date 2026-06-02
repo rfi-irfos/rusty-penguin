@@ -69,6 +69,23 @@ fn u64_into<'a>(buf: &'a mut [u8; 24], n: u64) -> &'a str {
 /// Number of decimal digits in `n` (≥1). For laying text out next to a number.
 fn count_digits(mut n: u32) -> u32 { let mut d = 1; while n >= 10 { n /= 10; d += 1; } d }
 
+/// Human-readable byte size: "512 B", "4 KB", "12 MB", "3 GB". Integer units,
+/// no heap. Writes into `buf` and returns the slice as &str.
+fn fmt_size<'a>(buf: &'a mut [u8; 24], n: u64) -> &'a str {
+    let (val, unit): (u64, &[u8]) =
+        if n < 1024 { (n, b"B") }
+        else if n < 1 << 20 { (n >> 10, b"KB") }
+        else if n < 1 << 30 { (n >> 20, b"MB") }
+        else { (n >> 30, b"GB") };
+    let mut tmp = [0u8; 24];
+    let ds = u64_into(&mut tmp, val);
+    let mut k = 0usize;
+    for &b in ds.as_bytes() { if k < 23 { buf[k] = b; k += 1; } }
+    if k < 23 { buf[k] = b' '; k += 1; }
+    for &b in unit { if k < 24 { buf[k] = b; k += 1; } }
+    core::str::from_utf8(&buf[..k]).unwrap_or("")
+}
+
 pub trait App {
     /// Render the app's content into the given framebuffer region
     fn render(&mut self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, h: u32);
@@ -268,49 +285,76 @@ impl FileManager {
 
 impl App for FileManager {
     fn render(&mut self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, h: u32) {
-        // Draw header with current directory — draw directly, no format!()
-        fb.fill_rect(x, y, w, 24, 0x2C2C38);
-        fb.draw_str(x + 24, y + 7, &self.cwd, 0xF5F5F7, 0x2C2C38);
+        let xi = x as i32; let wi = w as i32;
+        const TEAL: u32 = 0x2DD4BF; const BLUE: u32 = 0x8CC6E5;
+        let line = Framebuffer::aa_line(crate::fb::AA_S);
 
-        // Draw column headers, with a ↑/↓ marker on the active sort column.
-        fb.fill_rect(x, y + 24, w, 18, 0x3C3C48);
+        // Body
+        fb.fill_rect(x, y, w, h, 0x14181F);
+
+        // Header: current path
+        fb.fill_rect(x, y, w, 28, 0x1B2230);
+        fb.draw_aa(xi + 12, y as i32 + 5, &self.cwd, 0xEAF4F0, crate::fb::AA_S);
+        fb.fill_rect(x, y + 28, w, 1, 0x2C3A38);
+
+        // Column header with sort markers.
+        fb.fill_rect(x, y + 29, w, 20, 0x171C24);
         let name_active = self.sort_mode < 2;
         let size_active = self.sort_mode >= 2;
-        let name_arrow = if self.sort_mode == 0 { "v" } else if self.sort_mode == 1 { "^" } else { "" };
-        let size_arrow = if self.sort_mode == 2 { "v" } else if self.sort_mode == 3 { "^" } else { "" };
-        fb.draw_str(x + 8, y + 29, "Name", if name_active { 0x8CC6E5 } else { 0xB8B8B8 }, 0x3C3C48);
-        fb.draw_str(x + 8 + 32, y + 29, name_arrow, 0x8CC6E5, 0x3C3C48);
-        fb.draw_str(x + 300, y + 29, "Size", if size_active { 0x8CC6E5 } else { 0xB8B8B8 }, 0x3C3C48);
-        fb.draw_str(x + 300 + 32, y + 29, size_arrow, 0x8CC6E5, 0x3C3C48);
+        let name_arrow = if self.sort_mode == 0 { " v" } else if self.sort_mode == 1 { " ^" } else { "" };
+        let size_arrow = if self.sort_mode == 2 { "v " } else if self.sort_mode == 3 { "^ " } else { "" };
+        let chy = y as i32 + 31;
+        fb.draw_aa(xi + 44, chy, "Name", if name_active { BLUE } else { 0x8A949E }, crate::fb::AA_T);
+        fb.draw_aa(xi + 44 + Framebuffer::aa_w("Name", crate::fb::AA_T), chy, name_arrow, BLUE, crate::fb::AA_T);
+        let sz_hdr = "Size";
+        let sz_x = xi + wi - Framebuffer::aa_w(sz_hdr, crate::fb::AA_T) - 18;
+        fb.draw_aa(sz_x, chy, sz_hdr, if size_active { BLUE } else { 0x8A949E }, crate::fb::AA_T);
+        fb.draw_aa(sz_x - 16, chy, size_arrow, BLUE, crate::fb::AA_T);
 
-        // Draw file entries (reserve 18px at the bottom for the status bar).
-        let list_bottom = y + h - 18;
+        // File rows (reserve 22px at the bottom for the status bar).
+        let row_h: i32 = 26;
+        let list_top = y as i32 + 50;
+        let list_bottom = y as i32 + h as i32 - 22;
         let mut sbuf = [0u8; 24];
         for (i, entry) in self.entries.iter().enumerate() {
-            let file_y = y + 42 + (i as u32 * 18);
-            if file_y + 18 > list_bottom { break; }
+            let ry = list_top + i as i32 * row_h;
+            if ry + row_h > list_bottom { break; }
+            let selected = i == self.selected;
+            let bg = if selected { 0x243442 } else if i % 2 == 0 { 0x161B22 } else { 0x1A2028 };
+            fb.fill_rect(x, ry as u32, w, row_h as u32, bg);
+            if selected { fb.fill_rect_s(xi, ry, 3, row_h, TEAL); }
 
-            // Highlight selected entry
-            let bg_color = if i == self.selected { 0x4A5568 } else if i % 2 == 0 { 0x1A1A24 } else { 0x232333 };
-            fb.fill_rect(x, file_y, w, 18, bg_color);
+            // File glyph — a small document tile (listdir returns leaf files only).
+            let gx = xi + 14; let gy = ry + (row_h - 14) / 2;
+            fb.fill_rounded_rect(gx, gy, 11, 14, 2, if selected { 0x3A6E8A } else { 0x2A3B47 });
+            fb.fill_rect_s(gx + 2, gy + 4, 7, 1, 0x9FC4D8);
+            fb.fill_rect_s(gx + 2, gy + 7, 7, 1, 0x9FC4D8);
+            fb.fill_rect_s(gx + 2, gy + 10, 5, 1, 0x9FC4D8);
 
-            let text_color = if i == self.selected { 0xF5F5F7 } else { 0xB8B8B8 };
-            fb.draw_str(x + 8, file_y + 4, &entry.name, text_color, bg_color);
+            let ty = ry + (row_h - line) / 2;
+            let tcol = if selected { 0xEAF4F0 } else { 0xC2CCD4 };
+            fb.draw_aa(xi + 44, ty, &entry.name, tcol, crate::fb::AA_S);
 
-            let size_str = u64_into(&mut sbuf, entry.size);
-            fb.draw_str(x + 300, file_y + 4, size_str, text_color, bg_color);
+            // Size, right-aligned, human-readable.
+            let size_str = fmt_size(&mut sbuf, entry.size);
+            let sw = Framebuffer::aa_w(size_str, crate::fb::AA_S);
+            fb.draw_aa(xi + wi - sw - 16, ty, size_str, if selected { 0xBFE8DF } else { 0x90A0AA }, crate::fb::AA_S);
         }
 
-        // Status bar: item count · sort mode · "s sorts".
-        let sy = y + h - 18;
-        fb.fill_rect(x, sy, w, 18, 0x252E2A);
+        // Status bar: count · sort · key hints.
+        let sby = y + h - 22;
+        fb.fill_rect(x, sby, w, 22, 0x171F1B);
+        fb.fill_rect_s(xi, sby as i32, wi, 1, 0x2C3A38);
         let mut cb = [0u8; 24];
-        let mut sx = x + 8;
-        fb.draw_str_t(sx, sy + 5, u64_into(&mut cb, self.entries.len() as u64), 0xECEDE5);
-        sx += 14; fb.draw_str_t(sx, sy + 5, "items", 0x8A938C);
-        sx += 40; fb.draw_str_t(sx, sy + 5, "sort:", 0x8A938C);
-        sx += 32; fb.draw_str_t(sx, sy + 5, self.sort_label(), 0x6FE18B);
-        fb.draw_str_t(x + w - 120, sy + 5, "s sort  c copy  d del", 0x6B756D);
+        let sty = sby as i32 + 4;
+        let mut sx = xi + 10;
+        let cnt = u64_into(&mut cb, self.entries.len() as u64);
+        fb.draw_aa(sx, sty, cnt, 0xECEDE5, crate::fb::AA_T); sx += Framebuffer::aa_w(cnt, crate::fb::AA_T) + 4;
+        fb.draw_aa(sx, sty, "items", 0x8A938C, crate::fb::AA_T); sx += Framebuffer::aa_w("items", crate::fb::AA_T) + 14;
+        fb.draw_aa(sx, sty, "sort:", 0x8A938C, crate::fb::AA_T); sx += Framebuffer::aa_w("sort:", crate::fb::AA_T) + 6;
+        fb.draw_aa(sx, sty, self.sort_label(), 0x6FE18B, crate::fb::AA_T);
+        let hint = "s sort   c copy   d del   Enter open   Bksp up";
+        fb.draw_aa(xi + wi - Framebuffer::aa_w(hint, crate::fb::AA_T) - 10, sty, hint, 0x6B756D, crate::fb::AA_T);
 
         self.dirty = false;
     }
@@ -359,10 +403,10 @@ impl App for FileManager {
 
     fn on_mouse(&mut self, _x: i32, y: i32, _w: u32, _h: u32, buttons: u8) {
         if buttons & 0x01 == 0 { return; }
-        // Rows start at y+42, 18px tall. Mirrors render layout above.
-        let row_y = y - 42;
+        // Rows start at y+50, 26px tall. Mirrors render layout above.
+        let row_y = y - 50;
         if row_y < 0 { return; }
-        let row = (row_y / 18) as usize;
+        let row = (row_y / 26) as usize;
         if row < self.entries.len() && row != self.selected {
             self.selected = row;
             self.dirty = true;
