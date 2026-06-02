@@ -670,6 +670,11 @@ pub extern "C" fn syscall_handler(nr: u64, arg1: u64, arg2: u64, arg3: u64) -> u
             let v = unsafe { crate::BOOT_BRIGHTNESS };
             if v < 0 { u64::MAX } else { v as u64 }
         }
+        41 => {
+            // sys_app_surface → VA at which the desktop can read a 2nd app's live
+            // 32×32 surface (schedesktop2 windowed-app mode), or 0 if none.
+            crate::sched::app_surface_va()
+        }
         60 => {
             // sys_exit(code)
             vga::write_str("\n  [psh exited]\n", vga::Color::Green);

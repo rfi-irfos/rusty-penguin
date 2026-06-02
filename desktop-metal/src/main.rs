@@ -159,6 +159,22 @@ fn sys_boot_brightness() -> u64 {
     n
 }
 
+/// sys_app_surface (#41): VA where a second app's live 32×32 surface is mapped
+/// into this (desktop) process, or 0 if none (schedesktop2 windowed-app mode).
+fn sys_app_surface() -> u64 {
+    let n: u64;
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            inout("rax") 41u64 => n,
+            in("rdi") 0u64,
+            out("rcx") _, out("r11") _,
+            options(nostack),
+        );
+    }
+    n
+}
+
 /// sys_wallpaper (#23): system-background index from `wallpaper=N`, or u64::MAX.
 fn sys_wallpaper() -> u64 {
     let n: u64;
@@ -2213,6 +2229,33 @@ fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, 
     }
 }
 
+// schedesktop2 windowed-app compositing: blit a second real process's live 32×32
+// surface (mapped read-only into our AS by the kernel) into an on-screen window,
+// scaled 4× so it's clearly visible. This is the desktop — itself a scheduled,
+// isolated process — hosting another isolated process's output in a window.
+fn draw_mp_app_window(fb: &mut Framebuffer, surf_va: u64) {
+    const WX: u32 = 880;
+    const WY: u32 = 150;
+    const SD: u32 = 32;          // source surface is 32×32
+    const SCALE: u32 = 4;
+    const CW: u32 = SD * SCALE;  // 128×128 content
+    const TBH: u32 = 22;         // titlebar height
+    // Soft shadow + frame + titlebar (matches the desktop's window chrome palette).
+    fb.fill_rounded_rect(WX as i32 - 3, WY as i32 - 1, (CW + 6) as i32, (CW + TBH + 6) as i32, 9, 0x0C100E);
+    fb.fill_rect(WX - 1, WY - 1, CW + 2, CW + TBH + 2, 0x2A332F);
+    fb.fill_rect(WX, WY, CW, TBH, 0x333D38);
+    fb.fill_rect_s(WX as i32 + 8, WY as i32 + 1, (CW - 16) as i32, 1, 0x4C5A50); // top light-catch
+    fb.draw_aa(WX as i32 + 8, WY as i32 + 6, "App (process 2)", WHITE, crate::fb::AA_T);
+    // Content: read the app's surface and scale it 4× into the window body.
+    let src = surf_va as *const u32;
+    for cy in 0..CW {
+        for cx in 0..CW {
+            let sp = unsafe { core::ptr::read_volatile(src.add(((cy / SCALE) * SD + (cx / SCALE)) as usize)) };
+            fb.set_pixel(WX + cx, WY + TBH + cy, sp & 0x00FF_FFFF);
+        }
+    }
+}
+
 // A small floating label above a hovered dock favourite.
 fn draw_dock_tooltip(fb: &mut Framebuffer, hi: usize) {
     let slot = match FAV_IDX.iter().position(|&x| x == hi) { Some(s) => s, None => return };
@@ -2244,6 +2287,12 @@ pub extern "C" fn _start() -> ! {
         unsafe { QS.brightness = bb as u8; }
         fb.set_brightness(bb as u8);
     }
+
+    // schedesktop2 windowed-app mode: if the kernel mapped a second real app's
+    // live surface into our address space, composite it into an on-screen window
+    // each frame — the desktop (itself a scheduled process) hosting another
+    // isolated process's output. 0 = normal boot (no app surface).
+    let mp_surf_va = sys_app_surface();
 
     let w = fb.width as i32; let h = fb.height as i32;
     let mut mouse = MouseState { x: w / 2, y: h / 2, buttons: 0, btn_pressed: 0 };
@@ -2814,6 +2863,13 @@ pub extern "C" fn _start() -> ! {
                 }
             }
 
+            // schedesktop2: composite the second app's live surface into a window.
+            // Drawn after the scene compose, before the cursor, so the cursor sits
+            // on top and the window survives the next recomposite (re-blit each frame).
+            if mp_surf_va != 0 {
+                draw_mp_app_window(&mut fb, mp_surf_va);
+            }
+
             save_cursor_bg(&fb, cx, cy, &mut cbuf);
             draw_cursor(&mut fb, cx, cy);
 
@@ -2823,11 +2879,12 @@ pub extern "C" fn _start() -> ! {
             // rest of the screen is dormant. This skips the dominant full-screen
             // MMIO copy and is what makes 1080p dragging smooth. The backbuffer
             // is always fully correct, so a missed source just self-corrects on
-            // the next full present.
+            // the next full present. In windowed-app mode we full-present so the
+            // app window is always flushed.
             match drag_band {
-                Some((y0, y1)) if !any_term && !topbar_due =>
+                Some((y0, y1)) if !any_term && !topbar_due && mp_surf_va == 0 =>
                     fb.present_rows(y0.max(0) as u32, y1.max(0) as u32),
-                _ if !any_chrome && !any_term && !topbar_due => {
+                _ if !any_chrome && !any_term && !topbar_due && mp_surf_va == 0 => {
                     // Cursor-only frame: flush just the band the cursor swept through.
                     // Avoids the full 8 MB MMIO write (~40x cheaper) on every mouse tick.
                     let y_top = (prev_cy.min(cy) as u32).saturating_sub(2);

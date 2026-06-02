@@ -766,6 +766,21 @@ fn log_u64(mut v: u64) {
 // the kernel (a stand-in for the desktop compositor) reads back.
 const FB_VA: u64 = 0x0080_0000;
 
+// Where a second app's surface frame is mapped INTO the real desktop's address
+// space so the desktop (itself a scheduled process) can composite it into an
+// on-screen window. 0x3000000 (48 MiB) sits in the desktop's free VA gap —
+// above its code+32 MiB BSS heap (~37 MiB) and below its stack (~63 MiB).
+const APP_SURF_VA: u64 = 0x0300_0000;
+// Set by selftest_schedesktop2 once the app surface is mapped into the desktop;
+// the desktop reads it via sys_app_surface (#41). 0 = no app surface (normal boot).
+static mut APP_SURFACE_VA: u64 = 0;
+
+/// The VA at which the current desktop process can read the second app's live
+/// surface, or 0 if none. Backs sys_app_surface (#41).
+pub fn app_surface_va() -> u64 {
+    unsafe { APP_SURFACE_VA }
+}
+
 // A ring-3 program that writes a marker (0xDEADBEEF) to the offscreen buffer at
 // FB_VA, then syscalls a tag, then spins — proving a process can render into an
 // isolated buffer the compositor can read. Position-independent (immediates only).
@@ -1217,6 +1232,18 @@ pub fn selftest_schedesktop2() -> ! {
     let app_elf = make_elf(0x0050_0000, &FILL_STUB);
     let a = spawn_ring3_elf(&app_elf, fb_frame);
     if a == 0 { write_str("[mpd2] second-app spawn failed\n"); halt(); }
+    // Map the SAME surface frame into the REAL desktop's address space so the
+    // desktop (a scheduled process) can composite the app into an on-screen
+    // window. Read-only for the desktop (USER|PRESENT, not WRITABLE).
+    unsafe {
+        let ro = crate::vmm::PTE_PRESENT | crate::vmm::PTE_USER;
+        if crate::vmm::map_page_in(TASKS[d].cr3, APP_SURF_VA, fb_frame, ro) {
+            APP_SURFACE_VA = APP_SURF_VA;
+            write_str("[mpd2] app surface mapped into the desktop AS @ 0x3000000\n");
+        } else {
+            write_str("[mpd2] WARN: could not map app surface into desktop AS\n");
+        }
+    }
     write_str("[mpd2] desktop + second app both scheduled; clearing screen + enabling preemption\n");
     if crate::fb::is_live() {
         crate::fb::fill(0, 0, crate::fb::width(), crate::fb::height(), 0x000000);
