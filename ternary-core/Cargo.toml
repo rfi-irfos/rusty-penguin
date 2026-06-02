@@ -1,10 +1,13 @@
 [package]
 name = "ternary-core"
-version.workspace = true
-edition.workspace = true
-authors.workspace = true
-license.workspace = true
-repository.workspace = true
-description.workspace = true
+version = "0.1.0"
+edition = "2021"
+authors = ["Simeon Kepp <rfi.irfos@gmail.com>"]
+license = "MIT"
+repository = "https://github.com/rfi-irfos/rusty-penguin"
+description = "Balanced-ternary primitives: Trit and 9-trit Tryte with full-adder arithmetic. no_std, zero dependencies."
+readme = "README.md"
+keywords = ["ternary", "balanced-ternary", "trit", "tryte", "no-std"]
+categories = ["no-std", "data-structures", "embedded"]
 
 [dependencies]
