@@ -1091,15 +1091,12 @@ fn draw_scene_static_v(fb: &mut Framebuffer, variant: u8) {
     // The green active-indicator underline is drawn per-frame only when start_menu_open=true.
     let (mbx, mby, mbw, _mbh) = menu_btn_rect(h);
     // Subtle button body — shadow inset by 2px so it doesn't bleed past the border.
-    fb.fill_rounded_rect(mbx + 2, mby + 2, mbw - 2, PANEL_H - 16, 11, 0x0A0D10);
-    fb.fill_rounded_rect_glass(mbx, mby, mbw, PANEL_H - 14, 12, 0x303940, 202);
-    draw_round_border(fb, mbx, mby, mbw, PANEL_H - 14, 12, 0x58656C);
-    fb.fill_rect_s(mbx + 12, mby + 1, mbw - 24, 1, 0x7B878E);
-    // Dingir icon — full quality, 36px render of the 64x64 source.
+    // Teal-filled pill button with a white unfilled star — clean, iconic.
+    fb.fill_rounded_rect(mbx, mby, mbw, PANEL_H - 14, 12, TEAL);
+    draw_round_border(fb, mbx, mby, mbw, PANEL_H - 14, 12, 0x8FF0E0);
+    fb.fill_rect_s(mbx + 6, mby + 1, mbw - 12, 1, 0xB0FFF0); // top light catch
     let star_cy = mby + (PANEL_H - 14) / 2;
-    // Icon only — no "Menu" text, clean minimal button.
-    let icon_drawn = draw_ppm_icon_centered(fb, "bin/dingir.ppm", mbx + mbw / 2, star_cy, 40);
-    if !icon_drawn { fb.draw_star8(mbx + mbw / 2, star_cy, 16, TEAL); }
+    fb.draw_star8(mbx + mbw / 2, star_cy, 15, WHITE);
     // separator
     fb.fill_rect_s(mbx + mbw + 8, ptop + 14, 1, PANEL_H - 28, 0x435059);
 
@@ -2563,14 +2560,14 @@ fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, 
     // Menu button active indicator: green underline + brightened bg when open.
     // Drawn per-frame (not in the cached bg) so it only appears on state change.
     if start_menu {
+        // Active: slightly brighter teal, white star, teal underline.
         let (mbx, mby, mbw, _) = menu_btn_rect(fb.height);
         let bh = PANEL_H - 14;
-        fb.fill_rounded_rect(mbx, mby, mbw, bh, 10, 0x1A3A2A);
+        fb.fill_rounded_rect(mbx, mby, mbw, bh, 12, 0x5EEAD4); // brighter teal
+        draw_round_border(fb, mbx, mby, mbw, bh, 12, WHITE);
         let star_cy = mby + bh / 2;
-        if !draw_ppm_icon_centered(fb, "bin/dingir.ppm", mbx + mbw / 2, star_cy, 40) {
-            fb.draw_star8(mbx + mbw / 2, star_cy, 16, TEAL);
-        }
-        fb.fill_rect_s(mbx + 8, mby + bh - 3, mbw - 16, 3, TEAL);
+        fb.draw_star8(mbx + mbw / 2, star_cy, 15, 0x0D3330); // dark star on bright
+        fb.fill_rect_s(mbx + 8, mby + bh - 3, mbw - 16, 3, WHITE);
     }
     let up = rtc_str();
     // Find the focused index on the current desktop (last non-minimized window there).
@@ -2937,7 +2934,11 @@ pub extern "C" fn _start() -> ! {
             else if start_menu_open {
                 if let Some(mi) = start_menu_hit(fb.height, cx, cy) {
                     if mi < MENU_ITEMS.len() {
-                        app_ctx = Some((mi, cx, cy - APP_CTX_ITEMS.len() as i32 * APP_CTX_ITEM_H - 8));
+                        // Place popup to the RIGHT of the start menu panel (never overlaps it).
+                        let (mx, _, mw, _) = start_menu_bounds(fb.height);
+                        let popup_x = mx + mw + 6;
+                        let popup_y = cy - 10; // vertically near the click
+                        app_ctx = Some((mi, popup_x, popup_y));
                         scene_dirty = true;
                     }
                 } else {
