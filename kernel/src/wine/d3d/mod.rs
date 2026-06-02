@@ -5,14 +5,14 @@ use crate::serial;
 
 /// Entry point for DirectX 9 command buffer processing.
 /// Maps Win32-land DDI commands to our GPU driver.
+pub mod renderer;
+
+use crate::serial;
+
 pub fn d3d9_command_buffer(data: *const u8, size: u32) -> u32 {
-    serial::write_str("  [crysis] D3D9 Command Buffer received, size: ");
-    serial::write_hex_u32(size);
-    serial::write_str("\n");
-    
-    // In the real pipeline, this would invoke the virtio-gpu driver
-    // directly, bypassing heavy legacy Windows driver bloat.
-    0 // D3D_OK
+    serial::write_str("  [crysis] Processing D3D9 command buffer\n");
+    renderer::blit_render_target(0, 0); // Simplified render call
+    0
 }
 
 /// @sparseskip: Dedicated D3D9 dormancy profile for Crysis.
