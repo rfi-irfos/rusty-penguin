@@ -46,6 +46,7 @@ mod test_certs;
 mod ca_roots;
 mod iwlwifi_fw;
 mod iwlwifi;
+mod wpa2;
 mod acpi;
 
 use ternary_core::{Trit, Tryte};
@@ -434,6 +435,14 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
         vga::write_str("  [wifi: Intel WiFi card detected]\n", vga::Color::Green);
     } else {
         vga::write_str("  [wifi: no Intel WiFi (QEMU has none)]\n", vga::Color::Amber);
+    }
+    // WPA2 auth core (the hardware-independent half of WiFi): verify the PSK/PTK
+    // key-derivation crypto against its canonical IEEE/RFC vectors at boot. Unlike
+    // the radio, this needs no hardware — so it is proven even under QEMU.
+    if wpa2::selftest() {
+        vga::write_str("  [wifi: WPA2 auth core OK (PMK/PTK vectors verified)]\n", vga::Color::Green);
+    } else {
+        vga::write_str("  [wifi: WPA2 auth core SELFTEST FAILED]\n", vga::Color::Red);
     }
 
     // ACPI power management: parse the firmware tables so we can cleanly power
