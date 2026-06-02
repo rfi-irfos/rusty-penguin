@@ -6,6 +6,28 @@ what's genuinely still open. Brutal honesty over polish — nothing here is clai
 
 ---
 
+## 2026-06-02 — WM upgrade: window snapping + 4 virtual desktops (v2.7.0)
+
+**Goal:** ship the two biggest daily-driver WM features missing from a Mint-grade desktop.
+
+### Shipped + verified
+
+| Feature | What | Proof | Commit |
+|---|---|---|---|
+| Window snapping | Drag titlebar within 20 px of left/right/top edge → green snap-preview overlay → release to snap to left-half / right-half / maximize. `restore_x/y/w/h` saved for unsnap. | Compile + ISO build clean; snap logic verified in code; preview geometry correct in recomposite | `[latest]` |
+| 4 virtual desktops | `Window.desktop: usize` field. 4 dot indicators in dock tray (lit green = active, 3 dim for others). Click any dot to switch. All rendering, hit-testing, keyboard dispatch, and taskbar filtered by `current_desktop`. | Headless screenshot: green dot + 3 dim dots clearly visible in dock tray zoom | `[latest]` |
+| UI design pass | Clean solid dock icon tiles (no glass noise), proper rounded `draw_round_border` corner arcs, menu button / footer buttons, dock transparency restored | Screenshot shows correct panel | prior session |
+| Doom native res | WadDoom renders at window pixel dimensions; wall scale 200.0; status bar label/value no-overlap | ISO built + visible in game | prior session |
+
+### Open (not claimed)
+
+- Snap-to-restore on next drag (un-snap by dragging again) — not yet wired
+- Keyboard shortcut for workspace switching — click-only for now
+- Virtual desktop indicator labels (numbered badges) — planned polish pass
+- Windowed DOOM + virtual desktop interaction (DOOM on desktop 2, browser on 1) — next natural demo
+
+---
+
 ## 2026-06-01 → 06-02 — Daily-driver gap closing (Ubuntu-replacement goal)
 
 Goal for the session: push the six remaining "replace Ubuntu" gaps as far as is

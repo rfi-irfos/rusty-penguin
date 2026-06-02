@@ -2,6 +2,40 @@
 
 All notable changes to this project will be documented here.
 
+## [2.7.0] — 2026-06-02 — Window snapping + 4 virtual desktops
+
+### Added — WM: window snapping + virtual desktops (2026-06-02)
+
+- **Window snapping:** drag a titlebar within 20 px of the left edge, right edge, or
+  top → semi-transparent green snap-preview overlay shows the target geometry → release
+  to snap to left-half, right-half, or maximize. Pre-snap `restore_x/y/w/h` saved so
+  the window can be unsized again. `SNAP_ZONE = 20 px`.
+- **4 virtual desktops:** `Window.desktop: usize` field added to `wm::Window`. The active
+  desktop is the lit green dot in the dock tray; 3 dim dots for the others — click any dot
+  to switch (`ws_dot_hit`, `WS_DOT_RECTS`). All rendering, hit-testing, keyboard dispatch,
+  taskbar buttons, blink cursor, and window-open paths are filtered by `current_desktop`.
+  Switching desktops instantly hides all windows on the old desktop and shows the new one.
+- `draw_taskbar_win_btns` + `tbwin_hit` now take `current_desktop`; slot numbering is per-
+  desktop so the taskbar only shows the current workspace's windows.
+- `draw_topbar` now takes `current_desktop` to render the workspace dots.
+- Tray width increased from 360 to 440 px to accommodate the 4-dot group.
+- ISO screendump verified: green dot + 3 dim dots rendered cleanly in dock tray.
+
+### Added — UI design pass: dock icons, menu, Doom native resolution (2026-06-02)
+
+- Dock icon tiles: stripped all decoration (shadows, glass layers, borders) → single solid
+  `tint(color, 110)` fill; clean solid coloured tiles matching the original style.
+- `draw_round_border`: added midpoint-circle corner arcs so the dock border wraps all the
+  way around without open corners.
+- Menu icon tiles: removed border + sheen noise; icon-tile hover uses flat `0x29343A` fill.
+- Menu footer buttons (Settings / Shut Down): proper rounded tiles with `draw_round_border`.
+- Menu button shadow: reduced to `(mbw-2, PANEL_H-16)` to prevent bleeding past border.
+- `DOCK_ALPHA = 115`: semi-transparent dock — wallpaper shows through.
+- **Doom native resolution rendering:** `WadDoom` renders directly at the window's pixel
+  dimensions (`rw`/`rh` fields); pixel buffer resizes on window resize; wall scale `200.0`
+  for correct proportions at any size. No more 320×200 upscale artefacts.
+- Doom status bar: label (HLTH/AMMO) at y+4, value at y+18 — no overlap.
+
 ## [Unreleased]
 
 ### Added — Item 6: virgl 3D resource path end-to-end proved (2026-06-02)
