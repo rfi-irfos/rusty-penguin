@@ -4,6 +4,19 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+### Added — Power: software brightness control (Quick Settings slider + boot default) (2026-06-01)
+
+- A real, usable brightness control that works on ANY panel — including those with
+  no ACPI/hardware backlight (and QEMU). `present()` maps every byte to the real
+  screen through a precomputed `v*b/100` LUT when brightness < 100; brightness == 100
+  fast-paths to a plain block copy (zero overhead). Clamped to a 15% floor so the
+  screen never goes fully black.
+- Quick Settings gains a brightness slider (sun icon) below the volume slider.
+- `brightness=N` boot arg (`sys_boot_brightness` #40) boots the desktop pre-dimmed
+  — a default/kiosk/accessibility knob and the headless verification idiom.
+- Verified in QEMU: `brightness=40` → whole desktop at 0.380× baseline luminance
+  (expected ~0.40); normal boot unchanged. Proof: docs/brightness-40pct.png.
+
 ### Fixed — Multiproc brick 5: per-task syscall stack → desktop + a 2nd real app concurrently, no #GP (2026-06-01)
 
 - The genuine scheduler-isolation maturity fix. The SYSCALL trampoline switched
