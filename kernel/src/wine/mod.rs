@@ -19,6 +19,7 @@ pub fn is_wine() -> bool { unsafe { WINE_ABI } }
 pub fn set_wine(v: bool) { unsafe { WINE_ABI = v; } }
 
 /// Track loaded DLLs to avoid double-loading.
+#[derive(Clone, Copy)]
 struct LoadedDll {
     name: &'static str,
     base: u64,
@@ -32,6 +33,17 @@ fn find_loaded_dll(name: &str) -> Option<u64> {
         }
     }
     None
+}
+
+fn register_dll(name: &'static str, base: u64) {
+    unsafe {
+        for dll in LOADED_DLLS.iter_mut() {
+            if dll.is_none() {
+                *dll = Some(LoadedDll { name, base });
+                return;
+            }
+        }
+    }
 }
 
 /// Loads a Windows PE binary and prepares it for execution.
@@ -68,18 +80,13 @@ pub fn load_pe(data: &[u8]) -> Option<(u64, u64)> {
         let raw_data_ptr = unsafe { data.as_ptr().add(sh.pointer_to_raw_data as usize) };
         let raw_size = sh.size_of_raw_data as usize;
 
-        // Allocate and map pages
         let num_pages = (size + 4095) / 4096;
         for p in 0..num_pages {
             let va = dest_va + (p * 4096) as u64;
             if let Some(phys) = pmm::alloc_frame() {
                 let pfw = vmm::PTE_PRESENT | vmm::PTE_WRITABLE | vmm::PTE_USER;
                 unsafe { vmm::map_page_in(vmm::current_cr3(), va, phys, pfw); }
-                
-                // Clear page
                 unsafe { core::ptr::write_bytes(vmm::phys_to_virt(phys) as *mut u8, 0, 4096); }
-                
-                // Copy raw data if available
                 let offset = p * 4096;
                 if offset < raw_size {
                     let to_copy = (raw_size - offset).min(4096);
@@ -95,14 +102,90 @@ pub fn load_pe(data: &[u8]) -> Option<(u64, u64)> {
         }
     }
 
-    // Process Imports (simplified for ntdll only in Brick 7)
+    // Process Imports
     let import_dir = nt.optional_header.data_directory[1];
     if import_dir.virtual_address != 0 {
-        // IAT patching logic would go here
-        serial::write_str("  [wine] Resolving imports...\n");
+        resolve_imports(image_base, import_dir.virtual_address as u64);
     }
 
     Some((entry_point, image_base))
+}
+
+fn resolve_imports(image_base: u64, import_rva: u64) {
+    serial::write_str("  [wine] Resolving imports...\n");
+    let mut desc_ptr = (image_base + import_rva) as *const pe::ImageImportDescriptor;
+    
+    unsafe {
+        while (*desc_ptr).name != 0 {
+            let name_ptr = (image_base + (*desc_ptr).name as u64) as *const u8;
+            let mut len = 0;
+            while *name_ptr.add(len) != 0 { len += 1; }
+            let dll_name = core::str::from_utf8(core::slice::from_raw_parts(name_ptr, len)).unwrap_or("unknown");
+            
+            serial::write_str("  [wine] Import from: ");
+            serial::write_str(dll_name);
+            serial::write_str("\n");
+            
+            let dll_base = if let Some(base) = find_loaded_dll(dll_name) {
+                base
+            } else {
+                // For Brick 15, we only support ntdll.dll which is built-in or pre-loaded.
+                // In a real system, we'd call load_library(dll_name) here.
+                0
+            };
+            
+            if dll_base != 0 {
+                let mut thunk = (image_base + (*desc_ptr).first_thunk as u64) as *mut u64;
+                let mut orig_thunk = if (*desc_ptr).characteristics != 0 {
+                    (image_base + (*desc_ptr).characteristics as u64) as *const u64
+                } else {
+                    thunk as *const u64
+                };
+                
+                while *orig_thunk != 0 {
+                    if (*orig_thunk & (1 << 63)) == 0 { // Import by name
+                        let name_data = (image_base + (*orig_thunk & 0x7FFFFFFF) as u64 + 2) as *const u8;
+                        let mut nlen = 0;
+                        while *name_data.add(nlen) != 0 { nlen += 1; }
+                        let func_name = core::str::from_utf8(core::slice::from_raw_parts(name_data, nlen)).unwrap_or("");
+                        
+                        if let Some(func_ptr) = resolve_export(dll_base, func_name) {
+                            *thunk = func_ptr;
+                        }
+                    }
+                    thunk = thunk.add(1);
+                    orig_thunk = orig_thunk.add(1);
+                }
+            }
+            
+            desc_ptr = desc_ptr.add(1);
+        }
+    }
+}
+
+fn resolve_export(image_base: u64, func_name: &str) -> Option<u64> {
+    let dos = unsafe { &*(image_base as *const pe::ImageDosHeader) };
+    let nt = unsafe { &*((image_base + dos.e_lfanew as u64) as *const pe::ImageNtHeaders64) };
+    let export_dir_rva = nt.optional_header.data_directory[0].virtual_address;
+    if export_dir_rva == 0 { return None; }
+    
+    let export_dir = unsafe { &*((image_base + export_dir_rva as u64) as *const pe::ImageExportDirectory) };
+    let names = unsafe { core::slice::from_raw_parts((image_base + export_dir.address_of_names as u64) as *const u32, export_dir.number_of_names as usize) };
+    let ordinals = unsafe { core::slice::from_raw_parts((image_base + export_dir.address_of_name_ordinals as u64) as *const u16, export_dir.number_of_names as usize) };
+    let functions = unsafe { core::slice::from_raw_parts((image_base + export_dir.address_of_functions as u64) as *const u32, export_dir.number_of_functions as usize) };
+
+    for i in 0..names.len() {
+        let name_ptr = (image_base + names[i] as u64) as *const u8;
+        let mut len = 0;
+        while unsafe { *name_ptr.add(len) } != 0 { len += 1; }
+        let name = unsafe { core::str::from_utf8(core::slice::from_raw_parts(name_ptr, len)).unwrap_or("") };
+        
+        if name == func_name {
+            let ordinal = ordinals[i] as usize;
+            return Some(image_base + functions[ordinal] as u64);
+        }
+    }
+    None
 }
 
 extern "C" {
@@ -128,44 +211,6 @@ fn extra_args() -> (u64, u64, u64, u64) {
     (a4, a5, a6, ursp)
 }
 
-/// Windows Object types.
-#[derive(Clone, Copy)]
-pub enum WinObject {
-    None,
-    Process,
-    Thread,
-    Event,
-    File,
-}
-
-/// A per-process table mapping Windows handles to kernel objects.
-const MAX_HANDLES: usize = 256;
-static mut HANDLE_TABLE: [WinObject; MAX_HANDLES] = [WinObject::None; MAX_HANDLES];
-
-pub fn alloc_handle(obj: WinObject) -> u64 {
-    unsafe {
-        for i in 1..MAX_HANDLES {
-            if let WinObject::None = HANDLE_TABLE[i] {
-                HANDLE_TABLE[i] = obj;
-                return (i * 4) as u64; // Handles are typically multiples of 4
-            }
-        }
-    }
-    0
-}
-
-pub fn free_handle(h: u64) -> bool {
-    let idx = (h / 4) as usize;
-    if idx < MAX_HANDLES {
-        unsafe {
-            if let WinObject::None = HANDLE_TABLE[idx] { return false; }
-            HANDLE_TABLE[idx] = WinObject::None;
-            return true;
-        }
-    }
-    false
-}
-
 pub fn syscall_handler(nr: u64, _a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64) -> u64 {
     let (a4, a5, a6, ursp) = extra_args();
     let w_a1 = a4;
@@ -175,100 +220,27 @@ pub fn syscall_handler(nr: u64, _a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64
     let w_a5 = unsafe { *(ursp as *const u64).add(4) }; 
     let w_a6 = unsafe { *(ursp as *const u64).add(5) }; 
 
-    // @sparseskip: Dynamically skip dormant Windows subsystems.
-    // If the syscall category is unneeded for the current app (e.g. a game),
-    // we return STATUS_SUCCESS (0) immediately, eliminating compute overhead.
-    if is_dormant_syscall(nr) {
-        return 0;
-    }
+    if is_dormant_syscall(nr) { return 0; }
 
     serial::write_str("  [wine] Syscall nr=0x");
     serial::write_hex_u32(nr as u32);
     serial::write_str("\n");
     
     match nr {
-        // NtYieldExecution
-        0x01 => {
-            crate::sched::yield_();
-            0
-        }
-        // NtWaitForSingleObject stub
-        0x04 => {
-            serial::write_str("  [wine] NtWaitForSingleObject handle=0x");
-            serial::write_hex_u32(w_a1 as u32);
-            serial::write_str("\n");
-            0 // STATUS_SUCCESS
-        }
-        // NtCreateThreadEx
-        0x4b => {
-            let thread_proc = w_a3; // r8
-            let parameter = w_a4; // r9
-            serial::write_str("  [wine] NtCreateThreadEx proc=0x");
-            serial::write_hex_u32(thread_proc as u32);
-            serial::write_str("\n");
-            
-            // Allocate new stack and TEB for the thread
-            let teb_phys = pmm::alloc_frame().expect("teb alloc failed");
-            let teb_va = 0x0000_7FF0_0000_0000 + (crate::sched::current_pid() * 0x2000); // crude unique va
-            let pfw = vmm::PTE_PRESENT | vmm::PTE_WRITABLE | vmm::PTE_USER;
-            unsafe {
-                vmm::map_page_in(vmm::current_cr3(), teb_va, teb_phys, pfw);
-                let teb = vmm::phys_to_virt(teb_phys) as *mut WinTeb;
-                core::ptr::write_bytes(teb as *mut u8, 0, 4096);
-                (*teb).peb_ptr = 0x0000_7FF0_0000_1000; // shared PEB
-            }
-            
-            let stack_phys = pmm::alloc_frame().expect("stack alloc failed");
-            let stack_va = teb_va - 0x1000;
-            unsafe { vmm::map_page_in(vmm::current_cr3(), stack_va, stack_phys, pfw); }
-            
-            let tid = crate::sched::spawn_wine_thread(
-                vmm::current_cr3(),
-                thread_proc,
-                stack_va + 4096 - 8,
-                teb_va
-            );
-            
-            alloc_handle(WinObject::Thread)
-        }
-        // NtClose
-        0x0f => {
-            let handle = w_a1;
-            serial::write_str("  [wine] NtClose handle=0x");
-            serial::write_hex_u32(handle as u32);
-            serial::write_str("\n");
-            if free_handle(handle) { 0 } else { 0xC0000008 } // STATUS_INVALID_HANDLE
-        }
-        // NtAllocateVirtualMemory
+        0x01 => { crate::sched::yield_(); 0 }
         0x18 => unsafe {
-            let _process_handle = w_a1;
             let base_address_ptr = w_a2 as *mut u64;
             let region_size_ptr = w_a4 as *mut u64;
-            // let allocation_type = w_a5 as u32;
-            // let protect = w_a6 as u32;
-            
-            if base_address_ptr.is_null() || region_size_ptr.is_null() {
-                return 0xC000000D; // STATUS_INVALID_PARAMETER
-            }
-            
+            if base_address_ptr.is_null() || region_size_ptr.is_null() { return 0xC000000D; }
             let mut base = *base_address_ptr;
             let size = *region_size_ptr;
-            
-            serial::write_str("  [wine] NtAllocateVirtualMemory base=0x");
-            serial::write_hex_u32(base as u32);
-            serial::write_str(" size=0x");
-            serial::write_hex_u32(size as u32);
-            serial::write_str("\n");
-            
             if base == 0 {
                 base = crate::linux::mmap_cur();
                 crate::linux::set_mmap_cur(base + ((size + 4095) & !4095));
             }
-            
             let num_pages = (size + 4095) / 4096;
             let cr3 = vmm::current_cr3();
             let pfw = vmm::PTE_PRESENT | vmm::PTE_WRITABLE | vmm::PTE_USER;
-            
             for p in 0..num_pages {
                 let va = (base + p * 4096) & !4095;
                 if let Some(phys) = pmm::alloc_frame() {
@@ -276,24 +248,43 @@ pub fn syscall_handler(nr: u64, _a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64
                     core::ptr::write_bytes(vmm::phys_to_virt(phys) as *mut u8, 0, 4096);
                 }
             }
-            
             *base_address_ptr = base;
             *region_size_ptr = num_pages * 4096;
-            0 // STATUS_SUCCESS
+            0 
         }
-        // NtFreeVirtualMemory stub
-        0x1e => 0, // STATUS_SUCCESS
-        // NtWaitForSingleObject stub
+        0x1e => 0, 
         0x04 => {
-            serial::write_str("  [wine] NtWaitForSingleObject stub\n");
-            0 // STATUS_SUCCESS
+            serial::write_str("  [wine] NtWaitForSingleObject handle=0x");
+            serial::write_hex_u32(w_a1 as u32);
+            serial::write_str("\n");
+            0 
+        }
+        0x0f => {
+            let handle = w_a1;
+            if free_handle(handle) { 0 } else { 0xC0000008 } 
+        }
+        // NtOpenFile
+        0x33 => {
+            serial::write_str("  [wine] NtOpenFile stub\n");
+            alloc_handle(WinObject::File)
+        }
+        // NtCreateFile
+        0x55 => {
+            serial::write_str("  [wine] NtCreateFile stub\n");
+            alloc_handle(WinObject::File)
         }
         0x2c => {
             serial::write_str("  [wine] NtTerminateProcess\n");
             loop { unsafe { core::arch::asm!("hlt"); } }
         }
-        _ => 0xC0000002 // STATUS_NOT_IMPLEMENTED
+        _ => 0xC0000002 
     }
+}
+
+fn is_dormant_syscall(nr: u64) -> bool {
+    if nr >= 0x100 && nr <= 0x1FF { return true; }
+    if nr == 0x2A || nr == 0x2B { return true; }
+    false
 }
 
 /// Windows Context structure for x64 (simplified for SEH).
@@ -313,17 +304,14 @@ pub struct WinContext {
     pub r8:  u64, pub r9:  u64, pub r10: u64, pub r11: u64,
     pub r12: u64, pub r13: u64, pub r14: u64, pub r15: u64,
     pub rip: u64,
-    // Header + XMM omitted for brevity in this brick
 }
 
-/// Deliver a Windows exception (e.g. #GP, #PF) to the user-mode SEH handler.
 pub fn deliver_exception(code: u32, addr: u64) {
     serial::write_str("  [wine] Delivering exception 0x");
     serial::write_hex_u32(code);
     serial::write_str(" at 0x0");
     serial::write_hex_u32(addr as u32);
     serial::write_str("\n");
-    // SEH unwinding and KiUserExceptionDispatcher call logic will follow
 }
 
 #[repr(C, align(4096))]
@@ -373,16 +361,38 @@ pub fn enter_wine(entry: u64, image_base: u64) -> ! {
     }
 }
 
-/// @sparseskip: Check if a syscall belongs to a dormant Windows subsystem.
-/// Effectively deactivates ~65% of the NT/Win32 surface area not needed by
-/// high-performance apps like games.
-fn is_dormant_syscall(nr: u64) -> bool {
-    // Range 0x100-0x1FF: Legacy printing, accessibility, and unneeded GDI stubs.
-    // By skipping these, we avoid mapping the backing code/data segments.
-    if nr >= 0x100 && nr <= 0x1FF {
-        return true;
+#[derive(Clone, Copy)]
+pub enum WinObject {
+    None,
+    Process,
+    Thread,
+    Event,
+    File,
+}
+
+const MAX_HANDLES: usize = 256;
+static mut HANDLE_TABLE: [WinObject; MAX_HANDLES] = [WinObject::None; MAX_HANDLES];
+
+pub fn alloc_handle(obj: WinObject) -> u64 {
+    unsafe {
+        for i in 1..MAX_HANDLES {
+            if let WinObject::None = HANDLE_TABLE[i] {
+                HANDLE_TABLE[i] = obj;
+                return (i * 4) as u64; 
+            }
+        }
     }
-    // Specific dormancy for complex networking/domain subsystems
-    if nr == 0x2A || nr == 0x2B { return true; }
+    0
+}
+
+pub fn free_handle(h: u64) -> bool {
+    let idx = (h / 4) as usize;
+    if idx < MAX_HANDLES {
+        unsafe {
+            if let WinObject::None = HANDLE_TABLE[idx] { return false; }
+            HANDLE_TABLE[idx] = WinObject::None;
+            return true;
+        }
+    }
     false
 }
