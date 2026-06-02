@@ -1077,88 +1077,95 @@ impl App for ProcessMonitor {
     }
 
     fn render(&mut self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, h: u32) {
+        let xi = x as i32; let wi = w as i32;
+        const T: u8 = crate::fb::AA_T; const S: u8 = crate::fb::AA_S;
         fb.fill_rect(x, y, w, h, 0x14171A);
         // Tab bar.
-        fb.fill_rect(x, y, w, 26, 0x252E2A);
+        fb.fill_rect(x, y, w, 28, 0x1B2230);
         for (i, t) in ["Resources", "Processes"].iter().enumerate() {
-            let tx = x + 14 + i as u32 * 96;
+            let tx = xi + 14 + i as i32 * 110;
             let active = self.tab as usize == i;
             let col = if active { 0x6FE18B } else { 0x8A938C };
-            if active { fb.fill_rect(tx - 4, y + 22, (t.len() as u32) * 7 + 8, 2, 0x6FE18B); }
-            fb.draw_str_t(tx, y + 9, t, col);
+            if active { fb.fill_rect_s(tx - 4, y as i32 + 25, Framebuffer::aa_w(t, S) + 8, 2, 0x6FE18B); }
+            fb.draw_aa(tx, y as i32 + 5, t, col, S);
         }
 
         if self.tab == 0 {
             // ── Resources: live CPU + memory graphs ────────────────────────────
-            let bg = 0x14171Au32;
             let gx = x + 14; let gw = w.saturating_sub(28); let gh = 86u32;
             let mut pb = [0u8; 24];
             // CPU graph (busy %).
-            fb.draw_str(x + 14, y + 34, "CPU", 0xECEDE5, bg);
-            fb.draw_str(x + w - 70, y + 34, u64_into(&mut pb, self.cpu_pct as u64), 0x8CC6E5, bg);
-            fb.draw_str(x + w - 70 + count_digits(self.cpu_pct.max(1)) * 8, y + 34, "%", 0x8A938C, bg);
+            fb.draw_aa(xi + 14, y as i32 + 32, "CPU", 0xECEDE5, S);
+            let ps = u64_into(&mut pb, self.cpu_pct as u64);
+            let pw = Framebuffer::aa_w(ps, S) + Framebuffer::aa_w("%", S);
+            let mut px = xi + wi - 14 - pw;
+            px += fb.draw_aa(px, y as i32 + 32, ps, 0x8CC6E5, S);
+            fb.draw_aa(px, y as i32 + 32, "%", 0x8A938C, S);
             Self::draw_graph(fb, gx, y + 52, gw, gh, &self.cpu_hist, self.hist_len, 0x1E4A6B, 0x8CC6E5);
             // Memory graph (used %).
             let used = self.mem_total.saturating_sub(self.mem_free);
             let pct = if self.mem_total > 0 { used * 100 / self.mem_total } else { 0 };
             let my = y + 52 + gh + 20;
-            fb.draw_str(x + 14, my - 18, "Memory", 0xECEDE5, bg);
+            let myl = my as i32 - 19;
+            fb.draw_aa(xi + 14, myl, "Memory", 0xECEDE5, S);
             let mut ub = [0u8; 24]; let mut tb = [0u8; 24]; let mut mp = [0u8; 24];
-            let rx = x + w - 170;
-            fb.draw_str(rx, my - 18, u64_into(&mut ub, used as u64), 0x6FE18B, bg);
-            let uw = (count_digits(used) + 1) * 8;
-            fb.draw_str(rx + uw, my - 18, "/", 0x8A938C, bg);
-            fb.draw_str(rx + uw + 12, my - 18, u64_into(&mut tb, self.mem_total as u64), 0xECEDE5, bg);
-            fb.draw_str(rx + uw + 12 + (count_digits(self.mem_total) + 1) * 8, my - 18, "MiB", 0x8A938C, bg);
-            fb.draw_str(x + w - 54, my - 18, u64_into(&mut mp, pct as u64), 0xF5C451, bg);
-            fb.draw_str(x + w - 54 + count_digits(pct.max(1)) * 8, my - 18, "%", 0x8A938C, bg);
+            // "used / total MiB" chained from a left anchor.
+            let mut rx = xi + wi - 210;
+            rx += fb.draw_aa(rx, myl, u64_into(&mut ub, used as u64), 0x6FE18B, S) + 5;
+            rx += fb.draw_aa(rx, myl, "/", 0x8A938C, S) + 5;
+            rx += fb.draw_aa(rx, myl, u64_into(&mut tb, self.mem_total as u64), 0xECEDE5, S) + 4;
+            rx += fb.draw_aa(rx, myl, "MiB", 0x8A938C, S) + 12;
+            rx += fb.draw_aa(rx, myl, u64_into(&mut mp, pct as u64), 0xF5C451, S);
+            fb.draw_aa(rx, myl, "%", 0x8A938C, S);
             Self::draw_graph(fb, gx, my, gw, gh, &self.mem_hist, self.hist_len, 0x1E5A3E, 0x6FE18B);
             // uptime + process count
             let secs = sys_ticks() / 100;
             let mut hb = [0u8; 12]; let mut nb = [0u8; 24];
-            let fy = my + gh + 16;
-            fb.draw_str_t(x + 14, fy, "Uptime", 0x8A938C);
+            let fy = my as i32 + gh as i32 + 14;
+            let mut ux = xi + 14;
+            ux += fb.draw_aa(ux, fy, "Uptime", 0x8A938C, T) + 8;
             let upt = SystemClock::hms(&mut hb, secs / 3600, secs / 60 % 60, secs % 60);
-            fb.draw_str_t(x + 64, fy, upt, 0xA8B0A6);
-            fb.draw_str_t(x + w - 150, fy, "Processes", 0x8A938C);
-            fb.draw_str_t(x + w - 80, fy, u64_into(&mut nb, self.nprocs as u64), 0xA8B0A6);
+            fb.draw_aa(ux, fy, upt, 0xA8B0A6, T);
+            let mut nx = xi + wi - 150;
+            nx += fb.draw_aa(nx, fy, "Processes", 0x8A938C, T) + 8;
+            fb.draw_aa(nx, fy, u64_into(&mut nb, self.nprocs as u64), 0xA8B0A6, T);
         } else {
             // ── Processes: SYSTEM (kernel, with CPU split) + APPLICATIONS (killable)
             let mut buf = [0u8; 16 * 32];
             let n = unsafe { sys_ps(&mut buf, 16) };
             self.nprocs = n;
-            fb.draw_str_t(x + 14, y + 32, "SYSTEM", 0x8A938C);
-            fb.fill_rect(x, y + 44, w, 16, 0x252E2A);
-            fb.draw_str_t(x + 14, y + 48, "PID", 0x8A938C);
-            fb.draw_str_t(x + 70, y + 48, "NAME", 0x8A938C);
-            fb.draw_str_t(x + 230, y + 48, "CPU", 0x8A938C);
-            fb.draw_str_t(x + 310, y + 48, "STATE", 0x8A938C);
-            let mut yy = y + 64;
+            fb.draw_aa(xi + 14, y as i32 + 30, "SYSTEM", 0x8A938C, T);
+            fb.fill_rect(x, y + 46, w, 18, 0x1B2230);
+            fb.draw_aa(xi + 14, y as i32 + 47, "PID", 0x8A938C, T);
+            fb.draw_aa(xi + 70, y as i32 + 47, "NAME", 0x8A938C, T);
+            fb.draw_aa(xi + 230, y as i32 + 47, "CPU", 0x8A938C, T);
+            fb.draw_aa(xi + 310, y as i32 + 47, "STATE", 0x8A938C, T);
+            let mut yy = y as i32 + 66;
             for i in 0..n {
                 let rec = &buf[i * 32..i * 32 + 32];
                 let pid = u64::from_le_bytes([rec[0],rec[1],rec[2],rec[3],rec[4],rec[5],rec[6],rec[7]]);
                 let state = rec[8];
                 let name_end = rec[16..32].iter().position(|&c| c == 0).unwrap_or(16);
                 let name = core::str::from_utf8(&rec[16..16 + name_end]).unwrap_or("?");
-                // desktop = busy%, idle = idle%, others 0.
                 let cpu = if name == "desktop" { self.cpu_pct } else if name == "idle" { 100u32.saturating_sub(self.cpu_pct) } else { 0 };
                 let mut pb = [0u8; 24]; let mut cb = [0u8; 24];
-                fb.draw_str(x + 14, yy, u64_into(&mut pb, pid), 0xA8B0A6, 0x14171A);
-                fb.draw_str(x + 70, yy, name, 0xECEDE5, 0x14171A);
-                fb.draw_str(x + 230, yy, u64_into(&mut cb, cpu as u64), 0x8CC6E5, 0x14171A);
-                fb.draw_str(x + 230 + count_digits(cpu.max(1)) * 8, yy, "%", 0x8A938C, 0x14171A);
+                fb.draw_aa(xi + 14, yy, u64_into(&mut pb, pid), 0xA8B0A6, T);
+                fb.draw_aa(xi + 70, yy, name, 0xECEDE5, T);
+                let cs = u64_into(&mut cb, cpu as u64);
+                let adv = fb.draw_aa(xi + 230, yy, cs, 0x8CC6E5, T);
+                fb.draw_aa(xi + 230 + adv, yy, "%", 0x8A938C, T);
                 let (lbl, col) = match state { 1 => ("Running", 0x6FE18B), 2 => ("Blocked", 0xEF7575), _ => ("Ready", 0xF5C451) };
-                fb.draw_str(x + 310, yy, lbl, col, 0x14171A);
-                yy += 18;
+                fb.draw_aa(xi + 310, yy, lbl, col, T);
+                yy += 20;
             }
             // Applications — open app windows, selectable + killable.
             yy += 8;
-            fb.draw_str_t(x + 14, yy, "APPLICATIONS", 0x8A938C);
-            yy += 18;
+            fb.draw_aa(xi + 14, yy, "APPLICATIONS", 0x8A938C, T);
+            yy += 20;
             let count = unsafe { crate::APP_COUNT };
             if count > 0 && self.sel >= count { self.sel = count - 1; }
             if count == 0 {
-                fb.draw_str_t(x + 18, yy + 4, "(no app windows open)", 0x6B756D);
+                fb.draw_aa(xi + 18, yy + 2, "(no app windows open)", 0x6B756D, T);
             }
             for i in 0..count {
                 let title = unsafe {
@@ -1166,16 +1173,16 @@ impl App for ProcessMonitor {
                     let end = t.iter().position(|&c| c == 0).unwrap_or(20);
                     core::str::from_utf8(&t[..end]).unwrap_or("?")
                 };
-                let ry = yy + i as u32 * 18;
-                if ry + 18 > y + h - 16 { break; }
+                let ry = yy + i as i32 * 20;
+                if ry + 20 > (y + h) as i32 - 18 { break; }
                 let sel = i == self.sel;
                 let bg = if sel { 0x2E3C32u32 } else { 0x14171A };
-                if sel { fb.fill_rect(x, ry, w, 18, bg); fb.fill_rect(x + 2, ry + 4, 3, 10, 0x6FE18B); }
-                fb.draw_str(x + 18, ry + 4, title, 0xECEDE5, bg);
+                if sel { fb.fill_rect(x, ry as u32, w, 20, bg); fb.fill_rect_s(xi + 2, ry + 4, 3, 12, 0x6FE18B); }
+                fb.draw_aa(xi + 18, ry + 2, title, 0xECEDE5, S);
             }
             // footer hint
-            fb.fill_rect(x, y + h - 16, w, 16, 0x252E2A);
-            fb.draw_str_t(x + 14, y + h - 12, "up/down select   k = kill (force-quit)", 0x6B756D);
+            fb.fill_rect(x, y + h - 18, w, 18, 0x1B2230);
+            fb.draw_aa(xi + 14, y as i32 + h as i32 - 16, "up/down select   k = kill (force-quit)", 0x6B756D, T);
         }
         self.dirty = false;
     }
@@ -2845,9 +2852,9 @@ impl App for Sound {
         fb.fill_rect(x, y, w, h, 0x1A1A24);
 
         // Title
-        fb.fill_rect(x, y, w, 28, 0x2C2C38);
-        fb.draw_str(x + 12, y + 9, "Sound", 0xF5F5F7, 0x2C2C38);
-        fb.draw_str(x + 80, y + 9, "Intel HDA  44.1 kHz  stereo  16-bit", 0x6B756D, 0x2C2C38);
+        fb.fill_rect(x, y, w, 28, 0x1B2230);
+        fb.draw_aa(x as i32 + 12, y as i32 + 5, "Sound", 0xEAF4F0, crate::fb::AA_S);
+        fb.draw_aa(x as i32 + 80, y as i32 + 7, "Intel HDA  44.1 kHz  stereo  16-bit", 0x6B756D, crate::fb::AA_T);
 
         let cx = x as i32;
         let mut oy = y as i32 + 40;
@@ -2875,45 +2882,48 @@ impl App for Sound {
                 }
             }
         } else {
-            fb.draw_str(x + 24 + (bar_w as u32 / 2).saturating_sub(24),
-                         (oy + bar_h / 2 - 4) as u32, "STOPPED", 0x3A3A48, 0x111118);
+            let st = "STOPPED";
+            fb.draw_aa(x as i32 + 24 + (bar_w - Framebuffer::aa_w(st, crate::fb::AA_S)) / 2,
+                         oy + bar_h / 2 - 9, st, 0x4A5260, crate::fb::AA_S);
         }
         oy += bar_h + 14;
 
         // Note selector row
-        fb.draw_str(cx as u32 + 12, oy as u32, "Note:", 0xB8B8B8, 0x1A1A24);
+        fb.draw_aa(cx + 12, oy + 2, "Note:", 0xB8B8B8, crate::fb::AA_S);
         let nx = cx + 60;
         for (i, name) in SCALE_NAMES.iter().enumerate() {
             let bx = nx + i as i32 * 34;
             let sel = i == self.note_idx;
-            let bg = if sel { 0x2E7D4F } else { 0x2C2C38 };
+            let bg = if sel { 0x2E7D4F } else { 0x232B38 };
             let fg = if sel { 0xF5F5F7 } else { 0x9CA3AF };
-            fb.fill_rect(bx as u32, oy as u32, 30, 22, bg);
-            fb.draw_str(bx as u32 + 3, oy as u32 + 7, name, fg, bg);
+            fb.fill_rounded_rect(bx, oy, 30, 22, 5, bg);
+            let lw = Framebuffer::aa_w(name, crate::fb::AA_S);
+            fb.draw_aa(bx + (30 - lw) / 2, oy + 2, name, fg, crate::fb::AA_S);
         }
         oy += 30;
 
         // Volume slider
-        fb.draw_str(cx as u32 + 12, oy as u32 + 4, "Vol:", 0xB8B8B8, 0x1A1A24);
+        fb.draw_aa(cx + 12, oy + 2, "Vol:", 0xB8B8B8, crate::fb::AA_S);
         let vx = cx + 55;
         let vw = 200i32;
-        fb.fill_rect(vx as u32, oy as u32 + 8, vw as u32, 8, 0x2C2C38);
+        fb.fill_rect(vx as u32, oy as u32 + 8, vw as u32, 8, 0x232B38);
         let filled = (self.vol as i32 * vw / 127).max(0).min(vw) as u32;
         fb.fill_rect(vx as u32, oy as u32 + 8, filled, 8, 0x4A9EFF);
         let mut vbuf = [0u8; 24];
         let vs = u64_into(&mut vbuf, self.vol as u64);
-        fb.draw_str(vx as u32 + vw as u32 + 8, oy as u32 + 4, vs, 0xB8B8B8, 0x1A1A24);
+        fb.draw_aa(vx + vw + 8, oy + 2, vs, 0xB8B8B8, crate::fb::AA_S);
         // Vol –/+ buttons
-        fb.fill_rect(vx as u32 + vw as u32 + 36, oy as u32, 22, 22, 0x2C2C38);
-        fb.draw_str(vx as u32 + vw as u32 + 43, oy as u32 + 7, "-", 0xF5C451, 0x2C2C38);
-        fb.fill_rect(vx as u32 + vw as u32 + 62, oy as u32, 22, 22, 0x2C2C38);
-        fb.draw_str(vx as u32 + vw as u32 + 69, oy as u32 + 7, "+", 0x6FE18B, 0x2C2C38);
+        fb.fill_rounded_rect(vx + vw + 36, oy, 22, 22, 5, 0x232B38);
+        fb.draw_aa(vx + vw + 44, oy + 2, "-", 0xF5C451, crate::fb::AA_S);
+        fb.fill_rounded_rect(vx + vw + 62, oy, 22, 22, 5, 0x232B38);
+        fb.draw_aa(vx + vw + 69, oy + 2, "+", 0x6FE18B, crate::fb::AA_S);
         oy += 36;
 
         // Play/Stop button
-        let (btn_label, btn_bg) = if self.playing { ("Stop ", 0x7D2E2E) } else { ("Play ", 0x2E7D4F) };
-        fb.fill_rect(cx as u32 + 12, oy as u32, 80, 30, btn_bg);
-        fb.draw_str(cx as u32 + 24, oy as u32 + 10, btn_label, 0xF5F5F7, btn_bg);
+        let (btn_label, btn_bg) = if self.playing { ("Stop", 0x7D2E2E) } else { ("Play", 0x2E7D4F) };
+        fb.fill_rounded_rect(cx + 12, oy, 80, 30, 7, btn_bg);
+        let lw = Framebuffer::aa_w(btn_label, crate::fb::AA_S);
+        fb.draw_aa(cx + 12 + (80 - lw) / 2, oy + 6, btn_label, 0xF5F5F7, crate::fb::AA_S);
 
         self.dirty = false;
     }
