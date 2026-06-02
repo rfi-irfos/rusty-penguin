@@ -128,21 +128,52 @@ fn extra_args() -> (u64, u64, u64, u64) {
     (a4, a5, a6, ursp)
 }
 
+/// Windows Object types.
+#[derive(Clone, Copy)]
+pub enum WinObject {
+    None,
+    Process,
+    Thread,
+    Event,
+    File,
+}
+
+/// A per-process table mapping Windows handles to kernel objects.
+const MAX_HANDLES: usize = 256;
+static mut HANDLE_TABLE: [WinObject; MAX_HANDLES] = [WinObject::None; MAX_HANDLES];
+
+pub fn alloc_handle(obj: WinObject) -> u64 {
+    unsafe {
+        for i in 1..MAX_HANDLES {
+            if let WinObject::None = HANDLE_TABLE[i] {
+                HANDLE_TABLE[i] = obj;
+                return (i * 4) as u64; // Handles are typically multiples of 4
+            }
+        }
+    }
+    0
+}
+
+pub fn free_handle(h: u64) -> bool {
+    let idx = (h / 4) as usize;
+    if idx < MAX_HANDLES {
+        unsafe {
+            if let WinObject::None = HANDLE_TABLE[idx] { return false; }
+            HANDLE_TABLE[idx] = WinObject::None;
+            return true;
+        }
+    }
+    false
+}
+
 pub fn syscall_handler(nr: u64, _a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64) -> u64 {
     let (a4, a5, a6, ursp) = extra_args();
-    // Windows x64 syscall convention:
-    // rax: nr
-    // r10: arg1
-    // rdx: arg2
-    // r8: arg3
-    // r9: arg4
-    // stack: arg5, arg6...
     let w_a1 = a4;
-    let w_a2 = _a3; // rdx
-    let w_a3 = a5; // r8
-    let w_a4 = a6; // r9
-    let w_a5 = unsafe { *(ursp as *const u64).add(4) }; // shadow space (32) + 0? No, arg5 is at [rsp+32]
-    let w_a6 = unsafe { *(ursp as *const u64).add(5) }; // arg6 is at [rsp+40]
+    let w_a2 = _a3; 
+    let w_a3 = a5; 
+    let w_a4 = a6; 
+    let w_a5 = unsafe { *(ursp as *const u64).add(4) }; 
+    let w_a6 = unsafe { *(ursp as *const u64).add(5) }; 
 
     serial::write_str("  [wine] Syscall nr=0x");
     serial::write_hex_u32(nr as u32);
@@ -153,6 +184,21 @@ pub fn syscall_handler(nr: u64, _a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64
         0x01 => {
             crate::sched::yield_();
             0
+        }
+        // NtWaitForSingleObject stub
+        0x04 => {
+            serial::write_str("  [wine] NtWaitForSingleObject handle=0x");
+            serial::write_hex_u32(w_a1 as u32);
+            serial::write_str("\n");
+            0 // STATUS_SUCCESS
+        }
+        // NtClose
+        0x0f => {
+            let handle = w_a1;
+            serial::write_str("  [wine] NtClose handle=0x");
+            serial::write_hex_u32(handle as u32);
+            serial::write_str("\n");
+            if free_handle(handle) { 0 } else { 0xC0000008 } // STATUS_INVALID_HANDLE
         }
         // NtAllocateVirtualMemory
         0x18 => unsafe {
