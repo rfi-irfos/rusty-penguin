@@ -4,6 +4,19 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+### Added — Windowed-DOOM brick 2b (foundation): mmap into a private address space (2026-06-02)
+
+- The precise blocker for any *dynamic* Linux process (ld.so mmapping libc, DOOM)
+  running scheduled. Linux `mmap` wrote straight to the arena VA — fine under the
+  identity-mapped `enter()` path, but a scheduled task lives in its own private AS
+  where the arena is unmapped. Now, when `is_preemptive_linux()`, `mmap` backs
+  `[p, p+len)` with real frames mapped into the current AS. `enter()` unchanged.
+- New `linuxmmap` self-test (ELF built in-kernel): a scheduled Linux process
+  `mmap(…ANON…)`, writes "MMAPOK" into the buffer, `write`s it back, `exit(0)`.
+  QEMU-verified: MMAPOK reaches serial, clean reap, scheduler healthy, 0 faults.
+- Remaining for full ld.so: MAP_FIXED-over-reservation refinement + verifying
+  ld.so/libc's other syscalls (openat/mprotect/read) from a private AS.
+
 ### Added — Windowed-DOOM brick 2a: a real static Linux ELF as a SCHEDULED process (2026-06-02)
 
 - A real Linux binary now runs as one of several preemptively-scheduled processes

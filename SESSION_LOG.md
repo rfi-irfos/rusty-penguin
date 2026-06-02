@@ -48,8 +48,11 @@ is present (as under QEMU).
   - brick 2a ✅ a real *static* Linux ELF runs as a scheduled process in a private
     AS with a proper auxv stack; clean exit/reap; scheduler healthy (`linuxsched`,
     `133c14d`);
-  - brick 2b ▢ a *dynamic* ELF (ld.so+libc) as a scheduled task — DOOM is a PIE,
-    so this needs ld.so relocation in a private AS (the hardest remaining piece);
+  - brick 2b ◐ a *dynamic* ELF (ld.so+libc) as a scheduled task — DOOM is a PIE.
+    Foundation done (`ef536be`): `mmap` now backs the arena with real frames in the
+    task's PRIVATE AS (`linuxmmap` self-test, MMAPOK, 0 faults) — the precise
+    blocker for ld.so mmapping libc. Still ahead: MAP_FIXED refinement + ld.so
+    relocation + verifying its other syscalls from a private AS;
   - brick 3 ▢ redirect that process's `/dev/fb0` to a private surface;
   - brick 4 ▢ composite the surface into a desktop window (reuses `sys_app_surface`).
 - **5. Power management** — 🟡 ACPI S5 shutdown+reboot ✅; software brightness ✅;
