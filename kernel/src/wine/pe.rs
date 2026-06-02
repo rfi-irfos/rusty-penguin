@@ -98,6 +98,36 @@ pub struct ImageSectionHeader {
     pub characteristics: u32,
 }
 
+#[repr(C, packed)]
+pub struct ImageImportDescriptor {
+    pub characteristics: u32,
+    pub time_date_stamp: u32,
+    pub forwarder_chain: u32,
+    pub name: u32,
+    pub first_thunk: u32,
+}
+
+#[repr(C, packed)]
+pub struct ImageBaseRelocation {
+    pub virtual_address: u32,
+    pub size_of_block: u32,
+}
+
+#[repr(C, packed)]
+pub struct ImageExportDirectory {
+    pub characteristics: u32,
+    pub time_date_stamp: u32,
+    pub major_version: u16,
+    pub minor_version: u16,
+    pub name: u32,
+    pub base: u32,
+    pub number_of_functions: u32,
+    pub number_of_names: u32,
+    pub address_of_functions: u32,
+    pub address_of_names: u32,
+    pub address_of_name_ordinals: u32,
+}
+
 pub fn is_pe(data: &[u8]) -> bool {
     if data.len() < size_of::<ImageDosHeader>() { return false; }
     let dos = unsafe { &*(data.as_ptr() as *const ImageDosHeader) };
