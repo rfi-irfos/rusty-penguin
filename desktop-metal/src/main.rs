@@ -296,7 +296,7 @@ const MENU_BTN_W:   i32 = 88;   // "Menu" button width
 const FAV_TILE:     i32 = 40;   // favourite icon tile
 const FAV_GAP:      i32 = 8;    // gap between favourites
 const PANEL_SOLID:  u32 = 0x262D33;  // dock body: graphite glass
-const DOCK_ALPHA:   u32 = 128;       // wallpaper shows through the dock
+const DOCK_ALPHA:   u32 = 185;       // panel opacity — wallpaper still shows but panel reads clearly
 const PANEL_EDGE:   u32 = 0x5E6B72;  // panel hairline / top sheen
 const PANEL_R:      i32 = 16;        // panel corner radius
 
@@ -969,8 +969,8 @@ fn draw_scene_static_v(fb: &mut Framebuffer, variant: u8) {
     // Menu button — clean layout: large dingir left, "Menu" right, no permanent underline.
     // The green active-indicator underline is drawn per-frame only when start_menu_open=true.
     let (mbx, mby, mbw, _mbh) = menu_btn_rect(h);
-    // Subtle button body (blends with dock, stands out slightly on hover/open)
-    fb.fill_rounded_rect(mbx + 1, mby + 1, mbw, PANEL_H - 14, 12, 0x0A0D10);
+    // Subtle button body — shadow inset by 2px so it doesn't bleed past the border.
+    fb.fill_rounded_rect(mbx + 2, mby + 2, mbw - 2, PANEL_H - 16, 11, 0x0A0D10);
     fb.fill_rounded_rect_glass(mbx, mby, mbw, PANEL_H - 14, 12, 0x303940, 202);
     draw_round_border(fb, mbx, mby, mbw, PANEL_H - 14, 12, 0x58656C);
     fb.fill_rect_s(mbx + 12, mby + 1, mbw - 24, 1, 0x7B878E);
@@ -987,12 +987,39 @@ fn draw_scene_static_v(fb: &mut Framebuffer, variant: u8) {
     draw_desktop_icons(fb, None);
 }
 
-// Crisp 1px rounded border (no fill) — outline for the floating dock/menu.
+// Crisp 1px rounded border (no fill) — all four sides plus corner quarter-arcs.
 fn draw_round_border(fb: &mut Framebuffer, x: i32, y: i32, w: i32, h: i32, r: i32, color: u32) {
-    fb.fill_rect_s(x + r, y,         w - 2 * r, 1, color);
-    fb.fill_rect_s(x + r, y + h - 1, w - 2 * r, 1, color);
-    fb.fill_rect_s(x,         y + r, 1, h - 2 * r, color);
-    fb.fill_rect_s(x + w - 1, y + r, 1, h - 2 * r, color);
+    let r = r.min(w / 2).min(h / 2).max(0);
+    // Straight edges (skip the corner arc spans)
+    fb.fill_rect_s(x + r, y,         w - 2 * r, 1, color);  // top
+    fb.fill_rect_s(x + r, y + h - 1, w - 2 * r, 1, color);  // bottom
+    fb.fill_rect_s(x,         y + r, 1, h - 2 * r, color);  // left
+    fb.fill_rect_s(x + w - 1, y + r, 1, h - 2 * r, color);  // right
+    // Corner arcs — midpoint circle, one pixel per column in the arc quadrant.
+    // For each dx from 0..r, plot the outermost pixel on the circle arc.
+    let cx_l = x + r;         let cy_t = y + r;
+    let cx_r = x + w - 1 - r; let cy_b = y + h - 1 - r;
+    let mut dx = r; let mut dy = 0i32;
+    let mut err = 1 - r;
+    while dx >= dy {
+        let px = |cx: i32, ox: i32| (cx + ox) as u32;
+        let py = |cy: i32, oy: i32| (cy + oy) as u32;
+        // Top-left quadrant
+        fb.set_pixel(px(cx_l, -dx), py(cy_t, -dy), color);
+        fb.set_pixel(px(cx_l, -dy), py(cy_t, -dx), color);
+        // Top-right
+        fb.set_pixel(px(cx_r,  dx), py(cy_t, -dy), color);
+        fb.set_pixel(px(cx_r,  dy), py(cy_t, -dx), color);
+        // Bottom-left
+        fb.set_pixel(px(cx_l, -dx), py(cy_b,  dy), color);
+        fb.set_pixel(px(cx_l, -dy), py(cy_b,  dx), color);
+        // Bottom-right
+        fb.set_pixel(px(cx_r,  dx), py(cy_b,  dy), color);
+        fb.set_pixel(px(cx_r,  dy), py(cy_b,  dx), color);
+        dy += 1;
+        if err < 0 { err += 2 * dy + 1; }
+        else { dx -= 1; err += 2 * (dy - dx) + 1; }
+    }
 }
 
 fn trit_indicator(ticks: u64) -> [u8; 7] {
