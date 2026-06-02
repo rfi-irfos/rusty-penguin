@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented here.
 
+## [3.6.0] — 2026-06-02 — RustyPhone Messages (SMS + RCS chat)
+
+### Added — Messages tab in RustyPhone
+- New **Messages** tab (4th tab): a chat view with message bubbles (sent right,
+  received left), a composer with cursor + round send button, and an
+  **SMS / RCS** toggle badge in the header (tap to switch).
+- RCS shows the rich-chat blue, a typing indicator, and a "delivered + read"
+  reply; SMS shows the plain green bubble. Type a message and press Enter (or the
+  send button) — a canned peer reply lands ~2s later (demo, like the dialer's
+  verification flow; real transport is the Twilio/SIP wiring already stubbed).
+- Tab bar grew 3 → 4 tabs; keyboard Tab cycles Dialer → Recent → Messages →
+  Account; mouse tab + send + badge hit-tests added.
+
 ## [3.5.0] — 2026-06-02 — Font sweep complete + clickable tabs + round-key dialer
 
 ### Changed — antialiased font everywhere in the apps

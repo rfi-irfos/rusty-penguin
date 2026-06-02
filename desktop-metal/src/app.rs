@@ -4918,7 +4918,18 @@ impl App for Notes {
 // The UI adapts to the window width: ≤320px = phone portrait, wider = desktop.
 
 #[derive(Clone, Copy, PartialEq)]
-enum PhoneTab { Dialer, Recent, Account }
+enum PhoneTab { Dialer, Recent, Messages, Account }
+
+#[derive(Clone, Copy)]
+struct Msg { text: [u8; 96], len: usize, sent: bool }
+impl Msg {
+    const EMPTY: Msg = Msg { text: [0u8; 96], len: 0, sent: false };
+    fn new(s: &[u8], sent: bool) -> Msg {
+        let mut m = Msg::EMPTY; let n = s.len().min(96);
+        m.text[..n].copy_from_slice(&s[..n]); m.len = n; m.sent = sent; m
+    }
+    fn as_str(&self) -> &str { core::str::from_utf8(&self.text[..self.len]).unwrap_or("") }
+}
 
 #[derive(Clone, Copy, PartialEq)]
 enum CallState { Idle, Dialing, Ringing, Connected, Ended }
@@ -4955,6 +4966,14 @@ pub struct RustyPhone {
     verify_code_sent: [u8; 6],  // the code we sent
     focus_field: u8,            // 0 = number field, 1 = code field, 2 = sip fields
     last_tick: u64,
+    // Messages (SMS / RCS chat)
+    msgs: [Msg; 24],
+    msg_count: usize,
+    compose: [u8; 96],
+    compose_len: usize,
+    is_rcs: bool,               // true = RCS rich chat, false = plain SMS
+    peer_typing: bool,
+    reply_at: u64,              // tick to deliver the canned reply (0 = none)
     pub dirty: bool,
     pub wants_close: bool,
     ansi: crate::ansi::AnsiParser,
@@ -4978,6 +4997,9 @@ impl RustyPhone {
             verify_code_sent: [0u8; 6],
             focus_field: 0,
             last_tick: 0,
+            msgs: [Msg::EMPTY; 24], msg_count: 0,
+            compose: [0u8; 96], compose_len: 0,
+            is_rcs: true, peer_typing: false, reply_at: 0,
             dirty: true, wants_close: false,
             ansi: crate::ansi::AnsiParser::new(),
         };
@@ -4985,6 +5007,11 @@ impl RustyPhone {
         let srv = b"sip.linphone.org";
         r.sip_server[..srv.len()].copy_from_slice(srv);
         r.sip_server_len = srv.len();
+        // Seed a short demo thread so Messages isn't empty on first open.
+        r.msgs[0] = Msg::new(b"hey! is rusty penguin really running this chat?", false);
+        r.msgs[1] = Msg::new(b"yep - native, no Linux underneath", true);
+        r.msgs[2] = Msg::new(b"insane. SMS or RCS?", false);
+        r.msg_count = 3;
         r
     }
 
@@ -5225,6 +5252,80 @@ impl RustyPhone {
         fb.fill_rounded_rect(xi + 8, sip_y + 110, 100, 24, 6, 0x1A3040);
         fb.draw_aa(xi + 18, sip_y + 114, "Register", 0x4A9EFF, crate::fb::AA_S);
     }
+
+    fn send_message(&mut self, now: u64) {
+        if self.compose_len == 0 || self.msg_count >= 24 { return; }
+        let m = Msg::new(&self.compose[..self.compose_len], true);
+        self.msgs[self.msg_count] = m; self.msg_count += 1;
+        self.compose_len = 0;
+        // Canned auto-reply ~2s later (RCS shows a typing indicator first).
+        self.peer_typing = self.is_rcs;
+        self.reply_at = now + 200;
+        self.dirty = true;
+    }
+
+    fn draw_messages(&mut self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, h: u32) {
+        let xi = x as i32; let wi = w as i32;
+        const RCS: u32 = 0x2D6CDF;   // RCS rich-chat blue
+        const SMS: u32 = 0x22A45A;   // plain SMS green
+        const RECV: u32 = 0x2A2F37;  // received grey
+        fb.fill_rect(x, y, w, h, 0x0D1117);
+
+        // Header: peer + protocol badge (tap badge to toggle SMS/RCS).
+        let hdr_h = 28;
+        fb.fill_rect(x, y, w, hdr_h, 0x161B22);
+        fb.draw_aa(xi + 10, y as i32 + 5, "RFI-IRFOS", 0xF0F0F0, crate::fb::AA_S);
+        let (badge, bcol) = if self.is_rcs { ("RCS - encrypted", RCS) } else { ("SMS", SMS) };
+        let bw = Framebuffer::aa_w(badge, crate::fb::AA_T) + 16;
+        let bx = xi + wi - bw - 8;
+        fb.fill_rounded_rect(bx, y as i32 + 5, bw, 18, 9, bcol);
+        fb.draw_aa(bx + 8, y as i32 + 6, badge, 0xFFFFFF, crate::fb::AA_T);
+
+        // Composer at the bottom.
+        let comp_h = 34;
+        let comp_y = y as i32 + h as i32 - comp_h;
+        fb.fill_rect(x, comp_y as u32, w, comp_h as u32, 0x12161D);
+        let send_r = 13;
+        let send_cx = xi + wi - 8 - send_r;
+        fb.fill_rounded_rect(xi + 8, comp_y + 5, wi - 16 - 2 * send_r - 12, 24, 12, 0x1C222B);
+        let ctext = core::str::from_utf8(&self.compose[..self.compose_len]).unwrap_or("");
+        if self.compose_len == 0 {
+            fb.draw_aa(xi + 16, comp_y + 9, "Text message", 0x5A6470, crate::fb::AA_S);
+        } else {
+            let cw = fb.draw_aa(xi + 16, comp_y + 9, ctext, 0xF0F0F0, crate::fb::AA_S);
+            fb.fill_rect_s(xi + 16 + cw, comp_y + 9, 2, 16, bcol);
+        }
+        fb.fill_circle(send_cx, comp_y + comp_h / 2, send_r, if self.compose_len > 0 { bcol } else { 0x2A2F37 });
+        fb.draw_aa(send_cx - Framebuffer::aa_w(">", crate::fb::AA_S) / 2, comp_y + comp_h / 2 - 9, ">", 0xFFFFFF, crate::fb::AA_S);
+
+        // Message bubbles — show the most recent that fit, top→bottom.
+        let area_top = y as i32 + hdr_h as i32 + 4;
+        let area_bot = comp_y - 4;
+        let row_h = 26;
+        let fit = ((area_bot - area_top) / row_h).max(1) as usize;
+        let extra = if self.peer_typing { 1 } else { 0 };
+        let total = self.msg_count + extra;
+        let start = total.saturating_sub(fit);
+        let mut my = area_top;
+        for idx in start..total {
+            if idx < self.msg_count {
+                let m = self.msgs[idx];
+                let txt = m.as_str();
+                let tw = Framebuffer::aa_w(txt, crate::fb::AA_S).min(wi * 7 / 10);
+                let bub_w = tw + 20;
+                let (bx, col) = if m.sent {
+                    (xi + wi - bub_w - 10, if self.is_rcs { RCS } else { SMS })
+                } else { (xi + 10, RECV) };
+                fb.fill_rounded_rect(bx, my, bub_w, 22, 10, col);
+                fb.draw_aa(bx + 10, my + 3, txt, 0xF4F6FA, crate::fb::AA_S);
+            } else {
+                // Typing indicator (RCS only).
+                fb.fill_rounded_rect(xi + 10, my, 44, 22, 10, RECV);
+                fb.draw_aa(xi + 20, my + 1, "...", 0xAAB2BC, crate::fb::AA_S);
+            }
+            my += row_h;
+        }
+    }
 }
 
 fn fmt_duration<'a>(buf: &'a mut [u8; 24], mins: u64, secs: u64) -> &'a str {
@@ -5264,6 +5365,17 @@ impl App for RustyPhone {
             }
             _ => {}
         }
+        // Deliver the canned chat reply when its time comes.
+        if self.reply_at != 0 && ticks >= self.reply_at {
+            self.reply_at = 0;
+            self.peer_typing = false;
+            if self.msg_count < 24 {
+                let reply: &[u8] = if self.is_rcs { b"RCS - delivered + read. love it" } else { b"got your SMS!" };
+                self.msgs[self.msg_count] = Msg::new(reply, false);
+                self.msg_count += 1;
+            }
+            self.dirty = true;
+        }
         self.dirty
     }
 
@@ -5274,15 +5386,16 @@ impl App for RustyPhone {
         // Portrait mode: window width ≤ 320 or when height >> width.
         let portrait = w <= 340;
 
-        // Tab bar (3 tabs).
+        // Tab bar (4 tabs).
         let tab_h = 28u32;
         fb.fill_rect(x, y, w, tab_h, 0x161B22);
-        let tab_labels = ["Dialer", "Recent", "Account"];
-        let tab_w = w / 3;
+        let tab_labels = ["Dialer", "Recent", "Messages", "Account"];
+        let tab_w = w / 4;
         for (i, label) in tab_labels.iter().enumerate() {
             let tx = x + i as u32 * tab_w;
             let active = match (i, self.tab) {
-                (0, PhoneTab::Dialer) | (1, PhoneTab::Recent) | (2, PhoneTab::Account) => true,
+                (0, PhoneTab::Dialer) | (1, PhoneTab::Recent)
+                | (2, PhoneTab::Messages) | (3, PhoneTab::Account) => true,
                 _ => false,
             };
             let tc = if active { 0x22C55Eu32 } else { 0x4A5568 };
@@ -5295,9 +5408,10 @@ impl App for RustyPhone {
         let content_h = h.saturating_sub(tab_h + 2);
 
         match self.tab {
-            PhoneTab::Dialer  => self.draw_dialer(fb, x, content_y, w, content_h, portrait),
-            PhoneTab::Recent  => self.draw_recent(fb, x, content_y, w, content_h),
-            PhoneTab::Account => self.draw_account(fb, x, content_y, w, content_h),
+            PhoneTab::Dialer   => self.draw_dialer(fb, x, content_y, w, content_h, portrait),
+            PhoneTab::Recent   => self.draw_recent(fb, x, content_y, w, content_h),
+            PhoneTab::Messages => self.draw_messages(fb, x, content_y, w, content_h),
+            PhoneTab::Account  => self.draw_account(fb, x, content_y, w, content_h),
         }
 
         self.dirty = false;
@@ -5309,14 +5423,16 @@ impl App for RustyPhone {
             AK::Char(0x1B) => { self.wants_close = true; }
             AK::Char(b'\t') => {
                 self.tab = match self.tab {
-                    PhoneTab::Dialer  => PhoneTab::Recent,
-                    PhoneTab::Recent  => PhoneTab::Account,
-                    PhoneTab::Account => PhoneTab::Dialer,
+                    PhoneTab::Dialer   => PhoneTab::Recent,
+                    PhoneTab::Recent   => PhoneTab::Messages,
+                    PhoneTab::Messages => PhoneTab::Account,
+                    PhoneTab::Account  => PhoneTab::Dialer,
                 };
                 self.dirty = true;
             }
             AK::Char(b'\r') | AK::Char(b'\n') => {
                 match self.tab {
+                    PhoneTab::Messages => { let t = self.last_tick; self.send_message(t); }
                     PhoneTab::Dialer => {
                         if self.call_state == CallState::Idle || self.call_state == CallState::Ended {
                             self.dial(self.last_tick);
@@ -5359,6 +5475,9 @@ impl App for RustyPhone {
             }
             AK::Char(0x08) => { // Backspace
                 match self.tab {
+                    PhoneTab::Messages => {
+                        if self.compose_len > 0 { self.compose_len -= 1; self.dirty = true; }
+                    }
                     PhoneTab::Dialer => {
                         if self.number_len > 0 { self.number_len -= 1; self.dirty = true; }
                     }
@@ -5375,6 +5494,13 @@ impl App for RustyPhone {
                         self.dirty = true;
                     }
                     _ => {}
+                }
+            }
+            AK::Char(ch) if self.tab == PhoneTab::Messages && (0x20..=0x7E).contains(&ch) => {
+                if self.compose_len < 96 {
+                    self.compose[self.compose_len] = ch;
+                    self.compose_len += 1;
+                    self.dirty = true;
                 }
             }
             AK::Char(ch @ b'0'..=b'9') | AK::Char(ch @ b'*') | AK::Char(ch @ b'#') | AK::Char(ch @ b'+') => {
@@ -5415,9 +5541,12 @@ impl App for RustyPhone {
 
         // Tab bar click.
         if y < tab_h {
-            let tab_w = w as i32 / 3;
-            let col = (x / tab_w).clamp(0, 2);
-            self.tab = match col { 0 => PhoneTab::Dialer, 1 => PhoneTab::Recent, _ => PhoneTab::Account };
+            let tab_w = w as i32 / 4;
+            let col = (x / tab_w).clamp(0, 3);
+            self.tab = match col {
+                0 => PhoneTab::Dialer, 1 => PhoneTab::Recent,
+                2 => PhoneTab::Messages, _ => PhoneTab::Account,
+            };
             self.dirty = true;
             return;
         }
@@ -5425,6 +5554,18 @@ impl App for RustyPhone {
         // Content-area click (y relative to content start).
         let cy = y - tab_h - 2;
         let content_h = (h as i32 - tab_h - 2).max(1) as u32;
+
+        // Messages: toggle the SMS/RCS badge (top-right), or hit the send button.
+        if self.tab == PhoneTab::Messages {
+            if cy >= 0 && cy < 28 && x > w as i32 - 120 {
+                self.is_rcs = !self.is_rcs; self.dirty = true; return;
+            }
+            let comp_y = content_h as i32 - 34;
+            if cy >= comp_y && x > w as i32 - 40 {
+                let t = self.last_tick; self.send_message(t); return;
+            }
+            return;
+        }
 
         match self.tab {
             PhoneTab::Dialer => {
@@ -5540,6 +5681,7 @@ impl App for RustyPhone {
                     self.dirty = true;
                 }
             }
+            PhoneTab::Messages => {} // handled by the early return above
         }
     }
 
