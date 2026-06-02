@@ -1,10 +1,14 @@
 //! Native Windows Driver Model (WDM) infrastructure.
 //! This subsystem allows the kernel to load and execute native Windows .sys drivers.
-
 pub mod cuda;
+pub mod irp;
+
+pub const IRP_MJ_DEVICE_CONTROL: u8 = 0x0E;
 
 #[repr(C)]
 pub struct DriverObject {
+...
+
     pub driver_init: u64,
     pub driver_start_io: u64,
     pub driver_unload: u64,
