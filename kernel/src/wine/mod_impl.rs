@@ -317,7 +317,33 @@ pub fn syscall_handler(nr: u64, _a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64
         0x46 => 0, // NtSetTimer
         // NtUser/Gdi syscall stubs (Brick 27)
         0x1000..=0x10FF => 0,
-        0x2c => { loop { unsafe { core::arch::asm!("hlt"); } } } // NtTerminateProcess
+        // NtQueueApcThread (Brick 53)
+        0x4d => {
+            serial::write_str("  [wine] NtQueueApcThread stub\n");
+            0
+        }
+        // NtRaiseException (Brick 47)
+        0x49 => {
+            serial::write_str("  [wine] NtRaiseException stub\n");
+            0
+        }
+        // NtSetSystemPowerState (Brick 50)
+        0x4f => {
+            serial::write_str("  [wine] NtSetSystemPowerState stub\n");
+            0
+        }
+        // NtFlushKey (Brick 55 - Registry Persistence)
+        0x1f => {
+            serial::write_str("  [wine] NtFlushKey stub\n");
+            0
+        }
+        // NtCreateEvent (Brick 56)
+        0x17 => {
+            serial::write_str("  [wine] NtCreateEvent stub\n");
+            alloc_handle(WinObject::Event)
+        }
+        0x2c => {
+ loop { unsafe { core::arch::asm!("hlt"); } } } // NtTerminateProcess
         _ => 0xC0000002 
     }
 }
