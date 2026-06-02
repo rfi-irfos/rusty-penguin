@@ -3347,17 +3347,18 @@ impl App for Screenshot {
             self.pending = false;
             self.capture(fb);
         }
-        fb.fill_rect(x, y, w, h, 0x1A1F1C);
+        fb.fill_rect(x, y, w, h, 0x14181F);
         // Header.
-        fb.fill_rect(x, y, w, 28, 0x252E2A);
-        fb.draw_str(x + 12, y + 9, "Screenshot", 0xECEDE5, 0x252E2A);
-        fb.draw_str(x + 110, y + 9, "F or click Capture = full screen", 0x6B756D, 0x252E2A);
+        fb.fill_rect(x, y, w, 28, 0x1B2230);
+        fb.draw_aa(x as i32 + 12, y as i32 + 5, "Screenshot", 0xECEDE5, crate::fb::AA_S);
+        fb.draw_aa(x as i32 + 120, y as i32 + 7, "F or click Capture = full screen", 0x6B756D, crate::fb::AA_T);
 
-        // Capture button.
+        // Capture button (geometry unchanged — on_mouse hit-tests these coords).
         let bx = x + 12; let by = y + 38; let bw = 150u32; let bh = 26u32;
-        fb.fill_rect(bx, by, bw, bh, 0x335C3F);
-        fb.fill_rect(bx, by, bw, 1, 0x6FE18B);
-        fb.draw_str(bx + 14, by + 8, "Capture full screen", 0xECEDE5, 0x335C3F);
+        fb.fill_rounded_rect(bx as i32, by as i32, bw as i32, bh as i32, 6, 0x335C3F);
+        fb.fill_rect_s(bx as i32, by as i32, bw as i32, 1, 0x6FE18B);
+        let cl = "Capture full screen";
+        fb.draw_aa(bx as i32 + (bw as i32 - Framebuffer::aa_w(cl, crate::fb::AA_T)) / 2, by as i32 + 5, cl, 0xECEDE5, crate::fb::AA_T);
 
         // Preview area.
         let pvx = x + 12; let pvy = y + 74;
@@ -3380,20 +3381,21 @@ impl App for Screenshot {
                 }
             }
         } else {
-            fb.draw_str(pvx + 12, pvy + 12, "No capture yet — press F.", 0x6B756D, 0x0E1311);
+            fb.draw_aa(pvx as i32 + 12, pvy as i32 + 12, "No capture yet — press F.", 0x6B756D, crate::fb::AA_S);
         }
 
         // Status line.
         let sy = y + h - 22;
-        fb.fill_rect(x, sy, w, 22, 0x14171A);
+        fb.fill_rect(x, sy, w, 22, 0x171F1B);
         if self.have_shot {
             let mut nb = [0u8; 24];
-            fb.draw_str_t(x + 12, sy + 6, "saved  screenshots/shot-", 0xA8B0A6);
             let nstr = u64_into(&mut nb, self.saved_n as u64);
-            fb.draw_str_t(x + 12 + 25 * 6, sy + 6, nstr, 0x6FE18B);
-            fb.draw_str_t(x + 12 + 25 * 6 + (nstr.len() as u32) * 6, sy + 6, ".ppm  (384x216)", 0xA8B0A6);
+            let mut px = x as i32 + 12;
+            px += fb.draw_aa(px, sy as i32 + 4, "saved  screenshots/shot-", 0xA8B0A6, crate::fb::AA_T);
+            px += fb.draw_aa(px, sy as i32 + 4, nstr, 0x6FE18B, crate::fb::AA_T);
+            fb.draw_aa(px, sy as i32 + 4, ".ppm  (384x216)", 0xA8B0A6, crate::fb::AA_T);
         } else {
-            fb.draw_str_t(x + 12, sy + 6, "ready", 0x6B756D);
+            fb.draw_aa(x as i32 + 12, sy as i32 + 4, "ready", 0x6B756D, crate::fb::AA_T);
         }
         self.dirty = false;
     }
@@ -3483,16 +3485,18 @@ impl App for ImageViewer {
     fn render(&mut self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, h: u32) {
         fb.fill_rect(x, y, w, h, 0x14171A);
         // Header.
-        fb.fill_rect(x, y, w, 26, 0x252E2A);
-        fb.draw_str(x + 12, y + 8, "Image Viewer", 0xECEDE5, 0x252E2A);
+        fb.fill_rect(x, y, w, 28, 0x1B2230);
+        fb.draw_aa(x as i32 + 12, y as i32 + 5, "Image Viewer", 0xECEDE5, crate::fb::AA_S);
         let mut nb = [0u8; 24]; let mut tb = [0u8; 24];
-        fb.draw_str_t(x + 120, y + 9, "shot", 0x6B756D);
-        fb.draw_str_t(x + 150, y + 9, u64_into(&mut nb, self.cur as u64), 0x8CC6E5);
-        fb.draw_str_t(x + 174, y + 9, "/", 0x6B756D);
-        fb.draw_str_t(x + 184, y + 9, u64_into(&mut tb, shot_count() as u64), 0x6B756D);
-        fb.draw_str_t(x + w - 150, y + 9, "N/P cycle   W set wallpaper", 0x6B756D);
+        let mut px = x as i32 + 130;
+        px += fb.draw_aa(px, y as i32 + 7, "shot ", 0x6B756D, crate::fb::AA_T);
+        px += fb.draw_aa(px, y as i32 + 7, u64_into(&mut nb, self.cur as u64), 0x8CC6E5, crate::fb::AA_T);
+        px += fb.draw_aa(px, y as i32 + 7, " / ", 0x6B756D, crate::fb::AA_T);
+        fb.draw_aa(px, y as i32 + 7, u64_into(&mut tb, shot_count() as u64), 0x6B756D, crate::fb::AA_T);
+        let hint = "N/P cycle   W set wallpaper";
+        fb.draw_aa(x as i32 + w as i32 - Framebuffer::aa_w(hint, crate::fb::AA_T) - 12, y as i32 + 7, hint, 0x6B756D, crate::fb::AA_T);
 
-        let vx = x; let vy = y + 26; let vw = w; let vh = h.saturating_sub(26);
+        let vx = x; let vy = y + 28; let vw = w; let vh = h.saturating_sub(28);
         fb.fill_rect(vx, vy, vw, vh, 0x0A0D0B);
 
         let mut namebuf = [0u8; 40];
@@ -3520,10 +3524,10 @@ impl App for ImageViewer {
             }
             _ => {
                 if shot_count() == 0 {
-                    fb.draw_str(vx + 16, vy + 20, "No images. Use the Screenshot tool", 0xA8B0A6, 0x0A0D0B);
-                    fb.draw_str(vx + 16, vy + 38, "or right-click the desktop -> Take Screenshot.", 0xA8B0A6, 0x0A0D0B);
+                    fb.draw_aa(vx as i32 + 16, vy as i32 + 18, "No images. Use the Screenshot tool", 0xA8B0A6, crate::fb::AA_S);
+                    fb.draw_aa(vx as i32 + 16, vy as i32 + 40, "or right-click the desktop -> Take Screenshot.", 0xA8B0A6, crate::fb::AA_S);
                 } else {
-                    fb.draw_str(vx + 16, vy + 20, "Image not found.", 0xEF7575, 0x0A0D0B);
+                    fb.draw_aa(vx as i32 + 16, vy as i32 + 18, "Image not found.", 0xEF7575, crate::fb::AA_S);
                 }
             }
         }
@@ -3666,15 +3670,16 @@ impl App for Snake {
 
     fn render(&mut self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, h: u32) {
         // Header with score.
-        fb.fill_rect(x, y, w, 22, 0x14281E);
-        fb.draw_str(x + 8, y + 6, "SNAKE", 0x4ADE80, 0x14281E);
+        fb.fill_rect(x, y, w, 26, 0x14281E);
+        fb.draw_aa(x as i32 + 10, y as i32 + 4, "SNAKE", 0x4ADE80, crate::fb::AA_S);
         let mut sbuf = [0u8; 24];
-        fb.draw_str(x + 70, y + 6, "score:", 0x9CA3AF, 0x14281E);
-        fb.draw_str(x + 126, y + 6, u64_into(&mut sbuf, self.score as u64), 0xF5F5F7, 0x14281E);
+        let mut px = x as i32 + 84;
+        px += fb.draw_aa(px, y as i32 + 6, "score ", 0x9CA3AF, crate::fb::AA_T);
+        fb.draw_aa(px, y as i32 + 6, u64_into(&mut sbuf, self.score as u64), 0xF5F5F7, crate::fb::AA_T);
 
         // Board area below header.
-        let board_y = y + 24;
-        let board_h = h.saturating_sub(24);
+        let board_y = y + 28;
+        let board_h = h.saturating_sub(28);
         let cell = core::cmp::min(w / SNAKE_COLS as u32, board_h / SNAKE_ROWS as u32).max(1);
         let gw = cell * SNAKE_COLS as u32;
         let gh = cell * SNAKE_ROWS as u32;
@@ -3696,14 +3701,14 @@ impl App for Snake {
         }
 
         if self.dead {
-            let by = oy + gh / 2 - 16;
-            fb.fill_rect(ox, by, gw, 34, 0x000000);
-            fb.draw_str(ox + 8, by + 4, "GAME OVER", 0xEF4444, 0x000000);
-            fb.draw_str(ox + 8, by + 20, "press SPACE to restart", 0xF5F5F7, 0x000000);
+            let by = oy + gh / 2 - 22;
+            fb.fill_rect(ox, by, gw, 46, 0x000000);
+            fb.draw_aa(ox as i32 + 10, by as i32 + 2, "GAME OVER", 0xEF4444, crate::fb::AA_S);
+            fb.draw_aa(ox as i32 + 10, by as i32 + 24, "press SPACE to restart", 0xF5F5F7, crate::fb::AA_T);
         } else if !self.started {
-            let by = oy + gh / 2 - 8;
-            fb.fill_rect(ox, by, gw, 18, 0x000000);
-            fb.draw_str(ox + 8, by + 4, "arrow keys / WASD to start", 0x86EFAC, 0x000000);
+            let by = oy + gh / 2 - 11;
+            fb.fill_rect(ox, by, gw, 22, 0x000000);
+            fb.draw_aa(ox as i32 + 10, by as i32 + 3, "arrow keys / WASD to start", 0x86EFAC, crate::fb::AA_T);
         }
         self.dirty = false;
     }
@@ -3879,14 +3884,15 @@ impl Minesweeper {
 
 impl App for Minesweeper {
     fn render(&mut self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, h: u32) {
-        // Header: mines remaining + status.
-        fb.fill_rect(x, y, w, 22, 0x1A1A24);
-        fb.draw_str(x + 8, y + 6, "MINES", 0xFCD34D, 0x1A1A24);
+        // Header: mines remaining + status (header height stays 24 — the mouse
+        // hit-test in on_mouse keys off the same 24px board offset).
+        fb.fill_rect(x, y, w, 24, 0x1B2230);
+        fb.draw_aa(x as i32 + 8, y as i32 + 3, "MINES", 0xFCD34D, crate::fb::AA_S);
         let mut sbuf = [0u8; 24];
         let remaining = MS_MINES.saturating_sub(self.flags) as u64;
-        fb.draw_str(x + 64, y + 6, u64_into(&mut sbuf, remaining), 0xF5F5F7, 0x1A1A24);
-        if self.dead { fb.draw_str(x + 110, y + 6, "BOOM!", 0xEF4444, 0x1A1A24); }
-        else if self.won { fb.draw_str(x + 110, y + 6, "YOU WIN!", 0x4ADE80, 0x1A1A24); }
+        fb.draw_aa(x as i32 + 74, y as i32 + 4, u64_into(&mut sbuf, remaining), 0xF5F5F7, crate::fb::AA_T);
+        if self.dead { fb.draw_aa(x as i32 + 116, y as i32 + 4, "BOOM!", 0xEF4444, crate::fb::AA_T); }
+        else if self.won { fb.draw_aa(x as i32 + 116, y as i32 + 4, "YOU WIN!", 0x4ADE80, crate::fb::AA_T); }
 
         let board_y = y + 24;
         let board_h = h.saturating_sub(24);
@@ -4254,11 +4260,14 @@ impl App for Doom {
         fb.fill_rect(cx, cy - 5, 1, 11, 0xE0E0E0);
 
         // HUD.
-        fb.fill_rect(x, y, w, 16, 0x101418);
-        fb.draw_str(x + 6, y + 4, "DOOM (pure-Rust raycaster)", 0xEF4444, 0x101418);
+        fb.fill_rect(x, y, w, 20, 0x101418);
+        fb.draw_aa(x as i32 + 6, y as i32 + 2, "DOOM (pure-Rust raycaster)", 0xEF4444, crate::fb::AA_T);
         let mut kb = [0u8; 24];
-        fb.draw_str(x + w - 90, y + 4, "kills:", 0x9CA3AF, 0x101418);
-        fb.draw_str(x + w - 42, y + 4, u64_into(&mut kb, self.kills as u64), 0xF5F5F7, 0x101418);
+        let ks = u64_into(&mut kb, self.kills as u64);
+        let kw = Framebuffer::aa_w("kills ", crate::fb::AA_T) + Framebuffer::aa_w(ks, crate::fb::AA_T);
+        let mut px = x as i32 + w as i32 - kw - 10;
+        px += fb.draw_aa(px, y as i32 + 2, "kills ", 0x9CA3AF, crate::fb::AA_T);
+        fb.draw_aa(px, y as i32 + 2, ks, 0xF5F5F7, crate::fb::AA_T);
 
         self.dirty = false;
     }
