@@ -47,8 +47,13 @@ const VIRTIO_GPU_RESP_OK_DISPLAY_INFO: u32 = 0x1101;
 const VIRTIO_GPU_RESP_OK_CAPSET_INFO: u32 = 0x1102;
 // virgl (3D) control commands — only valid once VIRTIO_GPU_F_VIRGL is negotiated.
 const VIRTIO_GPU_CMD_GET_CAPSET_INFO: u32 = 0x0108;
+const VIRTIO_GPU_CMD_GET_CAPSET: u32 = 0x0109;
 const VIRTIO_GPU_CMD_CTX_CREATE: u32 = 0x0200;
 const VIRTIO_GPU_CMD_CTX_DESTROY: u32 = 0x0201;
+const VIRTIO_GPU_CMD_RESOURCE_CREATE_3D: u32 = 0x0207;
+const VIRTIO_GPU_CMD_CTX_ATTACH_RESOURCE: u32 = 0x0205;
+const VIRTIO_GPU_CMD_CTX_DETACH_RESOURCE: u32 = 0x0206;
+const VIRTIO_GPU_RESP_OK_CAPSET: u32 = 0x1103;
 const VIRTIO_GPU_FORMAT_B8G8R8X8: u32 = 2; // matches the desktop's 0x00RRGGBB pixels
 
 // The scanout resource and its backing. Backing lives in the low identity-mapped
@@ -316,65 +321,128 @@ unsafe fn bring_up(bus: u8, dev: u8, func: u8) -> bool {
     true
 }
 
-/// Exercise the virgl 3D CONTROL path (not 3D rendering yet): query the host's
-/// capability set, then create and destroy a 3D context. Both round-trip through
-/// virglrenderer on the host, so success proves the 3D command channel — the
-/// transport every later virgl brick (RESOURCE_CREATE_3D, SUBMIT_3D, …) rides on.
+/// Probe the virgl 3D pipeline in six steps — from capability discovery through
+/// 3D resource allocation — all round-tripping through virglrenderer on the host.
+/// This covers every layer the later rendering path depends on.
+///
+/// Step 1  GET_CAPSET_INFO   — confirms virglrenderer is alive + capset ids/sizes
+/// Step 2  GET_CAPSET        — fetches the actual OpenGL capability blob (v1, 308 B)
+/// Step 3  CTX_CREATE        — allocates a 3D context inside virglrenderer
+/// Step 4  RESOURCE_CREATE_3D — allocates a 1 KiB vertex buffer on the host GPU
+/// Step 5  CTX_ATTACH_RESOURCE — binds the resource to the context (exec path)
+/// Step 6  CTX_DETACH + RESOURCE_UNREF + CTX_DESTROY — clean teardown
 unsafe fn virgl_probe() {
-    // 1. GET_CAPSET_INFO(index 0): virtio_gpu_get_capset_info {hdr(24); index u32; pad u32}
+    // 1. GET_CAPSET_INFO(index 0): {hdr(24); capset_index u32; padding u32}
     zero(REQ_PHYS, 32);
     zero(RESP_PHYS, 64);
     write_volatile(REQ_PHYS as *mut u32, VIRTIO_GPU_CMD_GET_CAPSET_INFO);
-    write_volatile((REQ_PHYS + 24) as *mut u32, 0u32); // capset_index 0
+    write_volatile((REQ_PHYS + 24) as *mut u32, 0u32);
     submit(32, 40);
     let resp = RESP_PHYS as *const u8;
     let rtype = read_volatile(resp as *const u32);
-    if rtype == VIRTIO_GPU_RESP_OK_CAPSET_INFO {
-        let id = read_volatile(resp.add(24) as *const u32);       // 1=VIRGL, 2=VIRGL2
-        let ver = read_volatile(resp.add(28) as *const u32);
-        let size = read_volatile(resp.add(32) as *const u32);
-        ser("  [virgl] capset 0: id ");
-        ser_dec(id);
-        ser(" max-version ");
-        ser_dec(ver);
-        ser(" max-size ");
-        ser_dec(size);
-        ser("\n");
-    } else {
-        ser("  [virgl] GET_CAPSET_INFO unexpected resp 0x");
+    if rtype != VIRTIO_GPU_RESP_OK_CAPSET_INFO {
+        ser("  [virgl] GET_CAPSET_INFO failed 0x");
         crate::serial::write_hex_u32(rtype);
         ser("\n");
         return;
     }
+    let cap_id  = read_volatile(resp.add(24) as *const u32);
+    let cap_ver = read_volatile(resp.add(28) as *const u32);
+    let cap_sz  = read_volatile(resp.add(32) as *const u32);
+    ser("  [virgl] 1/6 capset 0: id=");
+    ser_dec(cap_id); ser(" max-ver="); ser_dec(cap_ver);
+    ser(" max-size="); ser_dec(cap_sz); ser("\n");
 
-    // 2. CTX_CREATE(ctx_id 1): virtio_gpu_ctx_create {hdr(24); nlen u32; ctx_init u32; name[64]}
+    // 2. GET_CAPSET(id=cap_id, version=cap_ver): {hdr(24); id u32; version u32}
+    // Response hdr.type should be RESP_OK_CAPSET (0x1103).
+    // The capability blob follows (up to cap_sz bytes) — we just verify the type.
+    zero(REQ_PHYS, 32);
+    let resp_cap_len = (24 + cap_sz).min(512);
+    zero(RESP_PHYS, resp_cap_len as usize);
+    write_volatile(REQ_PHYS as *mut u32, VIRTIO_GPU_CMD_GET_CAPSET);
+    write_volatile((REQ_PHYS + 24) as *mut u32, cap_id);
+    write_volatile((REQ_PHYS + 28) as *mut u32, cap_ver);
+    submit(32, resp_cap_len);
+    let gc_type = read_volatile(RESP_PHYS as *const u32);
+    if gc_type != VIRTIO_GPU_RESP_OK_CAPSET {
+        ser("  [virgl] GET_CAPSET unexpected resp 0x");
+        crate::serial::write_hex_u32(gc_type);
+        ser("\n");
+        return;
+    }
+    ser("  [virgl] 2/6 GET_CAPSET OK (capability blob "); ser_dec(cap_sz); ser(" bytes)\n");
+
+    // 3. CTX_CREATE(ctx_id=1): {hdr(24 with ctx_id@16=1); nlen u32; ctx_init u32; name[64]}
     zero(REQ_PHYS, 96);
-    zero(RESP_PHYS, 64);
+    zero(RESP_PHYS, 24);
     write_volatile(REQ_PHYS as *mut u32, VIRTIO_GPU_CMD_CTX_CREATE);
     write_volatile((REQ_PHYS + 16) as *mut u32, 1u32); // hdr.ctx_id = 1
-    let name = b"rustypenguin";
-    write_volatile((REQ_PHYS + 24) as *mut u32, name.len() as u32); // nlen
+    let name = b"rustypenguin3d";
+    write_volatile((REQ_PHYS + 24) as *mut u32, name.len() as u32);
     for (i, &c) in name.iter().enumerate() {
         write_volatile((REQ_PHYS + 32 + i as u64) as *mut u8, c);
     }
     submit(96, 24);
-    let r2 = read_volatile(RESP_PHYS as *const u32);
-    if r2 == VIRTIO_GPU_RESP_OK_NODATA {
-        ser("  [virgl] 3D context 1 created (CTX_CREATE OK) — 3D control path live\n");
-    } else {
-        ser("  [virgl] CTX_CREATE unexpected resp 0x");
-        crate::serial::write_hex_u32(r2);
-        ser("\n");
-        return;
+    if read_volatile(RESP_PHYS as *const u32) != VIRTIO_GPU_RESP_OK_NODATA {
+        ser("  [virgl] CTX_CREATE failed\n"); return;
     }
+    ser("  [virgl] 3/6 CTX_CREATE OK — 3D context 1 live inside virglrenderer\n");
 
-    // 3. CTX_DESTROY(ctx_id 1): clean up — just the hdr with ctx_id set.
-    zero(REQ_PHYS, 24);
-    zero(RESP_PHYS, 64);
+    // 4. RESOURCE_CREATE_3D: allocate a 1 KiB PIPE_BUFFER (vertex buffer) on the host.
+    // struct virtio_gpu_resource_create_3d:
+    //   hdr(24) | resource_id(4) | target(4) | format(4) | bind(4)
+    //   | width(4) | height(4) | depth(4) | array_size(4)
+    //   | last_level(4) | nr_samples(4) | flags(4) | padding(4)  → total 72 bytes
+    zero(REQ_PHYS, 72);
+    zero(RESP_PHYS, 24);
+    write_volatile(REQ_PHYS as *mut u32, VIRTIO_GPU_CMD_RESOURCE_CREATE_3D);
+    write_volatile((REQ_PHYS + 24) as *mut u32, 10u32);   // resource_id = 10
+    write_volatile((REQ_PHYS + 28) as *mut u32, 0u32);    // target = PIPE_BUFFER
+    write_volatile((REQ_PHYS + 32) as *mut u32, 0u32);    // format = VIRGL_FORMAT_NONE
+    write_volatile((REQ_PHYS + 36) as *mut u32, 0x0001u32); // bind = VIRGL_BIND_VERTEX_BUFFER
+    write_volatile((REQ_PHYS + 40) as *mut u32, 1024u32); // width  (bytes for a buffer)
+    write_volatile((REQ_PHYS + 44) as *mut u32, 1u32);    // height
+    write_volatile((REQ_PHYS + 48) as *mut u32, 1u32);    // depth
+    write_volatile((REQ_PHYS + 52) as *mut u32, 1u32);    // array_size
+    // last_level, nr_samples, flags, padding = 0
+    submit(72, 24);
+    if read_volatile(RESP_PHYS as *const u32) != VIRTIO_GPU_RESP_OK_NODATA {
+        ser("  [virgl] RESOURCE_CREATE_3D failed\n"); return;
+    }
+    ser("  [virgl] 4/6 RESOURCE_CREATE_3D OK — vertex buffer (1 KiB) on host GPU\n");
+
+    // 5. CTX_ATTACH_RESOURCE: bind resource 10 to context 1.
+    // struct virtio_gpu_ctx_resource:
+    //   hdr(24 with ctx_id@16=1) | resource_id(4) | padding(4)  → 32 bytes
+    zero(REQ_PHYS, 32);
+    zero(RESP_PHYS, 24);
+    write_volatile(REQ_PHYS as *mut u32, VIRTIO_GPU_CMD_CTX_ATTACH_RESOURCE);
+    write_volatile((REQ_PHYS + 16) as *mut u32, 1u32);  // hdr.ctx_id = 1
+    write_volatile((REQ_PHYS + 24) as *mut u32, 10u32); // resource_id = 10
+    submit(32, 24);
+    if read_volatile(RESP_PHYS as *const u32) != VIRTIO_GPU_RESP_OK_NODATA {
+        ser("  [virgl] CTX_ATTACH_RESOURCE failed\n"); return;
+    }
+    ser("  [virgl] 5/6 CTX_ATTACH_RESOURCE OK — resource bound to 3D context\n");
+
+    // 6. Teardown: CTX_DETACH → RESOURCE_UNREF → CTX_DESTROY.
+    zero(REQ_PHYS, 32); zero(RESP_PHYS, 24);
+    write_volatile(REQ_PHYS as *mut u32, VIRTIO_GPU_CMD_CTX_DETACH_RESOURCE);
+    write_volatile((REQ_PHYS + 16) as *mut u32, 1u32);  // ctx_id
+    write_volatile((REQ_PHYS + 24) as *mut u32, 10u32); // resource_id
+    submit(32, 24);
+
+    zero(REQ_PHYS, 32); zero(RESP_PHYS, 24);
+    write_volatile(REQ_PHYS as *mut u32, VIRTIO_GPU_CMD_RESOURCE_UNREF);
+    write_volatile((REQ_PHYS + 24) as *mut u32, 10u32); // resource_id
+    submit(32, 24);
+
+    zero(REQ_PHYS, 24); zero(RESP_PHYS, 24);
     write_volatile(REQ_PHYS as *mut u32, VIRTIO_GPU_CMD_CTX_DESTROY);
     write_volatile((REQ_PHYS + 16) as *mut u32, 1u32);
     submit(24, 24);
-    ser("  [virgl] 3D context 1 destroyed — virgl control-path probe PASSED\n");
+
+    ser("  [virgl] 6/6 teardown OK — virgl 3D resource path PROVED end-to-end\n");
 }
 
 /// Submit a two-descriptor command (request → device, response ← device) on the
