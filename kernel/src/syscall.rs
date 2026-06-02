@@ -40,7 +40,15 @@ unsafe fn ec_read(reg: u8) -> Option<u8> {
 }
 
 unsafe fn acpi_battery_pct() -> u8 {
-    // Can't use ? in non-Option context; inline the chain.
+    // 1. ACPI _BST/_BIF path: parsed from DSDT at boot — standard, laptop-portable.
+    //    Works whenever the DSDT contains a static-package _BST (common on bare-metal).
+    let acpi_pct = crate::acpi::battery_pct_acpi();
+    if acpi_pct != 0xFF { return acpi_pct; }
+
+    // 2. EC direct path (fallback): reads BRC/BFC from the ACPI EC at ports 0x62/0x66.
+    //    Register layout 0x2A/0x2B (FCC) + 0x44/0x45 (BRC) is standard on ThinkPads
+    //    and many other laptops. If the EC doesn't respond or the capacity is zero,
+    //    returns 0xFF so the desktop shows "AC power" rather than a bogus 0%.
     let status = crate::port::inb(EC_CMD);
     if status == 0xFF { return 0xFF; }
     let Some(brc_hi) = ec_read(0x44) else { return 0xFF; };
@@ -515,11 +523,13 @@ pub extern "C" fn syscall_handler(nr: u64, arg1: u64, arg2: u64, arg3: u64) -> u
             0
         }
         20 => {
-            // sys_battery_pct → battery percentage 0-100, or 0xFF if unavailable.
-            // Reads ACPI EC battery capacity via I/O port 0x66 (EC command) / 0x62 (EC data).
-            // EC register 0x44 = remaining capacity (BRC), 0x2A = full charge capacity (BFC).
-            // Not all ACPI ECs are at these ports — returns 0xFF if not responsive.
-            unsafe { acpi_battery_pct() as u64 }
+            // sys_battery_pct → bits 7:0 = pct (0-100 or 0xFF if no battery),
+            //                   bit  8   = charging flag (1 = charging).
+            // Tries ACPI _BST/_BIF first, falls back to EC direct read.
+            // Return is backward-compatible: existing (n & 0xFF) still gives pct.
+            let pct = unsafe { acpi_battery_pct() };
+            let charging = crate::acpi::battery_charging() as u64;
+            pct as u64 | (charging << 8)
         }
         21 => {
             // sys_kbd_layout(arg1): 0 = query, 1 = set EN (QWERTY), 2 = set DE (QWERTZ).

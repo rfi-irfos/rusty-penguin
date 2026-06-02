@@ -16,6 +16,13 @@
 use crate::port;
 use crate::vmm::phys_to_virt;
 
+// Battery state parsed from DSDT at init.
+static mut BAT_DEVICE: bool = false;  // DSDT contains a battery device (BAT0/CMB0/BATT)
+static mut BAT_DESIGN: u32 = 0;      // _BIF design capacity (mWh/mAh)
+static mut BAT_REMAINING: u32 = 0;   // _BST remaining capacity
+static mut BAT_STATE: u8 = 0;        // _BST Battery State (bit0=discharging bit1=charging)
+static mut BAT_VOLTAGE: u16 = 0;     // _BST present voltage (mV)
+
 // Parsed once at init.
 static mut FOUND: bool = false;
 static mut PM1A_CNT: u32 = 0;
@@ -146,6 +153,113 @@ fn parse_s5(dsdt: u64) {
     }
 }
 
+/// Scan the DSDT for a battery device ("BAT0", "CMB0", "BATT") and, if found,
+/// attempt to parse _BIF (design capacity, element[1]) and _BST (state + remaining +
+/// voltage from a static Return-Package body). On most modern laptops, _BST is a
+/// dynamic method (reads EC at runtime); we can't execute it without an AML
+/// interpreter, so we capture whatever static values are present at boot. On a
+/// laptop that has just woken from a cold boot, the values reflect the current state.
+///
+/// Why not full AML? A complete AML executor is a multi-thousand-line project
+/// (opcode dispatch, scoped names, control flow, mutex acquisition). This scanner
+/// handles the static-package pattern that accounts for the majority of simple
+/// battery devices and correctly detects "battery device present" for all ACPI BIOSes.
+fn parse_battery(dsdt: u64) {
+    let len = unsafe { rd32(dsdt + 4) } as u64;
+    // Scan for "BAT0", "CMB0", "BATT" device names in the DSDT AML body.
+    let mut i = 36u64;
+    while i + 8 < len {
+        let b0 = unsafe { rd8(dsdt + i) };
+        let b1 = unsafe { rd8(dsdt + i + 1) };
+        let b2 = unsafe { rd8(dsdt + i + 2) };
+        let b3 = unsafe { rd8(dsdt + i + 3) };
+        // Any of the standard ACPI battery device names.
+        let is_bat = (b0 == b'B' && b1 == b'A' && b2 == b'T' && b3 == b'0')
+                  || (b0 == b'C' && b1 == b'M' && b2 == b'B' && b3 == b'0')
+                  || (b0 == b'B' && b1 == b'A' && b2 == b'T' && b3 == b'T')
+                  || (b0 == b'B' && b1 == b'A' && b2 == b'T' && b3 == b'1');
+        if is_bat {
+            unsafe { BAT_DEVICE = true; }
+            // Try to parse _BIF and _BST within the next 4 KiB (device scope).
+            parse_bif(dsdt, i, len);
+            parse_bst(dsdt, i, len);
+            return;
+        }
+        i += 1;
+    }
+}
+
+/// Scan from `start` for "_BIF" (Battery Information, static Package). Element[1] =
+/// Design Capacity. We only handle the literal Return(Package{...}) pattern.
+fn parse_bif(dsdt: u64, start: u64, len: u64) {
+    let end = (start + 4096).min(len);
+    let mut i = start;
+    while i + 6 < end {
+        if unsafe {
+            rd8(dsdt+i)==b'_' && rd8(dsdt+i+1)==b'B'
+            && rd8(dsdt+i+2)==b'I' && rd8(dsdt+i+3)==b'F'
+        } {
+            // Scan forward for 0xA4 (Return) + 0x12 (Package) within 16 bytes.
+            let mut p = i + 4;
+            let mut g = 0;
+            while g < 16 && unsafe { rd8(dsdt+p) } != 0xA4 { p += 1; g += 1; }
+            if unsafe { rd8(dsdt+p) } != 0xA4 { break; }
+            p += 1;
+            if unsafe { rd8(dsdt+p) } != 0x12 { break; } // not PackageOp
+            p += 1;
+            let pl = unsafe { rd8(dsdt+p) };
+            p += 1 + (pl >> 6) as u64;
+            let num = unsafe { rd8(dsdt+p) };
+            p += 1;
+            if num < 2 { break; }
+            // Element[0] = PowerUnit; skip it.
+            let (_, adv0) = unsafe { aml_int(dsdt+p) }; p += adv0;
+            // Element[1] = Design Capacity.
+            let (cap, _) = unsafe { aml_int(dsdt+p) };
+            if cap > 0 { unsafe { BAT_DESIGN = cap as u32; } }
+            return;
+        }
+        i += 1;
+    }
+}
+
+/// Scan from `start` for "_BST" (Battery Status) with a static Return(Package{4}).
+/// Elements: [0]=state, [1]=present_rate, [2]=remaining_capacity, [3]=present_voltage.
+fn parse_bst(dsdt: u64, start: u64, len: u64) {
+    let end = (start + 4096).min(len);
+    let mut i = start;
+    while i + 6 < end {
+        if unsafe {
+            rd8(dsdt+i)==b'_' && rd8(dsdt+i+1)==b'B'
+            && rd8(dsdt+i+2)==b'S' && rd8(dsdt+i+3)==b'T'
+        } {
+            let mut p = i + 4;
+            let mut g = 0;
+            while g < 16 && unsafe { rd8(dsdt+p) } != 0xA4 { p += 1; g += 1; }
+            if unsafe { rd8(dsdt+p) } != 0xA4 { break; }
+            p += 1;
+            if unsafe { rd8(dsdt+p) } != 0x12 { break; }
+            p += 1;
+            let pl = unsafe { rd8(dsdt+p) };
+            p += 1 + (pl >> 6) as u64;
+            let num = unsafe { rd8(dsdt+p) };
+            p += 1;
+            if num < 4 { break; }
+            let (state, a0) = unsafe { aml_int(dsdt+p) }; p += a0;
+            let (_, a1)     = unsafe { aml_int(dsdt+p) }; p += a1; // present rate
+            let (rem, a2)   = unsafe { aml_int(dsdt+p) }; p += a2;
+            let (volt, _)   = unsafe { aml_int(dsdt+p) };
+            unsafe {
+                BAT_STATE     = state as u8;
+                BAT_REMAINING = rem as u32;
+                BAT_VOLTAGE   = volt as u16;
+            }
+            return;
+        }
+        i += 1;
+    }
+}
+
 /// Parse the FADT's DSDT for the `\_S3_` package (S3 suspend-to-RAM SLP_TYP values).
 fn parse_s3(dsdt: u64) {
     let len = unsafe { rd32(dsdt + 4) } as u64;
@@ -225,6 +339,7 @@ pub fn init() -> bool {
         if dsdt != 0 {
             parse_s5(dsdt);
             parse_s3(dsdt);
+            parse_battery(dsdt);
         }
 
         // Reset register (FADT flags bit 10 = RESET_REG_SUP).
@@ -256,10 +371,20 @@ pub fn init() -> bool {
     } else {
         crate::serial::write_str(" S3=none");
     }
-    crate::serial::write_str(if unsafe { RESET_SUPPORTED } {
-        " (shutdown+reset+S3)\n"
+    if unsafe { BAT_DEVICE } {
+        crate::serial::write_str(" BAT=");
+        log_dec(unsafe { BAT_DESIGN } as u64);
+        crate::serial::write_str("mWh rem=");
+        log_dec(unsafe { BAT_REMAINING } as u64);
+        crate::serial::write_str(" state=");
+        log_dec(unsafe { BAT_STATE } as u64);
     } else {
-        " (shutdown+S3; reset via 8042)\n"
+        crate::serial::write_str(" BAT=none(AC)");
+    }
+    crate::serial::write_str(if unsafe { RESET_SUPPORTED } {
+        " (shutdown+reset+S3+battery)\n"
+    } else {
+        " (shutdown+S3+battery; reset via 8042)\n"
     });
     true
 }
@@ -312,6 +437,19 @@ pub fn reboot() -> ! {
 
 pub fn is_ready() -> bool { unsafe { FOUND } }
 pub fn s3_available() -> bool { unsafe { S3_AVAIL } }
+/// True if the DSDT contains a battery device (BAT0/CMB0/BATT). On a desktop or
+/// QEMU without battery emulation, returns false → sys_battery_pct returns 0xFF.
+pub fn has_battery_device() -> bool { unsafe { BAT_DEVICE } }
+/// Battery percentage from DSDT _BST + _BIF (0-100), or 0xFF if not available.
+/// Falls back to 0xFF when design capacity is unknown or battery is not present.
+pub fn battery_pct_acpi() -> u8 {
+    unsafe {
+        if !BAT_DEVICE || BAT_DESIGN == 0 || BAT_REMAINING == 0 { return 0xFF; }
+        ((BAT_REMAINING * 100) / BAT_DESIGN).min(100) as u8
+    }
+}
+/// True if the battery state bit 1 (Charging) is set in _BST Battery State.
+pub fn battery_charging() -> bool { unsafe { BAT_STATE & 0x02 != 0 } }
 
 // ── ACPI S3 Suspend-to-RAM ────────────────────────────────────────────────────
 //

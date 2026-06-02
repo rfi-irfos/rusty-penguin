@@ -42,8 +42,9 @@ fn sys_ticks() -> u64 {
     n
 }
 
-/// sys_battery_pct (#20) → battery percentage 0-100, or 0xFF if unavailable.
-unsafe fn sys_battery_pct() -> u32 {
+/// sys_battery_pct (#20) → bits 7:0 = battery % (0-100 or 0xFF if no battery),
+///                          bit 8   = charging flag (1 = charging).
+unsafe fn sys_battery_raw() -> u64 {
     let n: u64;
     core::arch::asm!(
         "syscall",
@@ -52,8 +53,10 @@ unsafe fn sys_battery_pct() -> u32 {
         out("rcx") _, out("r11") _,
         options(nostack),
     );
-    (n & 0xFF) as u32
+    n
 }
+unsafe fn sys_battery_pct() -> u32 { (sys_battery_raw() & 0xFF) as u32 }
+unsafe fn sys_battery_charging() -> bool { (sys_battery_raw() >> 8) & 1 != 0 }
 
 /// sys_kbd_layout (#21): op 0 = query, 1 = set EN, 2 = set DE. Returns 0=EN, 1=DE.
 unsafe fn sys_kbd_layout(op: u64) -> u64 {
@@ -1014,7 +1017,7 @@ fn kbd_pill_hit(cx: i32, cy: i32) -> bool {
 // Battery glyph: outline body + nub + a fill bar proportional to charge. When on
 // AC (no battery) we draw a small bolt instead of a fill — a real "how full" symbol.
 fn draw_battery_glyph(fb: &mut Framebuffer, x: i32, y: i32, pct: u32, has_batt: bool, fill: u32) {
-    let bw = 20; let bh = 11; let out = 0x9AA49C;
+    let bw = 20; let bh = 11; let out = 0x7A848B;  // graphite outline
     fb.fill_rect_s(x, y, bw, 1, out);
     fb.fill_rect_s(x, y + bh - 1, bw, 1, out);
     fb.fill_rect_s(x, y, 1, bh, out);
@@ -1024,10 +1027,10 @@ fn draw_battery_glyph(fb: &mut Framebuffer, x: i32, y: i32, pct: u32, has_batt: 
         let fw = ((bw - 4) * pct as i32 / 100).max(0).min(bw - 4);
         fb.fill_rect_s(x + 2, y + 2, fw, bh - 4, fill);
     } else {
-        // lightning bolt for AC power
-        fb.fill_rect_s(x + 9, y + 2, 2, 4, 0x6FE18B);
-        fb.fill_rect_s(x + 7, y + 5, 6, 1, 0x6FE18B);
-        fb.fill_rect_s(x + 9, y + 5, 2, 4, 0x6FE18B);
+        // lightning bolt for AC power (teal)
+        fb.fill_rect_s(x + 9, y + 2, 2, 4, wm::ACCENT_GREEN);
+        fb.fill_rect_s(x + 7, y + 5, 6, 1, wm::ACCENT_GREEN);
+        fb.fill_rect_s(x + 9, y + 5, 2, 4, wm::ACCENT_GREEN);
     }
 }
 
@@ -1063,13 +1066,23 @@ fn draw_topbar(fb: &mut Framebuffer, time: &str, s: &SysStats, ticks: u64) {
     let clk_x = (pr - 12 - clk_w).max(trx + 4);
     fb.draw_aa(clk_x, txt_top, time, WHITE, crate::fb::AA_T);
 
-    // Battery — icon with proportional fill + percentage (or AC bolt).
+    // Battery — icon with proportional fill + percentage (or AC bolt + "AC").
+    // Charging adds a "+" prefix. No-battery (QEMU, desktops) shows "AC" correctly.
     let batt = unsafe { sys_battery_pct() };
+    let charging = unsafe { sys_battery_charging() };
     let has_batt = batt <= 100;
-    let bat_col = if !has_batt { 0x6FE18B }
-                  else if batt < 15 { TRIT_NEG } else if batt < 30 { AMBER } else { GREEN };
+    let bat_col = if !has_batt { wm::ACCENT_GREEN }
+                  else if batt < 15 { wm::TRIT_NEG }
+                  else if batt < 30 { AMBER }
+                  else if charging  { 0x63D4C8 }   // charging: lighter teal
+                  else { wm::TRIT_POS };
     let mut bb = Strbuf::new();
-    if has_batt { bb.push_u64(batt as u64); bb.push(b'%'); } else { for c in b"AC" { bb.push(*c); } }
+    if has_batt {
+        if charging { bb.push(b'+'); }
+        bb.push_u64(batt as u64); bb.push(b'%');
+    } else {
+        for c in b"AC" { bb.push(*c); }
+    }
     let bs = bb.as_str();
     let bval_w = Framebuffer::aa_w(bs, crate::fb::AA_T);
     let bat_group = 22 + 5 + bval_w;
