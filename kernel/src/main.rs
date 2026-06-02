@@ -574,6 +574,11 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
         // A hung windowed app is force-quit; the healthy one keeps running.
         sched::selftest_recover_win(); // never returns
     }
+    if unsafe { mb2_cmdline_contains(mb2, b"linuxroute") } {
+        // Per-task ABI mode: a native + a Linux process scheduled together, each
+        // routing syscalls to the right table (the foundation for windowed DOOM).
+        sched::selftest_linuxroute(); // never returns
+    }
     if unsafe { mb2_cmdline_contains(mb2, b"schedesktop2") } {
         // The REAL desktop + a second real app, both preemptively scheduled and
         // isolated. Checked BEFORE `schedesktop` (which is a substring).

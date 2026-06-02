@@ -121,6 +121,19 @@ static mut TASKS: [Task; MAX_TASKS] =
     [Task { rsp: 0, used: false, alive: false, cr3: 0 }; MAX_TASKS];
 static mut KSTACKS: [[u8; KSTACK_SIZE]; MAX_TASKS] = [[0; KSTACK_SIZE]; MAX_TASKS];
 static mut CUR_TASK: usize = 0;
+// Per-task ABI mode: true = this task is a Linux-ABI process (routes syscalls to
+// the Linux table), false = native. A parallel array (not a Task field) to avoid
+// churning the ~19 Task literals. preempt_tick pushes the next task's flag into
+// linux::set_linux on every switch, so a Linux process (DOOM) and the native
+// desktop can be scheduled at once and each routes correctly. Set false on every
+// spawn (slots are reused); the caller marks a Linux task true after spawning.
+static mut TASK_LINUX: [bool; MAX_TASKS] = [false; MAX_TASKS];
+
+/// Mark task `i` as a Linux-ABI process (its syscalls route to the Linux table
+/// while it is the running task). Call right after spawning it.
+pub fn mark_task_linux(i: usize) {
+    unsafe { TASK_LINUX[i] = true; }
+}
 
 // `_cur_syscall_stack` (defined in syscall.rs global_asm) is the kernel stack the
 // SYSCALL trampoline switches to. preempt_tick retargets it per task on each
@@ -326,6 +339,8 @@ extern "C" fn preempt_tick(cur_rsp: u64) -> u64 {
             "mov qword ptr [rip + _cur_syscall_stack], {0}",
             in(reg) kt, options(nostack, preserves_flags),
         );
+        // Route the next task's syscalls to the right ABI table (native vs Linux).
+        crate::linux::set_linux(TASK_LINUX[nxt]);
         TASKS[nxt].rsp
     }
 }
@@ -944,6 +959,7 @@ fn spawn_ring3_elf_cfg(elf: &[u8], stack_top: u64, stack_pages: u32, fb_frame: u
             push(&mut sp, entry);         // rip
             for _ in 0..15 { push(&mut sp, 0); }
             TASKS[i] = Task { rsp: sp, used: true, alive: true, cr3: as_ };
+            TASK_LINUX[i] = false; // native by default; caller marks Linux tasks
             return i;
         }
         0
@@ -1041,6 +1057,27 @@ const RENDER_HANG_STUB: [u8; 38] = [
 fn make_fill_elf(load_va: u64, color: u32) -> alloc::vec::Vec<u8> {
     let mut code = FILL_STUB;
     code[11..15].copy_from_slice(&color.to_le_bytes());
+    make_elf(load_va, &code)
+}
+
+/// Build a tiny LINUX-ABI program: `write(1, "LINUXROUTE\n", 11)` then spin. It
+/// uses LINUX syscall numbers (rax=1=write), so it only produces its marker if
+/// the kernel routes ITS syscalls to the Linux table — i.e. if per-task ABI mode
+/// works. Static ET_EXEC at `load_va`; the message follows the 24-byte code.
+fn make_linux_write_elf(load_va: u64) -> alloc::vec::Vec<u8> {
+    let msg: &[u8] = b"LINUXROUTE\n";
+    let mut code: alloc::vec::Vec<u8> = alloc::vec![
+        0xb8, 0x01, 0x00, 0x00, 0x00,   // mov eax, 1            (Linux write)
+        0xbf, 0x01, 0x00, 0x00, 0x00,   // mov edi, 1            (fd = stdout)
+        0xbe, 0x00, 0x00, 0x00, 0x00,   // mov esi, <msg addr>   (patched)
+        0xba, 0x00, 0x00, 0x00, 0x00,   // mov edx, <len>        (patched)
+        0x0f, 0x05,                     // syscall
+        0xeb, 0xfe,                     // jmp $  (spin; preemptible)
+    ];
+    let msg_abs = (load_va + code.len() as u64) as u32; // message sits right after code
+    code[11..15].copy_from_slice(&msg_abs.to_le_bytes());
+    code[16..20].copy_from_slice(&(msg.len() as u32).to_le_bytes());
+    code.extend_from_slice(msg);
     make_elf(load_va, &code)
 }
 
@@ -1251,6 +1288,42 @@ pub fn selftest_schedesktop2() -> ! {
     crate::idt::set_timer_vector(irq_timer_preempt as *const () as u64);
     unsafe { core::arch::asm!("sti"); }
     // Boot thread idles; the desktop renders and the second app runs concurrently.
+    loop {
+        busy_spin();
+    }
+}
+
+/// `linuxroute` brick — per-task ABI mode: a NATIVE process and a LINUX-ABI
+/// process scheduled at the same time, each routing its syscalls to the right
+/// table. This is the foundation for running DOOM (a Linux process) windowed
+/// alongside the native desktop. PASS = BOTH markers appear in the serial log:
+///   "[sched] ring-3 syscall reached kernel" — the native task's 0x1337 (native table)
+///   "LINUXROUTE"                            — the Linux task's write(1) (Linux table)
+/// If the ABI flag didn't switch per task, one of the two would mis-route and its
+/// marker would be absent.
+pub fn selftest_linuxroute() -> ! {
+    use crate::serial::write_str;
+    write_str("\n[lxr] === linuxroute: native + Linux process scheduled together (per-task ABI mode) ===\n");
+    unsafe {
+        core::arch::asm!("cli");
+        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3() };
+        CUR_TASK = 0;
+        TASK_LINUX[0] = false; // the boot thread is native
+    }
+    // Native task: R3_STUB issues the native 0x1337 syscall in a loop.
+    let nat = make_elf(0x0050_0000, &R3_STUB);
+    let n = spawn_ring3_elf(&nat, 0);
+    if n == 0 { write_str("[lxr] native spawn failed\n"); halt(); }
+    // Linux task: write(1,"LINUXROUTE\n") using LINUX syscall numbers, in its own
+    // private AS at the same VA — marked Linux so its syscalls route to linux::syscall.
+    let lx = make_linux_write_elf(0x0050_0000);
+    let l = spawn_ring3_elf(&lx, 0);
+    if l == 0 { write_str("[lxr] linux spawn failed\n"); halt(); }
+    mark_task_linux(l);
+    write_str("[lxr] native task + Linux task scheduled; enabling preemption\n");
+    write_str("[lxr] PASS = both '[sched] ring-3 syscall' (native) AND 'LINUXROUTE' (Linux) appear below\n");
+    crate::idt::set_timer_vector(irq_timer_preempt as *const () as u64);
+    unsafe { core::arch::asm!("sti"); }
     loop {
         busy_spin();
     }

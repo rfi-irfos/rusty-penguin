@@ -36,15 +36,32 @@ extern "C" {
 #[inline]
 pub fn is_linux() -> bool { unsafe { LINUX_ABI } }
 
+/// Set whether the CURRENTLY-running task is a Linux-ABI process. The scheduler
+/// calls this on every context switch (to the next task's per-task flag) so a
+/// Linux process (e.g. DOOM) and the native desktop can be scheduled at once and
+/// each routes its syscalls to the right table. `enter()` still sets it once for
+/// the single-process path. Plain bool write — same crate, direct access.
+#[inline]
+pub fn set_linux(v: bool) { unsafe { LINUX_ABI = v; } }
+
 #[inline]
 fn extra_args() -> (u64, u64, u64) {
+    // Read the global_asm .data symbols DIRECTLY (rip-relative). Taking `&_lx_a4`
+    // compiles to a GOT-indirect load, and the kernel's GOT sits in low memory
+    // that is only mapped in the identity-mapped boot context — so from a Linux
+    // process running in a PRIVATE address space (scheduled alongside the native
+    // desktop) that load #PFs. Direct rip-relative needs no GOT.
+    let (a4, a5, a6): (u64, u64, u64);
     unsafe {
-        (
-            core::ptr::read_volatile(&_lx_a4),
-            core::ptr::read_volatile(&_lx_a5),
-            core::ptr::read_volatile(&_lx_a6),
-        )
+        core::arch::asm!(
+            "mov {0}, qword ptr [rip + _lx_a4]",
+            "mov {1}, qword ptr [rip + _lx_a5]",
+            "mov {2}, qword ptr [rip + _lx_a6]",
+            out(reg) a4, out(reg) a5, out(reg) a6,
+            options(nostack, readonly, preserves_flags),
+        );
     }
+    (a4, a5, a6)
 }
 
 // ── Errno (Linux returns negative errno in rax) ──────────────────────────────
