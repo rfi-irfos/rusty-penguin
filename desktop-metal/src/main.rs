@@ -1042,12 +1042,16 @@ fn draw_scene_static_v(fb: &mut Framebuffer, variant: u8) {
     // Ambient depth: a soft warm light pool lifts the hero off the wall, and a
     // cream halo makes the dingir luminous. (Also improves hero legibility over
     // any wallpaper, including the Bliss easter egg.)
-    // Rusty Penguin gear+penguin logo — subtle ghost, centered with slight left bias.
-    let logo_size = ((w.min(h) * 36 / 100) as u32).min(320);
-    let logo_top = (hero_cy as u32).saturating_sub(logo_size / 2 + logo_size / 8);
-    // The PPM is 320x304 (slightly wider than tall), so shift left half the width delta.
-    let lx = (cx as u32).saturating_sub(logo_size / 2 + 30);
-    draw_ppm_watermark(fb, "bin/rp_watermark.ppm", lx, logo_top, logo_size);
+    // Rusty Penguin gear+penguin logo — only on dark star-field backgrounds.
+    // Bright/colorful wallpapers (XP Bliss, mountains, aurora, etc.) don't need it —
+    // the logo reads poorly against light backgrounds and just looks like a smudge.
+    let dark_bg = variant == 0 || variant == 5; // Stone/Azure + Nebula
+    if dark_bg {
+        let logo_size = ((w.min(h) * 36 / 100) as u32).min(320);
+        let logo_top = (hero_cy as u32).saturating_sub(logo_size / 2 + logo_size / 8);
+        let lx = (cx as u32).saturating_sub(logo_size / 2 + 30);
+        draw_ppm_watermark(fb, "bin/rp_watermark.ppm", lx, logo_top, logo_size);
+    }
 
     // ── Bottom panel — frosted-glass floating dock.
     // Drawn as translucent glass over the wallpaper (the warm glows show
@@ -1707,13 +1711,13 @@ const MENU_ITEMS: &[MenuItem] = &[
     MenuItem { label: "Clock",          desc: "Time, stopwatch, timer, world",  color: 0x6FE18B, icon: icons::IC_CLOCK, kind: MenuLaunch::App(15) },
     MenuItem { label: "Task Manager",   desc: "Processes, CPU & memory",        color: 0x8CC6E5, icon: icons::IC_TASKS, kind: MenuLaunch::App(16) },
     MenuItem { label: "Notes",          desc: "Quick notes — Ctrl+S to save",   color: 0xF5C451, icon: icons::IC_EDIT,  kind: MenuLaunch::App(17) },
-    MenuItem { label: "RustyPhone",    desc: "SIP dialer + phone verification", color: 0x22C55E, icon: icons::IC_TERM,  kind: MenuLaunch::App(18) },
-    // games start at index 14
+    MenuItem { label: "RustyPhone",    desc: "SIP dialer + phone verification", color: 0x22C55E, icon: icons::IC_PHONE, kind: MenuLaunch::App(18) },
+    // games start at index 16
     MenuItem { label: "Snake",        desc: "Classic arcade",             color: 0x4ADE80, icon: icons::IC_SNAKE,    kind: MenuLaunch::App(6) },
     MenuItem { label: "Minesweeper",  desc: "Find the mines",             color: 0xFCD34D, icon: icons::IC_MINES,    kind: MenuLaunch::App(7) },
     MenuItem { label: "Doom",         desc: "E1M1 — shareware DOOM",      color: 0xEF4444, icon: icons::IC_DOOM,     kind: MenuLaunch::App(8) },
 ];
-const MENU_APPS_END: usize = 14;  // items 0..14 = apps, 14..17 = games
+const MENU_APPS_END: usize = 16;  // items 0..16 = apps, 16..19 = games
 
 const MENU_W:       i32 = 280;
 const MENU_HDR_H:   i32 = 54;   // dingir avatar + title + subtitle
