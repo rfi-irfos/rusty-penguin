@@ -4116,8 +4116,9 @@ pub struct WadDoom {
     px: f32, py: f32, angle: f32,
     // Input
     fwd: i8, rot: i8, strafe: i8,
-    // Render framebuffer
+    // Render framebuffer — sized to the actual window at first render.
     pixels:  Vec<u32>,
+    rw: usize, rh: usize,      // current render dimensions
     loaded:  bool,
     pub dirty: bool,
     pub wants_close: bool,
@@ -4138,7 +4139,7 @@ impl WadDoom {
             verts: Vec::new(), walls: Vec::new(), pal: Vec::new(),
             px: 0.0, py: 0.0, angle: 0.0,
             fwd: 0, rot: 0, strafe: 0,
-            pixels: alloc::vec![0u32; WAD_DOOM_W * WAD_DOOM_H],
+            pixels: Vec::new(), rw: 0, rh: 0,
             loaded: false,
             dirty: true, wants_close: false,
             ansi: crate::ansi::AnsiParser::new(),
@@ -4289,32 +4290,25 @@ impl WadDoom {
     }
 
     fn render_frame(&mut self) {
-        if !self.loaded {
-            self.pixels.fill(0x0A0A0A);
-            return;
-        }
-        let w = WAD_DOOM_W as i32;
-        let h = WAD_DOOM_H as i32;
+        if !self.loaded || self.rw == 0 || self.rh == 0 { return; }
+        let w = self.rw as i32;
+        let h = self.rh as i32;
         let hh = h / 2;
-        // Sky (DOOM's F_SKY1 approximation — dark blue gradient top, grey floor)
+        // Sky gradient
         for row in 0..hh as usize {
-            let sky_t = row * 0x0D / hh as usize;
+            let sky_t = row * 0x0D / (hh as usize).max(1);
             let color = ((sky_t as u32 + 0x10) << 8) | (sky_t as u32 + 0x18);
-            for col in 0..WAD_DOOM_W { self.pixels[row * WAD_DOOM_W + col] = color; }
+            for col in 0..self.rw { self.pixels[row * self.rw + col] = color; }
         }
-        // Floor (dark brown-grey)
-        for row in hh as usize..WAD_DOOM_H {
-            let shade = 0x281E14u32;
-            for col in 0..WAD_DOOM_W { self.pixels[row * WAD_DOOM_W + col] = shade; }
+        // Floor
+        for row in hh as usize..self.rh {
+            for col in 0..self.rw { self.pixels[row * self.rw + col] = 0x281E14; }
         }
 
         // DDA raycast against DOOM linedefs
         let fov: f32 = 1.15191731f32;
-        let cos_a = fcos(self.angle);
-        let sin_a = fsin(self.angle);
-
-        for col in 0..WAD_DOOM_W {
-            let ray_ang = self.angle + fov * (col as f32 / WAD_DOOM_W as f32 - 0.5);
+        for col in 0..self.rw {
+            let ray_ang = self.angle + fov * (col as f32 / self.rw as f32 - 0.5);
             let rdx = fcos(ray_ang);
             let rdy = fsin(ray_ang);
 
@@ -4322,7 +4316,6 @@ impl WadDoom {
             let mut best_col = 0u32;
 
             for wall in &self.walls {
-                // Ray-segment intersection
                 let wx = wall.x2 - wall.x1;
                 let wy = wall.y2 - wall.y1;
                 let denom = rdx * wy - rdy * wx;
@@ -4333,8 +4326,7 @@ impl WadDoom {
                 let s  = (tx * rdy - ty * rdx) / denom;
                 if t > 0.1 && s >= 0.0 && s <= 1.0 && t < best_t {
                     best_t = t;
-                    // Distance-based shading using wall color
-                    let fog = (1.0 - (best_t / 1400.0).min(1.0));
+                    let fog = 1.0 - (best_t / 1400.0).min(1.0);
                     let r = (((wall.color >> 16) & 0xFF) as f32 * fog) as u32;
                     let g = (((wall.color >>  8) & 0xFF) as f32 * fog) as u32;
                     let b = ((wall.color & 0xFF) as f32 * fog) as u32;
@@ -4343,19 +4335,17 @@ impl WadDoom {
             }
 
             if best_t < f32::MAX {
-                // Correct for fisheye
                 let perp_dist = best_t * fcos(ray_ang - self.angle);
-                let wall_h = ((h as f32 * 128.0) / perp_dist.max(1.0)) as i32;
-                let top    = (hh - wall_h / 2).max(0);
-                let bot    = (hh + wall_h / 2).min(h);
+                let wall_h = ((h as f32 * 200.0) / perp_dist.max(1.0)) as i32;
+                let top = (hh - wall_h / 2).max(0);
+                let bot = (hh + wall_h / 2).min(h);
                 for row in top..bot {
-                    // Add slight vertical gradient for depth
                     let v = (row - top) as f32 / (bot - top).max(1) as f32;
                     let shade = if v < 0.5 { 1.1 } else { 0.85 };
                     let r = (((best_col >> 16) & 0xFF) as f32 * shade).min(255.0) as u32;
                     let g = (((best_col >>  8) & 0xFF) as f32 * shade).min(255.0) as u32;
                     let b = ((best_col & 0xFF) as f32 * shade).min(255.0) as u32;
-                    self.pixels[row as usize * WAD_DOOM_W + col] = (r<<16)|(g<<8)|b;
+                    self.pixels[row as usize * self.rw + col] = (r<<16)|(g<<8)|b;
                 }
             }
         }
@@ -4392,21 +4382,23 @@ impl App for WadDoom {
                 "doom1.wad not found in initrd", 0xEF4444, crate::fb::AA_T);
             self.dirty = false; return;
         }
-        // Render frame on first paint and on movement
-        if self.dirty { self.render_frame(); }
-
-        // Blit scaled to window
-        let sw = w as usize; let sh = h as usize;
-        // Status bar area at bottom (16% of height)
+        let sw = w as usize;
+        let sh = h as usize;
         let game_h = (sh * 84 / 100).max(1);
         let bar_h  = sh - game_h;
 
+        // Resize pixel buffer if window changed — then re-render at new native size.
+        if self.rw != sw || self.rh != game_h {
+            self.rw = sw; self.rh = game_h;
+            self.pixels.resize(sw * game_h, 0);
+            self.dirty = true;
+        }
+        if self.dirty { self.render_frame(); }
+
+        // Direct blit — no scale needed, pixels are already window-resolution.
         for dy in 0..game_h {
-            let src_y = dy * WAD_DOOM_H / game_h;
             for dx in 0..sw {
-                let src_x = dx * WAD_DOOM_W / sw;
-                let col = self.pixels[src_y * WAD_DOOM_W + src_x];
-                fb.set_pixel(x + dx as u32, y + dy as u32, col);
+                fb.set_pixel(x + dx as u32, y + dy as u32, self.pixels[dy * sw + dx]);
             }
         }
 
