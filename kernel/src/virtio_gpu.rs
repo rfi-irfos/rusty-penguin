@@ -9,8 +9,29 @@
 //! Spec: OASIS "Virtual I/O Device (VIRTIO) Version 1.1", §4.1 (PCI transport),
 //! §2.6 (split virtqueues), §5.7 (GPU device).
 
+use crate::drivers::udi::{UniversalDriver, register_driver};
 use core::ptr::{read_volatile, write_volatile};
 use core::sync::atomic::{compiler_fence, Ordering};
+
+pub struct VirtioGpuDriver;
+
+impl UniversalDriver for VirtioGpuDriver {
+    fn init(&self) -> bool {
+        crate::serial::write_str("  [udi] Initializing VirtIO GPU...\n");
+        true
+    }
+    fn handle_interrupt(&self, _irq: u8) { /* ... */ }
+    fn control(&self, code: u32, _input: &[u8], _output: &mut [u8]) -> u32 { 
+        crate::serial::write_str("  [udi] VirtIO GPU Control: 0x");
+        crate::serial::write_hex_u32(code);
+        crate::serial::write_str("\n");
+        0 
+    }
+}
+
+pub fn udi_init() {
+    register_driver(&VirtioGpuDriver);
+}
 
 // ── PCI identity ────────────────────────────────────────────────────────────
 const VIRTIO_VENDOR: u16 = 0x1AF4;
