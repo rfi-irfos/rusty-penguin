@@ -664,9 +664,10 @@ fn draw_ppm_watermark(fb: &mut Framebuffer, _path: &str, x: u32, y: u32, size: u
             let p = off + (src_y * iw + src_x) * 3;
             if p + 2 >= data.len() { continue; }
             let (r, g, b) = (data[p] as u32, data[p+1] as u32, data[p+2] as u32);
-            // Skip very dark pixels (logo background) — they'd just create a dark square.
+            // Skip dark background pixels (the brownish-black surround of the PNG).
+            // Threshold 50 cuts the ~luma-38 brownish bg while keeping gear teeth.
             let luma = (r * 77 + g * 150 + b * 29) >> 8;
-            if luma < 20 { continue; }
+            if luma < 50 { continue; }
             // Blend: 28% source, 72% background.
             let bg = fb.get_pixel(tx, ty);
             let br = (bg >> 16) & 0xFF;
@@ -1041,26 +1042,27 @@ fn draw_scene_static_v(fb: &mut Framebuffer, variant: u8) {
     // Ambient depth: a soft warm light pool lifts the hero off the wall, and a
     // cream halo makes the dingir luminous. (Also improves hero legibility over
     // any wallpaper, including the Bliss easter egg.)
-    // Rusty Penguin gear+penguin logo, ghost-watermarked over the background.
-    // This IS the visual identity of the desktop — no separate star.
-    let logo_size = (w.min(h) * 38 / 100) as u32;
+    // Rusty Penguin gear+penguin logo — centered in the upper portion of the hero.
+    // Text goes BELOW the logo, not overlapping it.
+    let logo_size = ((w.min(h) * 36 / 100) as u32).min(320);
+    let logo_top = (hero_cy as u32).saturating_sub(logo_size / 2 + logo_size / 8);
     let lx = (cx as u32).saturating_sub(logo_size / 2);
-    let ly = (hero_cy as u32).saturating_sub(logo_size / 2 + 20);
-    draw_ppm_watermark(fb, "bin/rp_watermark.ppm", lx, ly, logo_size);
-    fb.fill_rect_s(cx - 92, hero_cy - 8, 184, 1, 0x2A3548);
-    // Title in the smooth AA display font. "Rusty " white + "Penguin" green.
+    draw_ppm_watermark(fb, "bin/rp_watermark.ppm", lx, logo_top, logo_size);
+
+    // Text block sits below the logo with comfortable breathing room.
+    let text_y = (logo_top + logo_size) as i32 + 18;
+    fb.fill_rect_s(cx - 92, text_y - 4, 184, 1, 0x2A3548);
     let w1 = Framebuffer::aa_w("Rusty ", crate::fb::AA_L);
     let w2 = Framebuffer::aa_w("Penguin", crate::fb::AA_L);
     let tx = cx - (w1 + w2) / 2;
-    let ty = hero_cy - 24;
-    fb.draw_aa(tx + 1, ty + 1, "Rusty ", 0x080B0D, crate::fb::AA_L);
-    fb.draw_aa(tx + w1 + 1, ty + 1, "Penguin", 0x080B0D, crate::fb::AA_L);
-    fb.draw_aa(tx, ty, "Rusty ", WHITE, crate::fb::AA_L);
-    fb.draw_aa(tx + w1, ty, "Penguin", 0x63C7AD, crate::fb::AA_L);
+    fb.draw_aa(tx + 1, text_y + 1, "Rusty ", 0x080B0D, crate::fb::AA_L);
+    fb.draw_aa(tx + w1 + 1, text_y + 1, "Penguin", 0x080B0D, crate::fb::AA_L);
+    fb.draw_aa(tx, text_y, "Rusty ", WHITE, crate::fb::AA_L);
+    fb.draw_aa(tx + w1, text_y, "Penguin", 0x63C7AD, crate::fb::AA_L);
     let tag1 = "Bare-metal Rust OS  .  Sparse ternary inference  .  Zero binary";
     let tag2 = "RFI-IRFOS  .  Ternary Intelligence Stack";
-    fb.draw_aa_centered(0, w as i32, hero_cy + 26, tag1, DIM, crate::fb::AA_T);
-    fb.draw_aa_centered(0, w as i32, hero_cy + 26 + 18, tag2, TRIT_ZERO, crate::fb::AA_T);
+    fb.draw_aa_centered(0, w as i32, text_y + 26, tag1, DIM, crate::fb::AA_T);
+    fb.draw_aa_centered(0, w as i32, text_y + 44, tag2, TRIT_ZERO, crate::fb::AA_T);
 
     // ── Bottom panel — frosted-glass floating dock.
     // Drawn as translucent glass over the wallpaper (the warm glows show
