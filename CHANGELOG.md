@@ -4,6 +4,15 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+### Added — Windowed DOOM is PLAYABLE: keyboard routed to the focused scheduled app (2026-06-02)
+
+- The capstone. Keys reached a Linux process only when it was the current task at
+  IRQ time (racy). Now, when a scheduled Linux app exists, the keyboard IRQ routes
+  every raw scancode to it regardless of which task was running. QEMU-verified:
+  with windowed DOOM up, sending keys moves the player through E1M1 inside the
+  desktop window (11616 px changed, 0 faults). The `enter()` path and the normal
+  desktop boot are unaffected. Proof: docs/doom-windowed-playable.png.
+
 ### Added — WINDOWED DOOM: real id Software DOOM runs in a desktop window (2026-06-02)
 
 - **The headline goal.** id Software DOOM (fbdoom, a dynamic PIE) runs as an
