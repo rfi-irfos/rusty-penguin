@@ -829,6 +829,17 @@ impl App for Settings {
         }
     }
 
+    fn on_mouse(&mut self, _mx: i32, my: i32, _w: u32, _h: u32, buttons: u8) {
+        if buttons & 0x01 == 0 { return; }
+        // Rows: top = y+38, 34px each (mirrors render). Click a row → select + toggle.
+        if my < 38 { return; }
+        let row = (my - 38) / 34;
+        if row >= 0 && (row as usize) < 4 {
+            self.selected = row as usize;
+            self.toggle_selected();
+        }
+    }
+
     fn title(&self) -> &str {
         "Settings"
     }
@@ -1203,6 +1214,20 @@ impl App for ProcessMonitor {
                 }
             }
             _ => {}
+        }
+    }
+
+    fn on_mouse(&mut self, mx: i32, my: i32, _w: u32, _h: u32, buttons: u8) {
+        if buttons & 0x01 == 0 { return; }
+        // Tab bar (content y 0..28): Resources at x=14, Processes at x=124.
+        if my < 28 {
+            for (i, t) in ["Resources", "Processes"].iter().enumerate() {
+                let tx = 14 + i as i32 * 110;
+                let tw = Framebuffer::aa_w(t, crate::fb::AA_S);
+                if mx >= tx - 4 && mx < tx + tw + 4 {
+                    self.tab = i as u8; self.dirty = true; return;
+                }
+            }
         }
     }
 
@@ -1740,6 +1765,21 @@ impl App for SystemClock {
                 }
             }
             _ => {}
+        }
+    }
+
+    fn on_mouse(&mut self, mx: i32, my: i32, _w: u32, _h: u32, buttons: u8) {
+        if buttons & 0x01 == 0 { return; }
+        // Tab bar (content y 0..28): Clock/Stopwatch/Timer/World, x=12 + advancing.
+        if my < 28 {
+            let mut tx = 12;
+            for (i, t) in ["Clock", "Stopwatch", "Timer", "World"].iter().enumerate() {
+                let tw = Framebuffer::aa_w(t, crate::fb::AA_S);
+                if mx >= tx - 4 && mx < tx + tw + 4 {
+                    self.tab = i as u8; self.dirty = true; return;
+                }
+                tx += tw + 22;
+            }
         }
     }
 
