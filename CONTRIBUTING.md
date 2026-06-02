@@ -46,7 +46,12 @@ user-psh/        Bare-metal ring-3 shell (psh)
 init/            Linux-track init (PID 1 for the Linux boot entries)
 installer/       rp-install — install to disk
 iso/             Build scripts, GRUB config, initramfs construction
-docs/            Architecture docs, ternary findings, design assets
+docs/            Architecture docs (LINUX_ABI, SCHEDULER, PERSISTENCE …)
+docs/screenshots/ Proof screenshots referenced in CHANGELOG and README
+docs/logs/       Serial capture logs from headless QEMU tests
+docs/assets/     Logos and brand assets
+docs/design/     Mockups and design exploration
+docs/wallpapers/ Wallpaper source art
 ternary-core/    Ternary primitives (Trit, Tryte) used across crates
 ```
 
@@ -62,7 +67,7 @@ ternary-core/    Ternary primitives (Trit, Tryte) used across crates
 
 Issues and PRs: https://github.com/rfi-irfos/rusty-penguin  
 Email: rfi.irfos@gmail.com  
-Organization: https://rfi-irfos.org  
+Website: https://ternlang.com  
 
 RFI-IRFOS is a regulated not-for-profit (ZVR 1015608684 · GISA 39261441 ·
 Steuernummer 68 028/0989). At least 90% of surplus is reinvested per statute.

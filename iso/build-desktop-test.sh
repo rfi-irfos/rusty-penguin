@@ -7,7 +7,7 @@
 set -uo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ISO_DIR="$REPO/iso"
-OUT="${1:-$REPO/docs/desktop-with-media-screenshot.png}"
+OUT="${1:-$REPO/docs/screenshots/desktop-with-media-screenshot.png}"
 
 echo "[desk] building kernel + desktop + user-psh..."
 ( cd "$REPO/kernel" && cargo +nightly build --release -Zjson-target-spec \

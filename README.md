@@ -22,7 +22,7 @@
 > Summit Europe 2024 ([keynote, 16:59](https://www.youtube.com/watch?v=OM_8UOPFpqE&t=1019s)).
 > We were stupid enough — see [docs/ORIGIN.md](docs/ORIGIN.md).
 
-![The keynote playing on the Rusty Penguin kernel](docs/meta-video-on-rusty-penguin.png)
+![The keynote playing on the Rusty Penguin kernel](docs/screenshots/meta-video-on-rusty-penguin.png)
 
 *…and then we played that keynote back **on the kernel it triggered**. The actual
 Torvalds/Hohndel talk, decoded by our own from-scratch `.rpv` codec and blitted to
@@ -48,12 +48,12 @@ Preinstalled: `albert` · `ternlang` · `albert-cli` · `ternlang-mcp`
 > truthful rather than aspirational. It's a research OS we're trying to grow into a
 > daily driver — not one yet.
 
-![Rusty Penguin desktop — menu open, native browser on rustypenguin://home, Nebula wallpaper](docs/rusty-penguin-desktop.png)
+![Rusty Penguin desktop — menu open, native browser on rustypenguin://home, Nebula wallpaper](docs/screenshots/rusty-penguin-desktop.png)
 
 *The desktop with the start menu open and the native browser on `rustypenguin://home`,
 over the warm "Nebula" wallpaper. The browser is real: point it at any host and it
 fetches live over the from-scratch TCP/IP + TLS 1.3 stack — on boot it even
-[googles the OS itself](docs/rusty-penguin-googling-itself.png), pulling
+[googles the OS itself](docs/screenshots/rusty-penguin-googling-itself.png), pulling
 `google.com/search?q=rusty+penguin+os` over our own TLS with no X11, no Wayland, no
 libc and no Linux kernel underneath.*
 
@@ -279,7 +279,7 @@ against `libc.so.6` (relocation, RELRO, TLS), then `D_DoomMain → W_Init` (load
 the WAD) `→ R_Init → I_InitGraphics` renders into our framebuffer. Verified
 end-to-end via serial trace. Build it with `bash iso/build-real-doom.sh`.
 
-![DOOM running on Rusty Penguin](docs/doom-on-rusty-penguin.png)
+![DOOM running on Rusty Penguin](docs/screenshots/doom-on-rusty-penguin.png)
 
 A separate GRUB entry, **`Rusty Penguin -- DOOM (demoable)`**, boots straight
 into DOOM without the desktop at all (for maximum performance demo).
@@ -298,7 +298,7 @@ as an isolated, preemptively-scheduled Linux process — loaded via our ld.so +
 glibc, rendering into a private 640×400 `/dev/fb0` surface, which the desktop
 composites into a titled on-screen window: E1M1, the marine view, the full HUD, in
 a window on the bare-metal pure-Rust desktop, 0 faults
-(`docs/doom-windowed-on-desktop.png`, `linuxwin`). The whole chain is QEMU-verified
+(`docs/screenshots/doom-windowed-on-desktop.png`, `linuxwin`). The whole chain is QEMU-verified
 brick by brick: a dynamic Linux binary scheduled in its own address space
 (`linuxdyn`), a private virtual framebuffer (`linuxfb`), desktop compositing
 (`linuxwin`).

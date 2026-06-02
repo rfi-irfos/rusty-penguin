@@ -9,7 +9,7 @@
 set -uo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ISO_DIR="$REPO/iso"
-OUT="${1:-$ISO_DIR/../docs/media-player-on-rusty-penguin.png}"
+OUT="${1:-$ISO_DIR/../docs/screenshots/media-player-on-rusty-penguin.png}"
 
 echo "[videowin] building kernel..."
 ( cd "$REPO/kernel" && cargo +nightly build --release -Zjson-target-spec \

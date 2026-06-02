@@ -130,7 +130,7 @@ All notable changes to this project will be documented here.
   every raw scancode to it regardless of which task was running. QEMU-verified:
   with windowed DOOM up, sending keys moves the player through E1M1 inside the
   desktop window (11616 px changed, 0 faults). The `enter()` path and the normal
-  desktop boot are unaffected. Proof: docs/doom-windowed-playable.png.
+  desktop boot are unaffected. Proof: docs/screenshots/doom-windowed-playable.png.
 
 ### Added — WINDOWED DOOM: real id Software DOOM runs in a desktop window (2026-06-02)
 
@@ -139,7 +139,7 @@ All notable changes to this project will be documented here.
   glibc), renders into a private 640×400 `/dev/fb0` surface, and the real desktop
   composites that surface into a titled on-screen window — E1M1, the marine view,
   the full HUD, in a window on the bare-metal pure-Rust desktop. 0 faults.
-  Proof: docs/doom-windowed-on-desktop.png.
+  Proof: docs/screenshots/doom-windowed-on-desktop.png.
 - DOOM-specific shakeout: `FBIOGET` reports the 640×400 surface for scheduled
   processes; a scheduled app's stdout goes to serial only (not the fb console);
   and `write()`/`lseek` to `/dev/fb0` (fbdoom's frame blit) now copies pixels into
@@ -154,7 +154,7 @@ All notable changes to this project will be documented here.
   read-only into the desktop's AS; the desktop reads it via `sys_app_surface` (#41)
   + `sys_app_surface_dims` (#42) and blits it into a titled on-screen window.
 - QEMU screendump: the desktop with a "Linux app (scheduled)" window full of the
-  app's orange, 0 faults (docs/multiproc-linux-app-windowed.png). Normal boot
+  app's orange, 0 faults (docs/screenshots/multiproc-linux-app-windowed.png). Normal boot
   unchanged (flag-gated behind `linuxwin`).
 - Only step left for windowed DOOM: swap the synthetic fb-test for the real fbdoom
   binary (a dynamic PIE that loads via the brick-2b path) and shake out its
@@ -252,7 +252,7 @@ All notable changes to this project will be documented here.
   Flag-gated behind `schedesktop2`; normal boot path unchanged.
 - Verified in QEMU: orange app window composited on the live desktop, exactly
   128×128 surface px, 0 faults; normal-boot regression 0 faults / clean desktop.
-  Proof: docs/multiproc-windowed-app-on-desktop.png.
+  Proof: docs/screenshots/multiproc-windowed-app-on-desktop.png.
 
 ### Added — GPU: virgl 3D control-path probe (negotiate F_VIRGL, capset, CTX_CREATE) (2026-06-02)
 
@@ -302,7 +302,7 @@ All notable changes to this project will be documented here.
 - `brightness=N` boot arg (`sys_boot_brightness` #40) boots the desktop pre-dimmed
   — a default/kiosk/accessibility knob and the headless verification idiom.
 - Verified in QEMU: `brightness=40` → whole desktop at 0.380× baseline luminance
-  (expected ~0.40); normal boot unchanged. Proof: docs/brightness-40pct.png.
+  (expected ~0.40); normal boot unchanged. Proof: docs/screenshots/brightness-40pct.png.
 
 ### Fixed — Multiproc brick 5: per-task syscall stack → desktop + a 2nd real app concurrently, no #GP (2026-06-01)
 
@@ -325,7 +325,7 @@ All notable changes to this project will be documented here.
   scheduled, address-space-isolated processes. Verified by QEMU screendump: no
   #GP, the full desktop renders (16046 non-black cells) while the 2nd app is
   scheduled. Normal-boot fault profile is identical to baseline (regression-safe).
-  Proof: docs/multiproc-desktop-plus-app-scheduled.png.
+  Proof: docs/screenshots/multiproc-desktop-plus-app-scheduled.png.
 - Remaining toward windowed DOOM: the desktop compositing the 2nd app's surface
   into a visible on-screen window (a desktop-code change, the easy part now that
   two real processes coexist safely under the scheduler).
@@ -343,7 +343,7 @@ All notable changes to this project will be documented here.
   thread idles while the desktop gets the CPU and renders.
 - Verified by QEMU screendump: the full desktop UI renders (wallpaper, hero card,
   dock — 11773 non-black cells, same as the normal boot), zero faults. Proof:
-  docs/multiproc-real-desktop-scheduled.png.
+  docs/screenshots/multiproc-real-desktop-scheduled.png.
 - So the real complex desktop runs correctly under the scheduler in an isolated
   address space. Remaining toward windowed DOOM: a SECOND real app alongside it +
   the desktop compositing that app's surface (a desktop-code change).
@@ -358,7 +358,7 @@ All notable changes to this project will be documented here.
   with a "Not Responding" overlay — while the healthy app keeps rendering.
 - Verified by QEMU screendump: healthy window stays up (1024 px), hung window is
   gone (0 px) and replaced by the closed overlay, zero faults → "RECOVER PROVEN".
-  Proof: docs/multiproc-hung-app-recovered.png.
+  Proof: docs/screenshots/multiproc-hung-app-recovered.png.
 - This is item 4 as written ("a hung app can't freeze the desktop, and you can
   run several real apps at once") proven end to end and on screen. The
   kernel/compositor model is complete; remaining is swapping the test apps for
@@ -372,7 +372,7 @@ All notable changes to this project will be documented here.
   address space rendering its OWN colour into its OWN surface (orange + blue, same
   VA but fully isolated); the compositor blits BOTH into separate windows.
 - Verified by QEMU screendump: an orange window and a blue window appear at once,
-  zero faults. Proof: docs/multiproc-two-windows.png.
+  zero faults. Proof: docs/screenshots/multiproc-two-windows.png.
 - With 3a (real ELF processes), 3b (offscreen surfaces) and 3c (compositor →
   screen), the whole windowed multi-app model is proven end to end and on screen,
   behind flags. Remaining: wire the real desktop + real apps (fbDOOM) through it.
@@ -387,7 +387,7 @@ All notable changes to this project will be documented here.
   `composite` boot flag → the compositor reads the surface (physmap) and blits it
   (titlebar + frame) into a window region.
 - Verified by QEMU screendump: exactly 1024 (32×32) orange pixels at the window
-  position, zero faults. Proof: docs/multiproc-compositor-window.png.
+  position, zero faults. Proof: docs/screenshots/multiproc-compositor-window.png.
 - This closes the conceptual gap to windowed DOOM (isolated process → offscreen
   render → compositor → on-screen window all work together). Remaining: wire the
   real desktop + a real app (fbDOOM) through this proven pipeline.
@@ -577,19 +577,19 @@ All notable changes to this project will be documented here.
   (bg `#1B211E`, green `#6FE18B`, warm text `#ECEDE5`, ternary triad
   `neg/zero/pos = #EF7575/#909A92/#6FE18B`), replacing the cool graphite +
   system-blue. Warm-stone wallpaper gradient with a soft green glow up top.
-  Clock kept in the topbar (per Simeon). Proof `docs/desktop-v2-palette.png`.
+  Clock kept in the topbar (per Simeon). Proof `docs/screenshots/desktop-v2-palette.png`.
 - **Frosted-glass panels** (`fb.fill_rounded_rect_glass`): panels alpha-blend
   their color over the wallpaper behind them — the mockup's translucent
   `--panel` look without a full backdrop blur. The sparse-rendering thesis
   applied to chrome: read what's dormant behind the panel and only tint it.
-  Proof `docs/desktop-v2-glass.png`. Next slices: dock restyle, TIS visuals.
+  Proof `docs/screenshots/desktop-v2-glass.png`. Next slices: dock restyle, TIS visuals.
 
 ### Added — Linux ABI layer brick 4: dynamic linking — a dynamically-linked glibc binary runs (2026-05-29)
 
 - **The bare-metal Rust kernel runs a *dynamically-linked* glibc binary** (the
   common case — almost no Linux software ships static). ld.so loads, maps
   `libc.so.6`, relocates the program, and runs it. Proof:
-  `docs/linux-abi-brick4-dynamic-serial.txt`.
+  `docs/logs/linux-abi-brick4-dynamic-serial.txt`.
 - ELF loader: `load_bias` (load the ET_DYN interpreter at a chosen base) +
   `interp_path` (read `PT_INTERP`). `linux::enter` loads `ld-linux-x86-64.so.2`
   at `AT_BASE`, builds the full auxv (`AT_BASE`/`AT_ENTRY`/`AT_PHDR`) + argv, and
@@ -613,7 +613,7 @@ All notable changes to this project will be documented here.
 - **The bare-metal Rust kernel runs an unmodified static-glibc binary** — real
   `printf` output and working **thread-local storage** (`__thread`, verified
   read+write), through glibc's full startup syscall sequence, exiting cleanly
-  via `exit_group`. Proof: `docs/linux-abi-brick2-serial.txt`. This is a real
+  via `exit_group`. Proof: `docs/logs/linux-abi-brick2-serial.txt`. This is a real
   C library running on our own kernel, not a Linux kernel.
 - Three foundational kernel fixes made it work:
   - **SSE/SSE2 enabled at boot** (`enable_sse`: CR0.EM=0/MP=1, CR4.OSFXSR/OSXMMEXCPT)
@@ -647,7 +647,7 @@ All notable changes to this project will be documented here.
   compatibility layer — the bridge that makes "the bare-metal OS is the total
   Ubuntu replacement" technically reachable: real third-party software runs
   *natively on our own kernel*, not a Linux kernel. Proof:
-  `docs/linux-abi-brick1-serial.txt` (the ELF prints via Linux `write(2)` and
+  `docs/logs/linux-abi-brick1-serial.txt` (the ELF prints via Linux `write(2)` and
   ends via `exit_group(2)`).
 - New `kernel/src/linux.rs`: a **per-process ABI mode** (Native vs Linux —
   needed because Linux syscall numbers collide with the native table, e.g.
@@ -675,7 +675,7 @@ All notable changes to this project will be documented here.
   the "firefox and chrome gotta work" directive (both browsers now work). Full
   Firefox UI (tabs, address bar, menu) + the CSS/flexbox page render via the
   same Xorg + modesetting stack, with WebRender on its **software backend
-  (swgl)** — no system GL needed. Proof: `docs/firefox-on-rusty-penguin.png`.
+  (swgl)** — no system GL needed. Proof: `docs/screenshots/firefox-on-rusty-penguin.png`.
 - Uses the **self-contained Mozilla tarball** (not the confinement-bound snap),
   cached to `iso/cache/firefox` (gitignored). `iso/build-web-rootfs.sh` gains
   an opt-in Firefox bundle (`RP_WEB_FIREFOX=1`): the 303 MB tree + its system
@@ -694,7 +694,7 @@ All notable changes to this project will be documented here.
   omnibox, menu) + a CSS/flexbox HTML page render correctly via the proven
   Xorg + modesetting + Mesa-swrast stack, painted by Chrome's software
   compositor (`--disable-gpu`, CPU raster → X). Proof:
-  `docs/chrome-on-rusty-penguin.png`.
+  `docs/screenshots/chrome-on-rusty-penguin.png`.
 - `iso/build-web-rootfs.sh` gains an opt-in Chrome bundle (`RP_WEB_CHROME=1`,
   off by default so the lean rp.web stays xterm-only): copies the 374 MB
   `/opt/google/chrome` tree + its ldd closure + the NSS crypto stack
@@ -724,7 +724,7 @@ All notable changes to this project will be documented here.
 - **Rusty Penguin runs a real X server and renders third-party Linux GUI apps.**
   A new `Web (X11)` GRUB entry / `rp.web` init mode starts **Xorg + the
   `modesetting` driver on virtio-gpu DRM + Mesa software GL (DRISWRAST)**, and a
-  real **xterm** renders on the Linux track (proof: `docs/x11-xterm-on-rusty-penguin.png`).
+  real **xterm** renders on the Linux track (proof: `docs/screenshots/x11-xterm-on-rusty-penguin.png`).
   This is the foundation for running Firefox/Chrome.
 - `iso/build-web-rootfs.sh` assembles the X stack (Xorg + xterm + full ldd
   closure + dlopen extras: xkb data, fonts, Mesa, xorg modules) + the DRM
@@ -848,7 +848,7 @@ All notable changes to this project will be documented here.
 - **Verified end-to-end in QEMU/UEFI**: installed to a blank disk, then booted
   that disk with NO CD attached → OVMF → GRUB → kernel → init → desktop renders
   at 1280×800; RPDATA carries the persistent /home + /opt and a written
-  `boot.tern`. Proof: `docs/installed-disk-standalone-boot.png`.
+  `boot.tern`. Proof: `docs/screenshots/installed-disk-standalone-boot.png`.
 
 ### Fixed — Partition-aware persistence (data-loss footgun + installer prereq, 2026-05-28)
 
@@ -928,7 +928,7 @@ All notable changes to this project will be documented here.
   - NOT id Software's DOOM — that C engine runs on the **Linux track** via the
     ISO's `Rusty Penguin -- DOOM (demoable)` boot entry. This is a from-scratch
     Rust tribute that fits the pure-Rust bare-metal ethos.
-  - Proof: `docs/doom-raycaster-baremetal.png`.
+  - Proof: `docs/screenshots/doom-raycaster-baremetal.png`.
 
 ### Added — Preinstalled games + 1080p bare-metal desktop (2026-05-28)
 
@@ -939,7 +939,7 @@ All notable changes to this project will be documented here.
     tick) places food/mines.
   - Snake: arrow keys / WASD, SPACE restarts, waits for first steer before
     moving. Minesweeper: 12×10 / 18 mines, first click always safe, flood-fill
-    reveal, mouse (L reveal / R flag) and keyboard. Proof: `docs/snake-on-rusty-penguin.png`.
+    reveal, mouse (L reveal / R flag) and keyboard. Proof: `docs/screenshots/snake-on-rusty-penguin.png`.
 
 - **Bare-metal desktop now boots at 1920×1080×32** (was capped at 800×600).
   Three coordinated fixes:
@@ -951,7 +951,7 @@ All notable changes to this project will be documented here.
     can't clobber the module it's loaded from (was: `entry @ 0x0` + #PF).
   - ring-3 stack moved to ~63 MiB (`vmm::USER_STACK_TOP`), out of the heap's
     `.bss` region; desktop heap raised 8→24 MiB for the 8.3 MiB 1080p backbuffer.
-  - Proof: `docs/bare-metal-1080p-desktop.png`.
+  - Proof: `docs/screenshots/bare-metal-1080p-desktop.png`.
 
 - **Pointer acceleration** in the PS/2 mouse driver (2× baseline, 3× on fast
   flicks) — raw 1-count-per-pixel felt half-speed, especially at high res.
@@ -969,7 +969,7 @@ All notable changes to this project will be documented here.
   - `iso/build.sh` assembles `initrd-doom.img` (rebuilding `doom-init` from
     source when gcc is present) and stages it into the ISO automatically.
   - Verified end-to-end in QEMU: boots from the ISO and reaches the E1M1
-    attract-mode demo at 1280×800. Proof shot: `docs/doom-on-rusty-penguin.png`.
+    attract-mode demo at 1280×800. Proof shot: `docs/screenshots/doom-on-rusty-penguin.png`.
 
 ### Fixed / Learned — framebuffer requires UEFI on the Linux track
 
