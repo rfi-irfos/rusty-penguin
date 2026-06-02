@@ -3183,11 +3183,13 @@ impl MediaPlayer {
         // Frame counter + hint.
         let mut fb_buf = [0u8; 24];
         let mut nf_buf = [0u8; 24];
-        let tx = x + 32 + bw;
-        fb.draw_str_t(tx, y + 5, u64_into(&mut fb_buf, self.frame as u64), 0xA8B0A6);
-        fb.draw_str_t(tx + 40, y + 5, u64_into(&mut nf_buf, self.nframes as u64), 0x6B756D);
+        let tx = (x + 32 + bw) as i32;
+        let mut px = tx;
+        px += fb.draw_aa(px, y as i32 + 3, u64_into(&mut fb_buf, self.frame as u64), 0xA8B0A6, crate::fb::AA_T) + 8;
+        px += fb.draw_aa(px, y as i32 + 3, "/", 0x6B756D, crate::fb::AA_T) + 8;
+        fb.draw_aa(px, y as i32 + 3, u64_into(&mut nf_buf, self.nframes as u64), 0x6B756D, crate::fb::AA_T);
         let hint = if self.viz { "V: video" } else { "V: visualizer" };
-        fb.draw_str_t(x + 10, y + bar_h - 12, hint, 0x6B756D);
+        fb.draw_aa(x as i32 + 10, (y + bar_h) as i32 - 14, hint, 0x6B756D, crate::fb::AA_T);
     }
 }
 
@@ -4772,21 +4774,22 @@ impl App for Notes {
         let bg = 0x1A1E26u32;
         fb.fill_rect(x, y, w, h, bg);
 
-        // Status bar at top.
-        let sb_h = 18u32;
-        fb.fill_rect(x, y, w, sb_h, 0x252A35);
+        // Status bar at top (AA chrome; the editor body stays monospace so the
+        // per-character cursor block stays column-aligned).
+        let sb_h = 22u32;
+        fb.fill_rect(x, y, w, sb_h, 0x1B2230);
         let lines = self.line_count();
         let cur_line = self.current_line() + 1;
-        let mut lbuf = [0u8; 24];
+        let mut lbuf = [0u8; 24]; let mut l2 = [0u8; 24];
         let s = fmt_u64_into(&mut lbuf, cur_line as u64);
-        fb.draw_str(x + 8, y + 5, s, 0x8A9AB0, 0x252A35);
-        fb.draw_str(x + 8 + s.len() as u32 * 8 + 2, y + 5, "/", 0x4A5568, 0x252A35);
-        let mut l2 = [0u8; 24];
         let s2 = fmt_u64_into(&mut l2, lines as u64);
-        fb.draw_str(x + 8 + s.len() as u32 * 8 + 10, y + 5, s2, 0x8A9AB0, 0x252A35);
-        let mod_label = if self.modified { " [+]" } else { "    " };
-        fb.draw_str(x + 8 + 80, y + 5, mod_label, 0xF5C451, 0x252A35);
-        fb.draw_str(x + w - 88, y + 5, "Ctrl+S save", 0x4A5568, 0x252A35);
+        let mut px = x as i32 + 8;
+        px += fb.draw_aa(px, y as i32 + 4, s, 0x8A9AB0, crate::fb::AA_T) + 2;
+        px += fb.draw_aa(px, y as i32 + 4, "/", 0x4A5568, crate::fb::AA_T) + 2;
+        px += fb.draw_aa(px, y as i32 + 4, s2, 0x8A9AB0, crate::fb::AA_T) + 10;
+        if self.modified { fb.draw_aa(px, y as i32 + 4, "[modified]", 0xF5C451, crate::fb::AA_T); }
+        let save = "Ctrl+S save";
+        fb.draw_aa(x as i32 + w as i32 - Framebuffer::aa_w(save, crate::fb::AA_T) - 10, y as i32 + 4, save, 0x6B7686, crate::fb::AA_T);
 
         // Text area.
         let text_y = y + sb_h + 4;
@@ -5033,9 +5036,9 @@ impl RustyPhone {
         let disp_h = if portrait { 64u32 } else { 48u32 };
         fb.fill_rect(x, y, w, disp_h, 0x0A0E14);
         let num_str = core::str::from_utf8(&self.number[..self.number_len]).unwrap_or("");
-        let nw = num_str.len() as u32 * 14;
-        let nx = x + w.saturating_sub(nw + 12);
-        fb.draw_aa(nx as i32, y as i32 + 16, num_str, 0xF8F8F2, crate::fb::AA_T);
+        let nw = Framebuffer::aa_w(num_str, crate::fb::AA_L);
+        let nx = x as i32 + w as i32 - nw - 12;
+        fb.draw_aa(nx, y as i32 + 10, num_str, 0xF8F8F2, crate::fb::AA_L);
 
         // Call state badge
         let (state_label, state_col) = match self.call_state {
@@ -5046,14 +5049,15 @@ impl RustyPhone {
             CallState::Ended     => ("Call ended", 0x8A938C),
         };
         if !state_label.is_empty() {
-            fb.draw_str(x + 8, y + disp_h - 14, state_label, state_col, 0x0A0E14);
+            fb.draw_aa(x as i32 + 8, (y + disp_h) as i32 - 17, state_label, state_col, crate::fb::AA_T);
         }
         if self.call_state == CallState::Connected {
             let mut tb = [0u8; 24];
             let mins = self.call_secs / 60;
             let secs = self.call_secs % 60;
             let ts = fmt_duration(&mut tb, mins, secs);
-            fb.draw_str(x + w - 60, y + disp_h - 14, ts, 0x6FE18B, 0x0A0E14);
+            let tw = Framebuffer::aa_w(ts, crate::fb::AA_T);
+            fb.draw_aa(x as i32 + w as i32 - tw - 10, (y + disp_h) as i32 - 17, ts, 0x6FE18B, crate::fb::AA_T);
         }
 
         // Keypad — 3 columns × 4 rows + 1 action row
@@ -5075,135 +5079,151 @@ impl RustyPhone {
         let labels = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0", "#"];
         let sub    = ["", "ABC", "DEF", "GHI", "JKL", "MNO", "PQRS", "TUV", "WXYZ", "", "+", ""];
 
+        // Classic round-key dialer: each grid cell holds a circular key with the
+        // big digit and the letter cluster beneath it. (Cells stay the hit-test
+        // grid; we just draw circles inside them.)
+        let _ = (key_bg, key_fg);
         for i in 0..12usize {
-            let row = (i / 3) as u32;
-            let col = (i % 3) as u32;
-            let kx = x + pad + col * (kw + pad);
-            let ky = grid_y + row * (kh + pad);
-            fb.fill_rect(kx, ky, kw, kh, key_bg);
-            fb.fill_rect(kx, ky, kw, 1, 0x2A3040);
-            // Main digit
-            let lw = labels[i].len() as u32 * 8;
-            fb.draw_str(kx + kw.saturating_sub(lw) / 2, ky + kh / 2 - 7, labels[i], key_fg, key_bg);
-            // Sub-label
-            if !sub[i].is_empty() {
-                let sw = sub[i].len() as u32 * 6;
-                fb.draw_str(kx + kw.saturating_sub(sw) / 2, ky + kh / 2 + 3, sub[i], 0x6B7280, key_bg);
+            let row = (i / 3) as i32;
+            let col = (i % 3) as i32;
+            let kx = x as i32 + pad as i32 + col * (kw as i32 + pad as i32);
+            let ky = grid_y as i32 + row * (kh as i32 + pad as i32);
+            let ccx = kx + kw as i32 / 2;
+            let ccy = ky + kh as i32 / 2;
+            let r = (kw as i32).min(kh as i32) / 2 - 1;
+            // Round key: grey disc + a slightly lighter top catch for depth.
+            fb.fill_circle(ccx, ccy, r, 0x33383F);
+            fb.fill_circle(ccx, ccy - 1, r - 1, 0x3A4049);
+            let has_sub = !sub[i].is_empty();
+            // Big digit (sits a touch high when letters follow).
+            let lw = Framebuffer::aa_w(labels[i], crate::fb::AA_L);
+            let ny = if has_sub { ccy - 22 } else { ccy - Framebuffer::aa_line(crate::fb::AA_L) / 2 };
+            fb.draw_aa(ccx - lw / 2, ny, labels[i], 0xF4F6FA, crate::fb::AA_L);
+            // Letter cluster beneath.
+            if has_sub {
+                let sw = Framebuffer::aa_w(sub[i], crate::fb::AA_T);
+                fb.draw_aa(ccx - sw / 2, ccy + 6, sub[i], 0x9AA3AE, crate::fb::AA_T);
             }
             let _ = keys[i];
         }
 
-        // Action row: backspace, call/end, mute
+        // Action row: backspace (left), round green CALL (center), mute (right).
         let action_y = grid_y + key_rows * (kh + pad) + pad;
-        // Backspace
-        let bw = kw; let bx = x + pad;
-        fb.fill_rect(bx, action_y, bw, kh, 0x1A1F2A);
-        fb.draw_str(bx + bw / 2 - 8, action_y + kh / 2 - 4, "<-", 0x9CA3AF, 0x1A1F2A);
-        // Call / End
-        let cw = kw; let cx2 = x + pad + kw + pad;
+        let acy = action_y as i32 + kh as i32 / 2;
+        // Backspace — plain glyph, no chrome.
+        let bcx = x as i32 + pad as i32 + kw as i32 / 2;
+        fb.draw_aa(bcx - Framebuffer::aa_w("<x", crate::fb::AA_S) / 2,
+                   acy - Framebuffer::aa_line(crate::fb::AA_S) / 2, "<x", 0x8A93A0, crate::fb::AA_S);
+        // Call / End — round button, green to dial, red to hang up.
+        let ccx = x as i32 + pad as i32 + kw as i32 + pad as i32 + kw as i32 / 2;
+        let cr = (kw as i32).min(kh as i32) / 2;
         let (call_bg, call_label) = if self.call_state == CallState::Idle || self.call_state == CallState::Ended {
             (accent, "CALL")
         } else {
             (danger, "END")
         };
-        fb.fill_rect(cx2, action_y, cw, kh, call_bg);
-        let lw = 4 * 8;
-        fb.draw_str(cx2 + cw.saturating_sub(lw) / 2, action_y + kh / 2 - 4, call_label, 0xF0F0F0, call_bg);
-        // Mute
-        let mx = x + pad + (kw + pad) * 2;
-        let mute_bg = if self.muted { 0x6B2020u32 } else { 0x1A1F2Au32 };
-        fb.fill_rect(mx, action_y, kw, kh, mute_bg);
-        fb.draw_str(mx + kw / 2 - 12, action_y + kh / 2 - 4, if self.muted { "UNMUTE" } else { "MUTE" }, 0x9CA3AF, mute_bg);
+        fb.fill_circle(ccx, acy, cr, call_bg);
+        fb.fill_circle(ccx, acy - 1, cr - 1, call_bg.saturating_add(0x0A140A));
+        let clw = Framebuffer::aa_w(call_label, crate::fb::AA_S);
+        fb.draw_aa(ccx - clw / 2, acy - Framebuffer::aa_line(crate::fb::AA_S) / 2, call_label, 0xFFFFFF, crate::fb::AA_S);
+        // Mute — plain glyph, tinted when active.
+        let mcx = x as i32 + pad as i32 + (kw as i32 + pad as i32) * 2 + kw as i32 / 2;
+        let ml = if self.muted { "unmute" } else { "mute" };
+        let mcol = if self.muted { 0xEF7575u32 } else { 0x8A93A0 };
+        fb.draw_aa(mcx - Framebuffer::aa_w(ml, crate::fb::AA_T) / 2,
+                   acy - Framebuffer::aa_line(crate::fb::AA_T) / 2, ml, mcol, crate::fb::AA_T);
     }
 
     fn draw_recent(&self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, _h: u32) {
-        fb.draw_str(x + 8, y + 8, "Recent Calls", 0xF0F0F0, 0x0D1117);
+        fb.draw_aa(x as i32 + 10, y as i32 + 8, "Recent Calls", 0xF0F0F0, crate::fb::AA_S);
         if self.recent_count == 0 {
-            fb.draw_str(x + 8, y + 32, "No calls yet.", 0x4A5568, 0x0D1117);
+            fb.draw_aa(x as i32 + 10, y as i32 + 34, "No calls yet.", 0x4A5568, crate::fb::AA_S);
             return;
         }
         let count = self.recent_count.min(8);
         for i in 0..count {
             let slot = (self.recent_count - 1 - i) % 8;
             let num = core::str::from_utf8(&self.recent[slot][..self.recent_len[slot]]).unwrap_or("?");
-            let ry = y + 32 + i as u32 * 28;
-            fb.fill_rect(x + 4, ry, w - 8, 24, 0x161B22);
-            fb.draw_str(x + 10, ry + 8, num, 0xCDD6E0, 0x161B22);
-            fb.draw_str(x + w - 54, ry + 8, "Recall", 0x4A9EFF, 0x161B22);
+            let ry = y + 34 + i as u32 * 28;
+            fb.fill_rounded_rect(x as i32 + 4, ry as i32, w as i32 - 8, 24, 6, 0x161B22);
+            fb.draw_aa(x as i32 + 12, ry as i32 + 4, num, 0xCDD6E0, crate::fb::AA_S);
+            fb.draw_aa(x as i32 + w as i32 - 60, ry as i32 + 4, "Recall", 0x4A9EFF, crate::fb::AA_T);
         }
     }
 
     fn draw_account(&mut self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, _h: u32) {
         let bg = 0x0D1117u32;
+        let xi = x as i32; let wi = w as i32;
         // ── Phone number verification section ────────────────────────────────
-        fb.draw_str(x + 8, y + 8, "Link Phone Number", 0xF0F0F0, bg);
-        fb.draw_str(x + 8, y + 22, "Verify your number via SMS to make real calls.", 0x6B7280, bg);
+        fb.draw_aa(xi + 8, y as i32 + 6, "Link Phone Number", 0xF0F0F0, crate::fb::AA_S);
+        fb.draw_aa(xi + 8, y as i32 + 26, "Verify your number via SMS to make real calls.", 0x6B7280, crate::fb::AA_T);
 
         match self.verify_state {
             VerifyState::Idle => {
-                fb.fill_rect(x + 8, y + 42, w - 16, 24, 0x161B22);
-                fb.draw_str(x + 12, y + 50, "+  Enter your phone number", 0x4A5568, 0x161B22);
-                fb.fill_rect(x + 8, y + 74, 120, 22, 0x1A3A2A);
-                fb.draw_str(x + 18, y + 80, "Send Code", 0x22C55E, 0x1A3A2A);
+                fb.fill_rounded_rect(xi + 8, y as i32 + 44, wi - 16, 26, 6, 0x161B22);
+                fb.draw_aa(xi + 12, y as i32 + 48, "+  Enter your phone number", 0x4A5568, crate::fb::AA_S);
+                fb.fill_rounded_rect(xi + 8, y as i32 + 78, 120, 24, 6, 0x1A3A2A);
+                fb.draw_aa(xi + 18, y as i32 + 82, "Send Code", 0x22C55E, crate::fb::AA_S);
             }
             VerifyState::EnterNumber => {
-                fb.fill_rect(x + 8, y + 42, w - 16, 24, 0x1C2A1C);
-                fb.fill_rect(x + 8, y + 42, w - 16, 1, 0x22C55E);
+                fb.fill_rounded_rect(xi + 8, y as i32 + 44, wi - 16, 26, 6, 0x1C2A1C);
+                fb.fill_rect_s(xi + 8, y as i32 + 44, wi - 16, 1, 0x22C55E);
                 let num = core::str::from_utf8(&self.verify_number[..self.verify_number_len]).unwrap_or("");
-                fb.draw_str(x + 12, y + 50, "+ ", 0x22C55E, 0x1C2A1C);
-                fb.draw_str(x + 26, y + 50, num, 0xF0F0F0, 0x1C2A1C);
-                // Cursor
-                fb.fill_rect(x + 26 + self.verify_number_len as u32 * 8, y + 50, 2, 12, 0x22C55E);
-                fb.fill_rect(x + 8, y + 74, 120, 22, 0x1A3A2A);
-                fb.draw_str(x + 18, y + 80, "Send Code ->", 0x22C55E, 0x1A3A2A);
-                fb.draw_str(x + 8, y + 102, "Enter full number incl. country code, e.g. +436...", 0x4A5568, bg);
+                let mut px = xi + 12;
+                px += fb.draw_aa(px, y as i32 + 48, "+ ", 0x22C55E, crate::fb::AA_S);
+                px += fb.draw_aa(px, y as i32 + 48, num, 0xF0F0F0, crate::fb::AA_S);
+                fb.fill_rect_s(px, y as i32 + 48, 2, 14, 0x22C55E); // cursor
+                fb.fill_rounded_rect(xi + 8, y as i32 + 80, 130, 24, 6, 0x1A3A2A);
+                fb.draw_aa(xi + 18, y as i32 + 84, "Send Code ->", 0x22C55E, crate::fb::AA_S);
+                fb.draw_aa(xi + 8, y as i32 + 110, "Enter full number incl. country code, e.g. +436...", 0x4A5568, crate::fb::AA_T);
             }
             VerifyState::WaitingCode => {
-                fb.draw_str(x + 8, y + 42, "Sending SMS…", 0xF5C451, bg);
+                fb.draw_aa(xi + 8, y as i32 + 44, "Sending SMS...", 0xF5C451, crate::fb::AA_S);
             }
             VerifyState::EnterCode => {
-                fb.draw_str(x + 8, y + 42, "Code sent! Enter the 6-digit code:", 0x22C55E, bg);
-                fb.fill_rect(x + 8, y + 58, 200, 28, 0x1C2A1C);
-                fb.fill_rect(x + 8, y + 58, 200, 1, 0x4A9EFF);
+                fb.draw_aa(xi + 8, y as i32 + 44, "Code sent! Enter the 6-digit code:", 0x22C55E, crate::fb::AA_S);
+                fb.fill_rounded_rect(xi + 8, y as i32 + 64, 200, 28, 6, 0x1C2A1C);
+                fb.fill_rect_s(xi + 8, y as i32 + 64, 200, 1, 0x4A9EFF);
                 let code = core::str::from_utf8(&self.verify_code_input[..self.verify_code_len]).unwrap_or("");
-                fb.draw_str(x + 14, y + 68, code, 0xF0F0F0, 0x1C2A1C);
-                fb.fill_rect(x + 14 + self.verify_code_len as u32 * 9, y + 68, 2, 14, 0x4A9EFF);
-                fb.fill_rect(x + 8, y + 94, 100, 22, 0x1A3040);
-                fb.draw_str(x + 18, y + 100, "Verify ->", 0x4A9EFF, 0x1A3040);
+                let cw = fb.draw_aa(xi + 14, y as i32 + 68, code, 0xF0F0F0, crate::fb::AA_S);
+                fb.fill_rect_s(xi + 14 + cw, y as i32 + 68, 2, 16, 0x4A9EFF);
+                fb.fill_rounded_rect(xi + 8, y as i32 + 100, 100, 24, 6, 0x1A3040);
+                fb.draw_aa(xi + 18, y as i32 + 104, "Verify ->", 0x4A9EFF, crate::fb::AA_S);
             }
             VerifyState::Verified => {
-                fb.draw_str(x + 8, y + 42, "Phone number verified!", 0x22C55E, bg);
+                fb.draw_aa(xi + 8, y as i32 + 44, "Phone number verified!", 0x22C55E, crate::fb::AA_S);
                 let num = core::str::from_utf8(&self.verify_number[..self.verify_number_len]).unwrap_or("?");
-                fb.draw_str(x + 8, y + 58, num, 0xF0F0F0, bg);
+                fb.draw_aa(xi + 8, y as i32 + 64, num, 0xF0F0F0, crate::fb::AA_S);
             }
             VerifyState::Failed => {
-                fb.draw_str(x + 8, y + 42, "Verification failed. Wrong code?", 0xEF4444, bg);
-                fb.fill_rect(x + 8, y + 62, 80, 22, 0x3A1A1A);
-                fb.draw_str(x + 18, y + 68, "Try again", 0xEF4444, 0x3A1A1A);
+                fb.draw_aa(xi + 8, y as i32 + 44, "Verification failed. Wrong code?", 0xEF4444, crate::fb::AA_S);
+                fb.fill_rounded_rect(xi + 8, y as i32 + 66, 90, 24, 6, 0x3A1A1A);
+                fb.draw_aa(xi + 18, y as i32 + 70, "Try again", 0xEF4444, crate::fb::AA_S);
             }
         }
 
         // ── SIP configuration ────────────────────────────────────────────────
-        let sip_y = y + 140;
-        fb.fill_rect(x, sip_y - 8, w, 1, 0x252A35);
-        fb.draw_str(x + 8, sip_y, "SIP Account", 0xF0F0F0, bg);
+        let sip_y = y as i32 + 144;
+        fb.fill_rect_s(xi, sip_y - 8, wi, 1, 0x252A35);
+        fb.draw_aa(xi + 8, sip_y, "SIP Account", 0xF0F0F0, crate::fb::AA_S);
         let reg_col = if self.sip_registered { 0x22C55Eu32 } else { 0x6B7280 };
-        fb.draw_str(x + w - 90, sip_y, if self.sip_registered { "Registered" } else { "Unregistered" }, reg_col, bg);
+        let reg = if self.sip_registered { "Registered" } else { "Unregistered" };
+        fb.draw_aa(xi + wi - Framebuffer::aa_w(reg, crate::fb::AA_T) - 8, sip_y + 2, reg, reg_col, crate::fb::AA_T);
 
-        fb.draw_str(x + 8, sip_y + 20, "Server:", 0x6B7280, bg);
-        fb.fill_rect(x + 8, sip_y + 32, w - 16, 20, 0x161B22);
+        fb.draw_aa(xi + 8, sip_y + 22, "Server", 0x6B7280, crate::fb::AA_T);
+        fb.fill_rounded_rect(xi + 8, sip_y + 38, wi - 16, 22, 5, 0x161B22);
         let srv = core::str::from_utf8(&self.sip_server[..self.sip_server_len]).unwrap_or("");
         let srv_col = if self.focus_field == 1 { 0xF0F0F0u32 } else { 0x8A9AB0 };
-        fb.draw_str(x + 12, sip_y + 38, srv, srv_col, 0x161B22);
+        fb.draw_aa(xi + 12, sip_y + 41, srv, srv_col, crate::fb::AA_S);
 
-        fb.draw_str(x + 8, sip_y + 58, "Username:", 0x6B7280, bg);
-        fb.fill_rect(x + 8, sip_y + 70, w - 16, 20, 0x161B22);
+        fb.draw_aa(xi + 8, sip_y + 64, "Username", 0x6B7280, crate::fb::AA_T);
+        fb.fill_rounded_rect(xi + 8, sip_y + 80, wi - 16, 22, 5, 0x161B22);
         let user = core::str::from_utf8(&self.sip_user[..self.sip_user_len]).unwrap_or("");
         let user_col = if self.focus_field == 2 { 0xF0F0F0u32 } else { 0x8A9AB0 };
-        fb.draw_str(x + 12, sip_y + 76, user, user_col, 0x161B22);
+        fb.draw_aa(xi + 12, sip_y + 83, user, user_col, crate::fb::AA_S);
 
-        fb.fill_rect(x + 8, sip_y + 100, 100, 22, 0x1A3040);
-        fb.draw_str(x + 18, sip_y + 106, "Register", 0x4A9EFF, 0x1A3040);
+        fb.fill_rounded_rect(xi + 8, sip_y + 110, 100, 24, 6, 0x1A3040);
+        fb.draw_aa(xi + 18, sip_y + 114, "Register", 0x4A9EFF, crate::fb::AA_S);
     }
 }
 
@@ -5267,8 +5287,8 @@ impl App for RustyPhone {
             };
             let tc = if active { 0x22C55Eu32 } else { 0x4A5568 };
             if active { fb.fill_rect(tx, y + tab_h - 2, tab_w, 2, 0x22C55E); }
-            let lw = label.len() as u32 * 7;
-            fb.draw_str(tx + tab_w.saturating_sub(lw) / 2, y + 10, label, tc, 0x161B22);
+            let lw = Framebuffer::aa_w(label, crate::fb::AA_S);
+            fb.draw_aa(tx as i32 + (tab_w as i32 - lw) / 2, y as i32 + 5, label, tc, crate::fb::AA_S);
         }
 
         let content_y = y + tab_h + 2;

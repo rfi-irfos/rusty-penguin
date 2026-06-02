@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented here.
 
+## [3.5.0] — 2026-06-02 — Font sweep complete + clickable tabs + round-key dialer
+
+### Changed — antialiased font everywhere in the apps
+- Migrated the remaining apps off the legacy 8×8 bitmap font onto the smooth AA
+  sans: Screenshot, Image Viewer, Snake, Minesweeper, Doom HUD, Media Player
+  transport, Notes status bar, and all of RustyPhone. **app.rs now has zero
+  bitmap-font calls.** Text editors/terminal keep a monospace body (cursor
+  alignment), AA chrome.
+
+### Fixed — interaction regressions the font sweep exposed
+- **Dead tabs/buttons:** Settings, Task Manager and Clock had no mouse handler —
+  added click-to-toggle (Settings) and click-to-switch tabs (Task Manager,
+  Clock, plus RustyPhone tabs already worked).
+- **"Font bombs the standard view":** the default window was terminal-sized
+  (640×192); the ~2× taller AA font overflowed it. Default height → 408 so apps
+  have room.
+
+### Changed — RustyPhone dialer
+- Rebuilt the keypad in the classic round-key style: circular keys with the big
+  digit + letter cluster beneath, and a round green CALL button (red to hang up).
+  Grid cells unchanged so the keypad hit-test still lines up.
+
 ## [3.4.0] — 2026-06-02 — Terminal networking commands (ifconfig/ip/ping/curl…)
 
 ### Added — psh networking built-ins (real data, not stubs)
