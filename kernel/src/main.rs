@@ -156,6 +156,12 @@ pub static mut AUTOSTART_APP: i64 = -1;
 /// sys_wallpaper (#23) and boots with system background N. -1 = default.
 pub static mut WALLPAPER_DEF: i64 = -1;
 
+/// Set by boot from `brightness=N` (15..100) on the kernel cmdline; the desktop
+/// reads it via sys_boot_brightness (#40) and starts at that software-brightness
+/// level (a real default/kiosk/accessibility knob, and the headless way to verify
+/// the dimming since the slider can't be driven by mouse). -1 = full (100%).
+pub static mut BOOT_BRIGHTNESS: i64 = -1;
+
 /// Set by boot from `gpudisplay` on the kernel cmdline. When true, sys_fb_query
 /// hands the desktop the virtio-gpu backing instead of the VBE framebuffer, so
 /// the whole UI is rendered into RAM and DMA-scanned by the GPU (sys_gpu_flush).
@@ -570,6 +576,11 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
     // wallpaper=N → desktop boots with system background N (test + feature).
     if let Some(n) = unsafe { mb2_cmdline_value(mb2, b"wallpaper=") } {
         unsafe { WALLPAPER_DEF = n; }
+    }
+    // brightness=N → desktop boots at software-brightness N% (default/kiosk knob,
+    // and the headless way to verify the present-time dimming LUT).
+    if let Some(n) = unsafe { mb2_cmdline_value(mb2, b"brightness=") } {
+        unsafe { BOOT_BRIGHTNESS = n; }
     }
     // gpudisplay → route the desktop's framebuffer through the virtio-gpu device.
     if unsafe { mb2_cmdline_contains(mb2, b"gpudisplay") } && virtio_gpu::is_ready() {

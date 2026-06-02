@@ -664,6 +664,12 @@ pub extern "C" fn syscall_handler(nr: u64, arg1: u64, arg2: u64, arg3: u64) -> u
             // sys_getpid → current PID
             crate::sched::current_pid()
         }
+        40 => {
+            // sys_boot_brightness → startup software-brightness % from `brightness=N`,
+            // or u64::MAX if unset (desktop then stays at full brightness).
+            let v = unsafe { crate::BOOT_BRIGHTNESS };
+            if v < 0 { u64::MAX } else { v as u64 }
+        }
         60 => {
             // sys_exit(code)
             vga::write_str("\n  [psh exited]\n", vga::Color::Green);

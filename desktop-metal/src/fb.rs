@@ -29,6 +29,13 @@ pub struct Framebuffer {
     // static scene changes (icon hover).
     bg_cache: alloc::boxed::Box<[u8]>,
     bg_cached: bool,
+    // Software brightness (0..=100). When < 100, present() maps every byte on the
+    // way to the real framebuffer through `bright_lut` (a precomputed v*b/100
+    // table), dimming the whole display. This is a real, usable brightness control
+    // on ANY panel — including those with no ACPI/hardware backlight (and QEMU).
+    // brightness == 100 fast-paths to a plain block copy (zero overhead).
+    brightness: u8,
+    bright_lut: [u8; 256],
 }
 
 unsafe impl Send for Framebuffer {}
@@ -94,8 +101,28 @@ impl Framebuffer {
             back,
             bg_cache,
             bg_cached: false,
+            brightness: 100,
+            bright_lut: {
+                let mut l = [0u8; 256];
+                let mut i = 0;
+                while i < 256 { l[i] = i as u8; i += 1; }
+                l
+            },
         })
     }
+
+    /// Set software brightness 0..=100 (clamped to a usable floor so the screen
+    /// never goes fully black and strands the user). Recomputes the dimming LUT.
+    pub fn set_brightness(&mut self, pct: u8) {
+        let b = pct.clamp(15, 100);
+        self.brightness = b;
+        let bb = b as u32;
+        for i in 0..256u32 {
+            self.bright_lut[i as usize] = ((i * bb) / 100) as u8;
+        }
+    }
+
+    pub fn brightness(&self) -> u8 { self.brightness }
 
     /// Save the current backbuffer as the static-background cache.
     pub fn snapshot_bg(&mut self) {
@@ -138,7 +165,13 @@ impl Framebuffer {
         let off = y0u * stride;
         let len = (y1u - y0u) * stride;
         unsafe {
-            core::ptr::copy_nonoverlapping(self.back.as_ptr().add(off), self.real.add(off), len);
+            if self.brightness >= 100 {
+                core::ptr::copy_nonoverlapping(self.back.as_ptr().add(off), self.real.add(off), len);
+            } else {
+                let src = self.back.as_ptr().add(off);
+                let dst = self.real.add(off);
+                for i in 0..len { *dst.add(i) = self.bright_lut[*src.add(i) as usize]; }
+            }
         }
         // GPU path: when `real` is the virtio-gpu backing (RAM), the copy above
         // is RAM→RAM; this DMA-scans the band out. No-op under the VBE fb.
@@ -151,7 +184,13 @@ impl Framebuffer {
     pub fn present(&mut self) {
         let n = self.back.len();
         unsafe {
-            core::ptr::copy_nonoverlapping(self.back.as_ptr(), self.real, n);
+            if self.brightness >= 100 {
+                core::ptr::copy_nonoverlapping(self.back.as_ptr(), self.real, n);
+            } else {
+                let src = self.back.as_ptr();
+                let dst = self.real;
+                for i in 0..n { *dst.add(i) = self.bright_lut[*src.add(i) as usize]; }
+            }
         }
         gpu_flush(0, self.height);
     }

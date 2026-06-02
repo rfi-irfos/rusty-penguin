@@ -142,6 +142,23 @@ fn sys_autostart() -> u64 {
     n
 }
 
+/// sys_boot_brightness (#40): startup software-brightness % from `brightness=N`,
+/// or u64::MAX if unset. Lets the desktop boot pre-dimmed (default/kiosk knob, and
+/// the headless way to verify the present-time dimming since the slider needs a mouse).
+fn sys_boot_brightness() -> u64 {
+    let n: u64;
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            inout("rax") 40u64 => n,
+            in("rdi") 0u64,
+            out("rcx") _, out("r11") _,
+            options(nostack),
+        );
+    }
+    n
+}
+
 /// sys_wallpaper (#23): system-background index from `wallpaper=N`, or u64::MAX.
 fn sys_wallpaper() -> u64 {
     let n: u64;
@@ -1209,15 +1226,17 @@ fn show_desktop_hit(fw: u32, fh: u32, mx: i32, my: i32) -> bool {
 struct QuickSettings {
     wifi: bool, bluetooth: bool, dark: bool, dnd: bool, airplane: bool, nightlight: bool,
     volume: u8,
+    brightness: u8,
 }
 static mut QS: QuickSettings = QuickSettings {
     wifi: true, bluetooth: false, dark: false, dnd: false, airplane: false, nightlight: false,
     volume: 80,
+    brightness: 100,
 };
 static mut QS_OPEN: bool = false;
 
 const QS_W: i32 = 320;
-const QS_H: i32 = 296;
+const QS_H: i32 = 332;
 const QS_TILE_H: i32 = 50;
 const QS_PAD: i32 = 14;
 
@@ -1243,6 +1262,21 @@ fn qs_slider_rect(px: i32, py: i32) -> (i32, i32, i32, i32) {
     // below the 3 rows of tiles
     let y = py + 50 + 3 * (QS_TILE_H + 12) + 12;
     (px + QS_PAD + 30, y, QS_W - 2 * QS_PAD - 30, 8)
+}
+
+fn qs_bright_slider_rect(px: i32, py: i32) -> (i32, i32, i32, i32) {
+    // one row below the volume slider
+    let (x, y, w, h) = qs_slider_rect(px, py);
+    (x, y + 30, w, h)
+}
+
+fn qs_bright_slider_hit(px: i32, py: i32, cx: i32, cy: i32) -> Option<u8> {
+    let (x, y, w, h) = qs_bright_slider_rect(px, py);
+    if cx >= x - 6 && cx < x + w + 6 && cy >= y - 10 && cy < y + h + 10 {
+        let v = ((cx - x).max(0).min(w) * 100 / w) as u8;
+        return Some(v);
+    }
+    None
 }
 
 fn qs_tile_hit(px: i32, py: i32, cx: i32, cy: i32) -> Option<usize> {
@@ -1381,6 +1415,27 @@ fn draw_quick_settings(fb: &mut Framebuffer) {
     fb.fill_rounded_rect(sx, sy, fillw, 6, 3, QS_TILE_ON);
     fb.fill_circle(sx + fillw, sy + 3, 7, 0xEAF6EE);
     fb.fill_circle(sx + fillw, sy + 3, 5, QS_TILE_ON);
+
+    // Brightness slider
+    let (bx, by, bw, _bh) = qs_bright_slider_rect(px, py);
+    qs_icon_sun(fb, bx - 22, by + 3);
+    fb.fill_rounded_rect(bx, by, bw, 6, 3, 0x141A16);
+    let bv = unsafe { QS.brightness } as i32;
+    let bfillw = (bw * bv / 100).max(0);
+    fb.fill_rounded_rect(bx, by, bfillw, 6, 3, QS_TILE_ON);
+    fb.fill_circle(bx + bfillw, by + 3, 7, 0xEAF6EE);
+    fb.fill_circle(bx + bfillw, by + 3, 5, QS_TILE_ON);
+}
+
+fn qs_icon_sun(fb: &mut Framebuffer, cx: i32, cy: i32) {
+    fb.fill_circle(cx, cy, 4, 0xECDAA7);                          // sun core
+    for k in 0..8i32 {                                           // 8 rays
+        let (dx, dy) = match k {
+            0 => (0, -7), 1 => (5, -5), 2 => (7, 0), 3 => (5, 5),
+            4 => (0, 7),  5 => (-5, 5), 6 => (-7, 0), _ => (-5, -5),
+        };
+        fb.fill_rect_s(cx + dx, cy + dy, 1, 1, 0xECDAA7);
+    }
 }
 
 fn qs_icon_speaker(fb: &mut Framebuffer, cx: i32, cy: i32) {
@@ -2182,6 +2237,14 @@ pub extern "C" fn _start() -> ! {
         Err(_) => loop { sys_yield(); },
     };
 
+    // `brightness=N` on the kernel cmdline → boot pre-dimmed. Applied before the
+    // first present so the whole UI comes up at that software-brightness level.
+    let bb = sys_boot_brightness();
+    if bb != u64::MAX && bb <= 100 {
+        unsafe { QS.brightness = bb as u8; }
+        fb.set_brightness(bb as u8);
+    }
+
     let w = fb.width as i32; let h = fb.height as i32;
     let mut mouse = MouseState { x: w / 2, y: h / 2, buttons: 0, btn_pressed: 0 };
 
@@ -2459,6 +2522,12 @@ pub extern "C" fn _start() -> ! {
                         scene_dirty = true;
                     } else if let Some(v) = qs_slider_hit(px, py, cx, cy) {
                         unsafe { QS.volume = v; set_master_volume(v); }
+                        scene_dirty = true;
+                    } else if let Some(v) = qs_bright_slider_hit(px, py, cx, cy) {
+                        // Software brightness: dim the whole display via the
+                        // present-time LUT. Repaint so the new level is visible now.
+                        unsafe { QS.brightness = v; }
+                        fb.set_brightness(v);
                         scene_dirty = true;
                     }
                     // click on panel chrome → consume, keep panel open
