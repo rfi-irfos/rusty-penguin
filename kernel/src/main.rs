@@ -574,6 +574,10 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
         // A hung windowed app is force-quit; the healthy one keeps running.
         sched::selftest_recover_win(); // never returns
     }
+    if unsafe { mb2_cmdline_contains(mb2, b"linuxsched") } {
+        // A real static Linux ELF as a scheduled process (windowed-DOOM brick 2a).
+        sched::selftest_linuxsched(); // never returns
+    }
     if unsafe { mb2_cmdline_contains(mb2, b"linuxroute") } {
         // Per-task ABI mode: a native + a Linux process scheduled together, each
         // routing syscalls to the right table (the foundation for windowed DOOM).

@@ -660,6 +660,13 @@ pub fn syscall(nr: u64, a1: u64, a2: u64, a3: u64) -> u64 {
                 reset();
                 crate::restart_desktop();
             }
+            // A Linux process running under the preemptive scheduler (a windowed
+            // app, not the one-way enter() path): kill just this task and let the
+            // desktop + others keep running, instead of halting the whole CPU.
+            if crate::sched::is_preemptive_linux() {
+                serial::write_str("  [linux] scheduled task exited; reaping\n");
+                crate::sched::exit_current_scheduled();
+            }
             vga::write_str("\n  [linux] process exited, code=", vga::Color::Green);
             vga::write_i32(a1 as i32);
             vga::write_byte(b'\n', vga::Color::White);

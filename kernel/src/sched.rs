@@ -135,6 +135,23 @@ pub fn mark_task_linux(i: usize) {
     unsafe { TASK_LINUX[i] = true; }
 }
 
+// True once a Linux process is running UNDER the preemptive scheduler (vs the
+// one-way `enter()` path). Lets the Linux exit syscall kill just that task and
+// let the others keep running, instead of halting the whole CPU.
+static mut PREEMPTIVE_LINUX: bool = false;
+pub fn is_preemptive_linux() -> bool { unsafe { PREEMPTIVE_LINUX } }
+
+/// A scheduled Linux task called exit/exit_group: mark it dead and wait to be
+/// preempted away — `next_alive` skips it forever, so the desktop and other
+/// processes keep running. Never returns to the caller's task.
+pub fn exit_current_scheduled() -> ! {
+    unsafe {
+        TASKS[CUR_TASK].alive = false;
+        // The dead task's slot can be reused by a later spawn.
+        loop { core::arch::asm!("sti; hlt", options(nostack)); }
+    }
+}
+
 // `_cur_syscall_stack` (defined in syscall.rs global_asm) is the kernel stack the
 // SYSCALL trampoline switches to. preempt_tick retargets it per task on each
 // context switch (via inline asm — see there) so concurrent syscalls from two
@@ -966,6 +983,131 @@ fn spawn_ring3_elf_cfg(elf: &[u8], stack_top: u64, stack_pages: u32, fb_frame: u
     }
 }
 
+/// Load a STATIC Linux ELF (ET_EXEC, no interpreter) into a fresh private address
+/// space and schedule it as a Linux-ABI ring-3 task — so a real Linux binary runs
+/// as one of several scheduled processes (alongside the native desktop), not via
+/// the one-way `enter()` path. Builds the System V AMD64 initial stack (argc,
+/// argv, envp, auxv) the C runtime expects. Returns the task index (already marked
+/// Linux), or 0 on failure. Dynamic ELFs (ET_DYN, need ld.so) are brick 2b.
+fn spawn_linux_static_elf(elf: &[u8]) -> usize {
+    unsafe {
+        if elf.len() < 64 || &elf[0..4] != b"\x7fELF" { return 0; }
+        if rd_u16(elf, 16) != 2 { return 0; } // ET_EXEC only (static); ET_DYN later
+        for i in 1..MAX_TASKS {
+            if TASKS[i].used { continue; }
+            let as_ = match crate::vmm::new_address_space_private() { Some(p) => p, None => return 0 };
+            let pfw = crate::vmm::PTE_PRESENT | crate::vmm::PTE_WRITABLE | crate::vmm::PTE_USER;
+
+            let entry = rd_u64(elf, 24);
+            let phoff = rd_u64(elf, 32) as usize;
+            let phnum = rd_u16(elf, 56) as usize;
+            let phent = rd_u16(elf, 54) as usize;
+
+            // PT_LOAD segments → private-AS pages (written via the physmap).
+            for s in 0..phnum {
+                let ph = phoff + s * phent;
+                if ph + 56 > elf.len() || rd_u32(elf, ph) != 1 { continue; } // PT_LOAD
+                let p_off = rd_u64(elf, ph + 8) as usize;
+                let p_va = rd_u64(elf, ph + 16);
+                let p_fsz = rd_u64(elf, ph + 32) as usize;
+                let p_msz = rd_u64(elf, ph + 40) as usize;
+                let start = p_va & !0xFFF;
+                let end = (p_va + p_msz as u64 + 0xFFF) & !0xFFF;
+                let mut va = start;
+                while va < end {
+                    let frame = match crate::pmm::alloc_frame() { Some(f) => f, None => return 0 };
+                    let dst = crate::vmm::phys_to_virt(frame) as *mut u8;
+                    core::ptr::write_bytes(dst, 0, 4096);
+                    let file_va_end = p_va + p_fsz as u64;
+                    let cs = va.max(p_va);
+                    let ce = (va + 4096).min(file_va_end);
+                    if ce > cs {
+                        let src_off = p_off + (cs - p_va) as usize;
+                        let dst_off = (cs - va) as usize;
+                        let len = (ce - cs) as usize;
+                        if src_off + len <= elf.len() {
+                            core::ptr::copy_nonoverlapping(elf.as_ptr().add(src_off), dst.add(dst_off), len);
+                        }
+                    }
+                    if !crate::vmm::map_page_in(as_, va, frame, pfw) { return 0; }
+                    va += 4096;
+                }
+            }
+
+            // Stack: USER_STACK_PAGES pages ending at USER_STACK_TOP. Remember the
+            // TOP frame's physmap address so we can stage the auxv into it directly.
+            let stack_top = crate::vmm::USER_STACK_TOP;
+            let pages = crate::vmm::USER_STACK_PAGES as u64;
+            let stack_bottom = stack_top - pages * 4096;
+            let mut top_frame_va = 0u64; // kernel (physmap) VA of [stack_top-4096, stack_top)
+            let mut sva = stack_bottom;
+            while sva < stack_top {
+                let stk = match crate::pmm::alloc_frame() { Some(f) => f, None => return 0 };
+                let kva = crate::vmm::phys_to_virt(stk);
+                core::ptr::write_bytes(kva as *mut u8, 0, 4096);
+                crate::vmm::map_page_in(as_, sva, stk, pfw);
+                if sva == stack_top - 4096 { top_frame_va = kva; }
+                sva += 4096;
+            }
+            if top_frame_va == 0 { return 0; }
+
+            // ── Build the System V initial stack in the top page ──
+            // All content lives in [stack_top-4096, stack_top); translate a USER VA
+            // to its kernel staging address inside that frame.
+            let page_lo = stack_top - 4096;
+            let kaddr = |uva: u64| top_frame_va + (uva - page_lo);
+            const AT_NULL: u64 = 0; const AT_PHDR: u64 = 3; const AT_PHENT: u64 = 4;
+            const AT_PHNUM: u64 = 5; const AT_PAGESZ: u64 = 6; const AT_BASE: u64 = 7;
+            const AT_ENTRY: u64 = 9; const AT_RANDOM: u64 = 25; const AT_EXECFN: u64 = 31;
+            let (phdr, phent_v, phnum_v) = match crate::elf::phdr_info(elf) {
+                Some((v, e, n)) => (v, e, n), None => (0, 56, 0),
+            };
+            // argv[0] string, then 16 random bytes for AT_RANDOM.
+            let argv0 = b"/bin/linuxapp\0";
+            let mut uva = stack_top - argv0.len() as u64;
+            let argv0_ptr = uva;
+            for (j, &b) in argv0.iter().enumerate() { *((kaddr(argv0_ptr) + j as u64) as *mut u8) = b; }
+            uva = (uva - 16) & !0xF;
+            let rand_ptr = uva;
+            let mut x = crate::idt::ticks().wrapping_mul(2862933555777941757).wrapping_add(3037000493);
+            for j in 0..16u64 { x = x.wrapping_mul(6364136223846793005).wrapping_add(1); *((kaddr(rand_ptr) + j) as *mut u8) = (x >> 40) as u8; }
+
+            let wordv: [u64; 20] = [
+                1,               // argc
+                argv0_ptr,       // argv[0]
+                0,               // argv[1] = NULL
+                0,               // envp[0] = NULL
+                AT_PHDR, phdr,   AT_PHENT, phent_v, AT_PHNUM, phnum_v,
+                AT_PAGESZ, 4096, AT_BASE, 0,        AT_ENTRY, entry,
+                AT_RANDOM, rand_ptr, AT_NULL, 0,
+            ];
+            let bytes = (wordv.len() * 8) as u64;
+            let user_rsp = (rand_ptr - bytes) & !0xF; // 16-byte align the argc slot
+            let mut wa = user_rsp;
+            for w in wordv.iter() { *(kaddr(wa) as *mut u64) = *w; wa += 8; }
+            let _ = (AT_EXECFN, phent, phnum); // (kept symmetric with enter())
+
+            // Prime the kernel stack with a ring-3 iret frame: enter at `entry`
+            // with rsp = user_rsp (→ argc), the C runtime then reads argv/auxv.
+            let base = core::ptr::addr_of_mut!(KSTACKS[i]) as *mut u8;
+            let ktop = ((base.add(KSTACK_SIZE) as u64) & !0xF) as u64;
+            let mut sp = ktop;
+            let push = |sp: &mut u64, v: u64| { *sp -= 8; *(*sp as *mut u64) = v; };
+            push(&mut sp, 0x1b);        // ss
+            push(&mut sp, user_rsp);    // user rsp → argc
+            push(&mut sp, 0x202);       // rflags IF=1
+            push(&mut sp, 0x23);        // cs
+            push(&mut sp, entry);       // rip
+            for _ in 0..15 { push(&mut sp, 0); }
+            TASKS[i] = Task { rsp: sp, used: true, alive: true, cr3: as_ };
+            TASK_LINUX[i] = true; // a Linux-ABI process — routes to the Linux table
+            PREEMPTIVE_LINUX = true; // its exit() must kill the task, not halt the CPU
+            return i;
+        }
+        0
+    }
+}
+
 /// `realelf` brick: load two REAL ELF programs (built by `make_test_elf`, tags
 /// 0xE1/0xE2) into separate private address spaces and run them under preemption
 /// with the boot thread. If both tags interleave with the boot thread, the real
@@ -1326,6 +1468,38 @@ pub fn selftest_linuxroute() -> ! {
     unsafe { core::arch::asm!("sti"); }
     loop {
         busy_spin();
+    }
+}
+
+/// `linuxsched` brick (windowed-DOOM brick 2a) — a REAL static Linux ELF runs as
+/// a SCHEDULED process in its own private address space, not via the one-way
+/// enter() path. Loads bin/linuxtest with a proper System V auxv stack, schedules
+/// it alongside the boot thread, enables preemption. PASS = the binary's own
+/// stdout appears (it ran to its write()) AND it exits cleanly + is reaped
+/// ("scheduled task exited; reaping") while the boot thread keeps running.
+pub fn selftest_linuxsched() -> ! {
+    use crate::serial::write_str;
+    write_str("\n[lxs] === linuxsched: a REAL static Linux ELF as a scheduled process ===\n");
+    let elf = match crate::ramfs::find(b"bin/linuxtest") {
+        Some(e) => e,
+        None => { write_str("[lxs] bin/linuxtest not in initrd\n"); halt(); }
+    };
+    unsafe {
+        core::arch::asm!("cli");
+        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3() };
+        CUR_TASK = 0;
+        TASK_LINUX[0] = false;
+    }
+    let l = spawn_linux_static_elf(elf);
+    if l == 0 { write_str("[lxs] spawn_linux_static_elf failed (not ET_EXEC / out of frames?)\n"); halt(); }
+    write_str("[lxs] Linux binary scheduled; enabling preemption (its stdout follows)\n");
+    crate::idt::set_timer_vector(irq_timer_preempt as *const () as u64);
+    unsafe { core::arch::asm!("sti"); }
+    let mut n = 0u32;
+    loop {
+        busy_spin();
+        n += 1;
+        if n % 40 == 0 { write_str("[lxs] boot thread still alive (Linux task reaped, scheduler healthy)\n"); }
     }
 }
 
