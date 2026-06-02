@@ -4780,6 +4780,490 @@ impl App for Notes {
     fn title(&self) -> &str { "Notes" }
 }
 
+// ── RustyPhone ───────────────────────────────────────────────────────────────
+// Zabih's vision: Rusty Penguin runs on any device — phone, tablet, laptop, PC.
+// This app: SIP soft-phone dialer + phone-number verification via SMS.
+// The UI adapts to the window width: ≤320px = phone portrait, wider = desktop.
+
+#[derive(Clone, Copy, PartialEq)]
+enum PhoneTab { Dialer, Recent, Account }
+
+#[derive(Clone, Copy, PartialEq)]
+enum CallState { Idle, Dialing, Ringing, Connected, Ended }
+
+#[derive(Clone, Copy, PartialEq)]
+enum VerifyState { Idle, EnterNumber, WaitingCode, EnterCode, Verified, Failed }
+
+pub struct RustyPhone {
+    tab: PhoneTab,
+    // Dialer
+    number: [u8; 32],
+    number_len: usize,
+    call_state: CallState,
+    call_secs: u64,
+    call_start: u64,
+    muted: bool,
+    speaker: bool,
+    // Recent calls (ring buffer of 8)
+    recent: [[u8; 20]; 8],
+    recent_len: [usize; 8],
+    recent_count: usize,
+    // Account / SIP
+    sip_server: [u8; 64],
+    sip_server_len: usize,
+    sip_user: [u8; 32],
+    sip_user_len: usize,
+    sip_registered: bool,
+    // Phone number verification
+    verify_state: VerifyState,
+    verify_number: [u8; 16],
+    verify_number_len: usize,
+    verify_code_input: [u8; 8],
+    verify_code_len: usize,
+    verify_code_sent: [u8; 6],  // the code we sent
+    focus_field: u8,            // 0 = number field, 1 = code field, 2 = sip fields
+    last_tick: u64,
+    pub dirty: bool,
+    pub wants_close: bool,
+    ansi: crate::ansi::AnsiParser,
+}
+
+impl RustyPhone {
+    pub fn new() -> Self {
+        let mut r = RustyPhone {
+            tab: PhoneTab::Dialer,
+            number: [0u8; 32], number_len: 0,
+            call_state: CallState::Idle,
+            call_secs: 0, call_start: 0,
+            muted: false, speaker: false,
+            recent: [[0u8; 20]; 8], recent_len: [0usize; 8], recent_count: 0,
+            sip_server: [0u8; 64], sip_server_len: 0,
+            sip_user: [0u8; 32], sip_user_len: 0,
+            sip_registered: false,
+            verify_state: VerifyState::Idle,
+            verify_number: [0u8; 16], verify_number_len: 0,
+            verify_code_input: [0u8; 8], verify_code_len: 0,
+            verify_code_sent: [0u8; 6],
+            focus_field: 0,
+            last_tick: 0,
+            dirty: true, wants_close: false,
+            ansi: crate::ansi::AnsiParser::new(),
+        };
+        // Default SIP server hint.
+        let srv = b"sip.linphone.org";
+        r.sip_server[..srv.len()].copy_from_slice(srv);
+        r.sip_server_len = srv.len();
+        r
+    }
+
+    fn push_digit(&mut self, d: u8) {
+        if self.number_len < 31 {
+            self.number[self.number_len] = d;
+            self.number_len += 1;
+            self.dirty = true;
+        }
+    }
+
+    fn dial(&mut self, ticks: u64) {
+        if self.number_len == 0 { return; }
+        self.call_state = CallState::Dialing;
+        self.call_start = ticks;
+        // Push to recent.
+        let slot = self.recent_count % 8;
+        let n = self.number_len.min(20);
+        self.recent[slot][..n].copy_from_slice(&self.number[..n]);
+        self.recent_len[slot] = n;
+        self.recent_count += 1;
+        self.dirty = true;
+    }
+
+    fn end_call(&mut self) {
+        self.call_state = CallState::Idle;
+        self.dirty = true;
+    }
+
+    // Generate a pseudo-random 6-digit code from ticks.
+    fn gen_code(ticks: u64) -> [u8; 6] {
+        let mut v = ticks.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        let mut code = [0u8; 6];
+        for i in 0..6 {
+            v = v.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            code[i] = b'0' + (v >> 58) as u8 % 10;
+        }
+        code
+    }
+
+    fn draw_dialer(&mut self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, h: u32, portrait: bool) {
+        let bg = 0x0D1117u32;
+        let accent = 0x22C55Eu32;   // green call button
+        let danger = 0xEF4444u32;   // red end button
+        let key_bg = 0x1C2128u32;
+        let key_fg = 0xF0F0F0u32;
+
+        // Number display
+        let disp_h = if portrait { 64u32 } else { 48u32 };
+        fb.fill_rect(x, y, w, disp_h, 0x0A0E14);
+        let num_str = core::str::from_utf8(&self.number[..self.number_len]).unwrap_or("");
+        let nw = num_str.len() as u32 * 14;
+        let nx = x + w.saturating_sub(nw + 12);
+        fb.draw_aa(nx as i32, y as i32 + 16, num_str, 0xF8F8F2, crate::fb::AA_T);
+
+        // Call state badge
+        let (state_label, state_col) = match self.call_state {
+            CallState::Idle      => ("", 0u32),
+            CallState::Dialing   => ("Dialing…", 0xF5C451),
+            CallState::Ringing   => ("Ringing…", 0x4A9EFF),
+            CallState::Connected => ("Connected", accent),
+            CallState::Ended     => ("Call ended", 0x8A938C),
+        };
+        if !state_label.is_empty() {
+            fb.draw_str(x + 8, y + disp_h - 14, state_label, state_col, 0x0A0E14);
+        }
+        if self.call_state == CallState::Connected {
+            let mut tb = [0u8; 24];
+            let mins = self.call_secs / 60;
+            let secs = self.call_secs % 60;
+            let ts = fmt_duration(&mut tb, mins, secs);
+            fb.draw_str(x + w - 60, y + disp_h - 14, ts, 0x6FE18B, 0x0A0E14);
+        }
+
+        // Keypad — 3 columns × 4 rows + 1 action row
+        let pad = if portrait { 6u32 } else { 4u32 };
+        let grid_y = y + disp_h + pad;
+        let key_rows = 4u32;
+        let key_cols = 3u32;
+        let avail_w = w.saturating_sub(pad * (key_cols + 1));
+        let avail_h = h.saturating_sub(disp_h + pad * (key_rows + 3) + 40);
+        let kw = avail_w / key_cols;
+        let kh = (avail_h / (key_rows + 1)).min(if portrait { 56 } else { 42 });
+
+        let keys = [
+            b'1', b'2', b'3',
+            b'4', b'5', b'6',
+            b'7', b'8', b'9',
+            b'*', b'0', b'#',
+        ];
+        let labels = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0", "#"];
+        let sub    = ["", "ABC", "DEF", "GHI", "JKL", "MNO", "PQRS", "TUV", "WXYZ", "", "+", ""];
+
+        for i in 0..12usize {
+            let row = (i / 3) as u32;
+            let col = (i % 3) as u32;
+            let kx = x + pad + col * (kw + pad);
+            let ky = grid_y + row * (kh + pad);
+            fb.fill_rect(kx, ky, kw, kh, key_bg);
+            fb.fill_rect(kx, ky, kw, 1, 0x2A3040);
+            // Main digit
+            let lw = labels[i].len() as u32 * 8;
+            fb.draw_str(kx + kw.saturating_sub(lw) / 2, ky + kh / 2 - 7, labels[i], key_fg, key_bg);
+            // Sub-label
+            if !sub[i].is_empty() {
+                let sw = sub[i].len() as u32 * 6;
+                fb.draw_str(kx + kw.saturating_sub(sw) / 2, ky + kh / 2 + 3, sub[i], 0x6B7280, key_bg);
+            }
+            let _ = keys[i];
+        }
+
+        // Action row: backspace, call/end, mute
+        let action_y = grid_y + key_rows * (kh + pad) + pad;
+        // Backspace
+        let bw = kw; let bx = x + pad;
+        fb.fill_rect(bx, action_y, bw, kh, 0x1A1F2A);
+        fb.draw_str(bx + bw / 2 - 8, action_y + kh / 2 - 4, "<-", 0x9CA3AF, 0x1A1F2A);
+        // Call / End
+        let cw = kw; let cx2 = x + pad + kw + pad;
+        let (call_bg, call_label) = if self.call_state == CallState::Idle || self.call_state == CallState::Ended {
+            (accent, "CALL")
+        } else {
+            (danger, "END")
+        };
+        fb.fill_rect(cx2, action_y, cw, kh, call_bg);
+        let lw = 4 * 8;
+        fb.draw_str(cx2 + cw.saturating_sub(lw) / 2, action_y + kh / 2 - 4, call_label, 0xF0F0F0, call_bg);
+        // Mute
+        let mx = x + pad + (kw + pad) * 2;
+        let mute_bg = if self.muted { 0x6B2020u32 } else { 0x1A1F2Au32 };
+        fb.fill_rect(mx, action_y, kw, kh, mute_bg);
+        fb.draw_str(mx + kw / 2 - 12, action_y + kh / 2 - 4, if self.muted { "UNMUTE" } else { "MUTE" }, 0x9CA3AF, mute_bg);
+    }
+
+    fn draw_recent(&self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, _h: u32) {
+        fb.draw_str(x + 8, y + 8, "Recent Calls", 0xF0F0F0, 0x0D1117);
+        if self.recent_count == 0 {
+            fb.draw_str(x + 8, y + 32, "No calls yet.", 0x4A5568, 0x0D1117);
+            return;
+        }
+        let count = self.recent_count.min(8);
+        for i in 0..count {
+            let slot = (self.recent_count - 1 - i) % 8;
+            let num = core::str::from_utf8(&self.recent[slot][..self.recent_len[slot]]).unwrap_or("?");
+            let ry = y + 32 + i as u32 * 28;
+            fb.fill_rect(x + 4, ry, w - 8, 24, 0x161B22);
+            fb.draw_str(x + 10, ry + 8, num, 0xCDD6E0, 0x161B22);
+            fb.draw_str(x + w - 54, ry + 8, "Recall", 0x4A9EFF, 0x161B22);
+        }
+    }
+
+    fn draw_account(&mut self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, _h: u32) {
+        let bg = 0x0D1117u32;
+        // ── Phone number verification section ────────────────────────────────
+        fb.draw_str(x + 8, y + 8, "Link Phone Number", 0xF0F0F0, bg);
+        fb.draw_str(x + 8, y + 22, "Verify your number via SMS to make real calls.", 0x6B7280, bg);
+
+        match self.verify_state {
+            VerifyState::Idle => {
+                fb.fill_rect(x + 8, y + 42, w - 16, 24, 0x161B22);
+                fb.draw_str(x + 12, y + 50, "+  Enter your phone number", 0x4A5568, 0x161B22);
+                fb.fill_rect(x + 8, y + 74, 120, 22, 0x1A3A2A);
+                fb.draw_str(x + 18, y + 80, "Send Code", 0x22C55E, 0x1A3A2A);
+            }
+            VerifyState::EnterNumber => {
+                fb.fill_rect(x + 8, y + 42, w - 16, 24, 0x1C2A1C);
+                fb.fill_rect(x + 8, y + 42, w - 16, 1, 0x22C55E);
+                let num = core::str::from_utf8(&self.verify_number[..self.verify_number_len]).unwrap_or("");
+                fb.draw_str(x + 12, y + 50, "+ ", 0x22C55E, 0x1C2A1C);
+                fb.draw_str(x + 26, y + 50, num, 0xF0F0F0, 0x1C2A1C);
+                // Cursor
+                fb.fill_rect(x + 26 + self.verify_number_len as u32 * 8, y + 50, 2, 12, 0x22C55E);
+                fb.fill_rect(x + 8, y + 74, 120, 22, 0x1A3A2A);
+                fb.draw_str(x + 18, y + 80, "Send Code ->", 0x22C55E, 0x1A3A2A);
+                fb.draw_str(x + 8, y + 102, "Enter full number incl. country code, e.g. +436...", 0x4A5568, bg);
+            }
+            VerifyState::WaitingCode => {
+                fb.draw_str(x + 8, y + 42, "Sending SMS…", 0xF5C451, bg);
+            }
+            VerifyState::EnterCode => {
+                fb.draw_str(x + 8, y + 42, "Code sent! Enter the 6-digit code:", 0x22C55E, bg);
+                fb.fill_rect(x + 8, y + 58, 200, 28, 0x1C2A1C);
+                fb.fill_rect(x + 8, y + 58, 200, 1, 0x4A9EFF);
+                let code = core::str::from_utf8(&self.verify_code_input[..self.verify_code_len]).unwrap_or("");
+                fb.draw_str(x + 14, y + 68, code, 0xF0F0F0, 0x1C2A1C);
+                fb.fill_rect(x + 14 + self.verify_code_len as u32 * 9, y + 68, 2, 14, 0x4A9EFF);
+                fb.fill_rect(x + 8, y + 94, 100, 22, 0x1A3040);
+                fb.draw_str(x + 18, y + 100, "Verify ->", 0x4A9EFF, 0x1A3040);
+            }
+            VerifyState::Verified => {
+                fb.draw_str(x + 8, y + 42, "Phone number verified!", 0x22C55E, bg);
+                let num = core::str::from_utf8(&self.verify_number[..self.verify_number_len]).unwrap_or("?");
+                fb.draw_str(x + 8, y + 58, num, 0xF0F0F0, bg);
+            }
+            VerifyState::Failed => {
+                fb.draw_str(x + 8, y + 42, "Verification failed. Wrong code?", 0xEF4444, bg);
+                fb.fill_rect(x + 8, y + 62, 80, 22, 0x3A1A1A);
+                fb.draw_str(x + 18, y + 68, "Try again", 0xEF4444, 0x3A1A1A);
+            }
+        }
+
+        // ── SIP configuration ────────────────────────────────────────────────
+        let sip_y = y + 140;
+        fb.fill_rect(x, sip_y - 8, w, 1, 0x252A35);
+        fb.draw_str(x + 8, sip_y, "SIP Account", 0xF0F0F0, bg);
+        let reg_col = if self.sip_registered { 0x22C55Eu32 } else { 0x6B7280 };
+        fb.draw_str(x + w - 90, sip_y, if self.sip_registered { "Registered" } else { "Unregistered" }, reg_col, bg);
+
+        fb.draw_str(x + 8, sip_y + 20, "Server:", 0x6B7280, bg);
+        fb.fill_rect(x + 8, sip_y + 32, w - 16, 20, 0x161B22);
+        let srv = core::str::from_utf8(&self.sip_server[..self.sip_server_len]).unwrap_or("");
+        let srv_col = if self.focus_field == 1 { 0xF0F0F0u32 } else { 0x8A9AB0 };
+        fb.draw_str(x + 12, sip_y + 38, srv, srv_col, 0x161B22);
+
+        fb.draw_str(x + 8, sip_y + 58, "Username:", 0x6B7280, bg);
+        fb.fill_rect(x + 8, sip_y + 70, w - 16, 20, 0x161B22);
+        let user = core::str::from_utf8(&self.sip_user[..self.sip_user_len]).unwrap_or("");
+        let user_col = if self.focus_field == 2 { 0xF0F0F0u32 } else { 0x8A9AB0 };
+        fb.draw_str(x + 12, sip_y + 76, user, user_col, 0x161B22);
+
+        fb.fill_rect(x + 8, sip_y + 100, 100, 22, 0x1A3040);
+        fb.draw_str(x + 18, sip_y + 106, "Register", 0x4A9EFF, 0x1A3040);
+    }
+}
+
+fn fmt_duration<'a>(buf: &'a mut [u8; 24], mins: u64, secs: u64) -> &'a str {
+    buf[0] = b'0' + (mins / 10) as u8;
+    buf[1] = b'0' + (mins % 10) as u8;
+    buf[2] = b':';
+    buf[3] = b'0' + (secs / 10) as u8;
+    buf[4] = b'0' + (secs % 10) as u8;
+    core::str::from_utf8(&buf[..5]).unwrap_or("00:00")
+}
+
+impl App for RustyPhone {
+    fn tick(&mut self, ticks: u64) -> bool {
+        if ticks.wrapping_sub(self.last_tick) < 100 { return false; }
+        self.last_tick = ticks;
+        // Advance call state machine (simulated: Dialing→Ringing after 1s, Ringing→Connected after 3s).
+        match self.call_state {
+            CallState::Dialing => {
+                if ticks.wrapping_sub(self.call_start) > 100 {
+                    self.call_state = CallState::Ringing;
+                    self.dirty = true;
+                }
+            }
+            CallState::Ringing => {
+                if ticks.wrapping_sub(self.call_start) > 350 {
+                    self.call_state = CallState::Connected;
+                    self.call_start = ticks;
+                    self.dirty = true;
+                }
+            }
+            CallState::Connected => {
+                let new_secs = ticks.wrapping_sub(self.call_start) / 100;
+                if new_secs != self.call_secs {
+                    self.call_secs = new_secs;
+                    self.dirty = true;
+                }
+            }
+            _ => {}
+        }
+        self.dirty
+    }
+
+    fn render(&mut self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, h: u32) {
+        let bg = 0x0D1117u32;
+        fb.fill_rect(x, y, w, h, bg);
+
+        // Portrait mode: window width ≤ 320 or when height >> width.
+        let portrait = w <= 340;
+
+        // Tab bar (3 tabs).
+        let tab_h = 28u32;
+        fb.fill_rect(x, y, w, tab_h, 0x161B22);
+        let tab_labels = ["Dialer", "Recent", "Account"];
+        let tab_w = w / 3;
+        for (i, label) in tab_labels.iter().enumerate() {
+            let tx = x + i as u32 * tab_w;
+            let active = match (i, self.tab) {
+                (0, PhoneTab::Dialer) | (1, PhoneTab::Recent) | (2, PhoneTab::Account) => true,
+                _ => false,
+            };
+            let tc = if active { 0x22C55Eu32 } else { 0x4A5568 };
+            if active { fb.fill_rect(tx, y + tab_h - 2, tab_w, 2, 0x22C55E); }
+            let lw = label.len() as u32 * 7;
+            fb.draw_str(tx + tab_w.saturating_sub(lw) / 2, y + 10, label, tc, 0x161B22);
+        }
+
+        let content_y = y + tab_h + 2;
+        let content_h = h.saturating_sub(tab_h + 2);
+
+        match self.tab {
+            PhoneTab::Dialer  => self.draw_dialer(fb, x, content_y, w, content_h, portrait),
+            PhoneTab::Recent  => self.draw_recent(fb, x, content_y, w, content_h),
+            PhoneTab::Account => self.draw_account(fb, x, content_y, w, content_h),
+        }
+
+        self.dirty = false;
+    }
+
+    fn on_key(&mut self, key: u8) {
+        use crate::ansi::Key as AK;
+        match self.ansi.feed(key) {
+            AK::Char(0x1B) => { self.wants_close = true; }
+            AK::Char(b'\t') => {
+                self.tab = match self.tab {
+                    PhoneTab::Dialer  => PhoneTab::Recent,
+                    PhoneTab::Recent  => PhoneTab::Account,
+                    PhoneTab::Account => PhoneTab::Dialer,
+                };
+                self.dirty = true;
+            }
+            AK::Char(b'\r') | AK::Char(b'\n') => {
+                match self.tab {
+                    PhoneTab::Dialer => {
+                        if self.call_state == CallState::Idle || self.call_state == CallState::Ended {
+                            self.dial(self.last_tick);
+                        } else {
+                            self.end_call();
+                        }
+                    }
+                    PhoneTab::Account => {
+                        match self.verify_state {
+                            VerifyState::Idle | VerifyState::Failed => {
+                                self.verify_state = VerifyState::EnterNumber;
+                                self.verify_number_len = 0;
+                            }
+                            VerifyState::EnterNumber => {
+                                if self.verify_number_len > 4 {
+                                    // Generate code and (conceptually) trigger SMS via Twilio API.
+                                    let code = Self::gen_code(self.last_tick);
+                                    self.verify_code_sent = code;
+                                    self.verify_state = VerifyState::EnterCode;
+                                    // NOTE: on real hardware with internet, call sys_https_post here
+                                    // to send the code via Twilio SMS API to verify_number.
+                                }
+                            }
+                            VerifyState::EnterCode => {
+                                // Compare entered code to sent code.
+                                if self.verify_code_len == 6
+                                    && &self.verify_code_input[..6] == &self.verify_code_sent[..] {
+                                    self.verify_state = VerifyState::Verified;
+                                    self.sip_registered = true;
+                                } else {
+                                    self.verify_state = VerifyState::Failed;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    _ => {}
+                }
+                self.dirty = true;
+            }
+            AK::Char(0x08) => { // Backspace
+                match self.tab {
+                    PhoneTab::Dialer => {
+                        if self.number_len > 0 { self.number_len -= 1; self.dirty = true; }
+                    }
+                    PhoneTab::Account => {
+                        match self.verify_state {
+                            VerifyState::EnterNumber => {
+                                if self.verify_number_len > 0 { self.verify_number_len -= 1; }
+                            }
+                            VerifyState::EnterCode => {
+                                if self.verify_code_len > 0 { self.verify_code_len -= 1; }
+                            }
+                            _ => {}
+                        }
+                        self.dirty = true;
+                    }
+                    _ => {}
+                }
+            }
+            AK::Char(ch @ b'0'..=b'9') | AK::Char(ch @ b'*') | AK::Char(ch @ b'#') | AK::Char(ch @ b'+') => {
+                match self.tab {
+                    PhoneTab::Dialer => { self.push_digit(ch); }
+                    PhoneTab::Account => {
+                        match self.verify_state {
+                            VerifyState::EnterNumber if ch != b'*' && ch != b'#' => {
+                                if self.verify_number_len < 15 {
+                                    self.verify_number[self.verify_number_len] = ch;
+                                    self.verify_number_len += 1;
+                                    self.dirty = true;
+                                }
+                            }
+                            VerifyState::EnterCode if ch >= b'0' && ch <= b'9' => {
+                                if self.verify_code_len < 6 {
+                                    self.verify_code_input[self.verify_code_len] = ch;
+                                    self.verify_code_len += 1;
+                                    self.dirty = true;
+                                }
+                            }
+                            _ => { self.push_digit(ch); }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            AK::Char(b'c') | AK::Char(b'C') => {
+                if self.tab == PhoneTab::Dialer { self.number_len = 0; self.dirty = true; }
+            }
+            _ => {}
+        }
+    }
+
+    fn wants_close(&self) -> bool { self.wants_close }
+    fn title(&self) -> &str { "RustyPhone" }
+}
+
 fn fmt_u64_into<'a>(buf: &'a mut [u8; 24], mut n: u64) -> &'a str {
     if n == 0 { buf[0] = b'0'; return core::str::from_utf8(&buf[..1]).unwrap_or("0"); }
     let mut i = 0;

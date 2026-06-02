@@ -6,26 +6,26 @@ pub const TITLEBAR_H: i32 = 34;
 pub const WINDOW_W:   i32 = term::TERM_PIX_W as i32 + 2;
 pub const WINDOW_H:   i32 = term::TERM_PIX_H as i32 + 2 + TITLEBAR_H;
 
-// Window styling — darker graphite, brushed-metal panels, and restrained teal /
-// amber accents so the desktop reads more like a premium automotive UI.
-const SHADOW:      u32 = 0x050708;  // Deep shadow
-const BORDER_DIM:  u32 = 0x242A2D;  // Inactive window border
-const BORDER_ACT:  u32 = 0x5C6B6B;  // Active window border
-const TITLE_DIM:   u32 = 0x1F252A;  // Inactive titlebar
-const TITLE_ACT:   u32 = 0x2B333A;  // Active titlebar
-const TITLE_LINE:  u32 = 0x3A444A;  // Separator hairline
-const CONTENT_BG:  u32 = 0x171C20;  // Content background
-const TXT_DIM:     u32 = 0xA4ADB2;  // Secondary label
-const TXT_ACT:     u32 = 0xF0F3F5;  // Primary text
-const BTN_CLOSE:   u32 = 0xE66D73;  // Red (--neg)
-const BTN_MIN:     u32 = 0xD8B05F;  // Amber
-const BTN_MAX:     u32 = 0x63C7AD;  // Teal (--pos)
-// Shared accent + ternary triad (mockup tokens) for the rest of the desktop.
-pub const ACCENT_GREEN: u32 = 0x63C7AD;  // --green / --pos
-pub const ACCENT_CREAM: u32 = 0xE8D39B;  // --cream / warm gold
-pub const TRIT_NEG:     u32 = 0xE66D73;  // --neg
-pub const TRIT_ZERO:    u32 = 0x909AA0;  // --zero
-pub const TRIT_POS:     u32 = 0x63C7AD;  // --pos
+// Window styling — deep azure/midnight theme. Translucent navy panels,
+// sky-blue active borders, rose/pink close button, turquoise max button.
+const SHADOW:      u32 = 0x030508;  // Deep midnight shadow
+const BORDER_DIM:  u32 = 0x1A2235;  // Inactive window border
+const BORDER_ACT:  u32 = 0x38BDF8;  // Active window border — azure
+const TITLE_DIM:   u32 = 0x111827;  // Inactive titlebar (deep navy)
+const TITLE_ACT:   u32 = 0x1E2D45;  // Active titlebar (navy glass)
+const TITLE_LINE:  u32 = 0x2A3D58;  // Separator hairline
+const CONTENT_BG:  u32 = 0x0D1420;  // Content background
+const TXT_DIM:     u32 = 0x7A8CAA;  // Secondary label (blue-grey)
+const TXT_ACT:     u32 = 0xE2E8F0;  // Primary text (cool white)
+const BTN_CLOSE:   u32 = 0xFB7185;  // Rose (--neg)
+const BTN_MIN:     u32 = 0xFBBF24;  // Amber
+const BTN_MAX:     u32 = 0x2DD4BF;  // Cyan-turquoise (--pos)
+// Shared accent + ternary triad (deep azure theme tokens).
+pub const ACCENT_GREEN: u32 = 0x38BDF8;  // --primary / azure
+pub const ACCENT_CREAM: u32 = 0xF472B6;  // --pink / rose accent
+pub const TRIT_NEG:     u32 = 0xFB7185;  // --neg  (rose)
+pub const TRIT_ZERO:    u32 = 0x64748B;  // --zero (slate)
+pub const TRIT_POS:     u32 = 0x38BDF8;  // --pos  (azure)
 
 // Ubuntu/Mint-style flat rectangular window buttons on the RIGHT side.
 // Standard theme. Toggle via Settings → Window buttons → Classic (macOS-style).

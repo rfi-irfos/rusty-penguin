@@ -267,25 +267,26 @@ fn serial_write_u64(mut n: u64) {
 }
 
 // ---- Palette ────────────────────────────────────────────────────────────────
-// "Rusty Penguin v2" warm-stone-green palette — from Simeon's HTML design mockup
-// (rusty-penguin-os.html). Warm dark stone, spring green, gold/cream, ternary triad.
-const BG:       u32 = 0x1B211E;  // Warm stone wall (--wall deep)
-const TOPBAR:   u32 = 0x252E2A;  // Warm panel topbar (--wall2/panel)
-const TASKBAR:  u32 = 0x1B211E;  // Dock backing (warm deep)
+// "Deep Azure" — midnight blue-black base, sky-blue primary, rose/pink accent.
+// Zabih's direction: ubuntu-style deep gradients, no more olive/stone green.
+// The stone-green palette is still available as a preset in Settings.
+const BG:       u32 = 0x0B0F19;  // Midnight blue-black
+const TOPBAR:   u32 = 0x131928;  // Deep navy panel
+const TASKBAR:  u32 = 0x0B0F19;  // Dock backing
 const TOPBAR_H: u32 = 32;        // Topbar height
-const BORDER:   u32 = 0x2A332F;  // Warm hairline / medium contrast (--panel-solid)
-const GREEN:    u32 = 0x6FE18B;  // Spring green (--green / --pos)
-const DIM:      u32 = 0xA8B0A6;  // Secondary text (--txt-dim)
-const DIMMER:   u32 = 0x2A332F;  // Match border
-const WHITE:    u32 = 0xECEDE5;  // Warm off-white (--txt)
-const AMBER:    u32 = 0xF5C451;  // Warm amber accent
-const BLUE:     u32 = 0x8CC6E5;  // Warm sky (--sky)
-const CURSOR:   u32 = 0x14171A;  // arrow fill — near-black (white halo via outline)
-const TEAL:     u32 = 0x00D4AA;  // More vibrant teal
-const ACCENT_CREAM: u32 = 0xECDAA7;  // dingir gold (--cream)
-const TRIT_NEG:  u32 = 0xEF7575;  // ternary -1
-const TRIT_ZERO: u32 = 0x909A92;  // ternary 0
-const TRIT_POS:  u32 = 0x6FE18B;  // ternary +1
+const BORDER:   u32 = 0x1E2A40;  // Deep navy hairline
+const GREEN:    u32 = 0x38BDF8;  // Azure / sky blue (primary accent)
+const DIM:      u32 = 0x8B9EC4;  // Blue-grey secondary text
+const DIMMER:   u32 = 0x1E2A40;  // Match border
+const WHITE:    u32 = 0xE2E8F0;  // Cool off-white
+const AMBER:    u32 = 0xFBBF24;  // Warm gold accent
+const BLUE:     u32 = 0x818CF8;  // Indigo/violet (ternary bus)
+const CURSOR:   u32 = 0x060912;  // arrow fill — near-black
+const TEAL:     u32 = 0x2DD4BF;  // Cyan/turquoise
+const ACCENT_CREAM: u32 = 0xF472B6;  // Rose/pink — dingir star + highlights
+const TRIT_NEG:  u32 = 0xFB7185;  // ternary -1 (rose)
+const TRIT_ZERO: u32 = 0x64748B;  // ternary 0  (slate)
+const TRIT_POS:  u32 = 0x38BDF8;  // ternary +1 (azure)
 
 // ── Bottom panel layout (Simeon's v2 mockup form: a single floating bottom dock
 // — Menu · favourites · tasks · tray — and NO top bar). ─────────────────────────
@@ -295,9 +296,9 @@ const PANEL_H:      i32 = 54;   // panel height
 const MENU_BTN_W:   i32 = 88;   // "Menu" button width
 const FAV_TILE:     i32 = 40;   // favourite icon tile
 const FAV_GAP:      i32 = 8;    // gap between favourites
-const PANEL_SOLID:  u32 = 0x262D33;  // dock body: graphite glass
-const DOCK_ALPHA:   u32 = 115;       // semi-transparent — wallpaper shows through, panel reads clearly
-const PANEL_EDGE:   u32 = 0x5E6B72;  // panel hairline / top sheen
+const PANEL_SOLID:  u32 = 0x0E1828;  // dock body: deep navy glass
+const DOCK_ALPHA:   u32 = 130;       // semi-transparent
+const PANEL_EDGE:   u32 = 0x2A4A6A;  // panel hairline / azure sheen
 const PANEL_R:      i32 = 16;        // panel corner radius
 
 fn panel_top(h: u32) -> i32 { h as i32 - PANEL_BOTTOM - PANEL_H }
@@ -635,29 +636,37 @@ fn vgrad3(fb: &mut Framebuffer, y0: u32, y1: u32, top: (u32,u32,u32), mid: (u32,
     }
 }
 
-/// v0 — Stone Green (default): warm midnight wall, navy glows, a faint dingir
-/// constellation, and a corner vignette. The signature desktop.
+/// Default background — Deep Azure: midnight blue base with azure/teal nebula
+/// glows, a rose dingir star, and deep-space vignette. Ubuntu energy.
 fn draw_bg_stone(fb: &mut Framebuffer) {
     let w = fb.width; let h = fb.height; let wi = w as i32; let hi = h as i32;
+    // Vertical gradient: deep midnight blue top → near-black bottom.
     let mut y = 0u32;
     while y < h {
-        let t = y as u64 * 256 / h as u64;
-        fb.fill_rect(0, y, w, 1, rgb(
-            0x0Eu64.saturating_sub(0x08 * t / 255) as u32,
-            0x1Bu64.saturating_sub(0x12 * t / 255) as u32,
-            0x2Eu64.saturating_sub(0x1E * t / 255) as u32));
+        let t = y as u64 * 255 / h as u64;
+        let r = (0x08u64 + t * 2 / 255) as u32;
+        let g = (0x0Cu64 + t * 3 / 255) as u32;
+        let b = (0x1Eu64.saturating_sub(t * 8 / 255)) as u32 + 3;
+        fb.fill_rect(0, y, w, 1, rgb(r, g, b));
         y += 1;
     }
-    fb.glow(wi*76/100, hi*22/100, wi*30/100, 0x1A4A6B, 60);
-    fb.glow(wi*16/100, hi*84/100, wi*26/100, 0x1A3D5E, 40);
-    fb.glow(wi/2,      hi/2,      wi*20/100, 0x152A45, 35);
-    for (sx, sy, sr) in [(wi*11/100, hi*30/100, 11), (wi*90/100, hi*82/100, 14),
-                         (wi*33/100, hi*70/100, 9), (wi*60/100, hi*12/100, 8)] {
-        fb.glow(sx, sy, sr*5, 0x24364F, 55);
-        fb.draw_star8(sx, sy, sr, 0x32486A);
+    // Large azure nebula bloom top-right (ubuntu-style background glow).
+    fb.glow(wi*78/100, hi*18/100, wi*32/100, 0x0A2A5A, 70);
+    fb.glow(wi*78/100, hi*18/100, wi*14/100, 0x0E4080, 50);
+    // Teal/cyan bloom bottom-left.
+    fb.glow(wi*12/100, hi*82/100, wi*28/100, 0x0A2D3A, 60);
+    fb.glow(wi*12/100, hi*82/100, wi*10/100, 0x0A3A3A, 40);
+    // Rose/pink subtle bloom centre-bottom (the accent colour).
+    fb.glow(wi*52/100, hi*88/100, wi*18/100, 0x3A0A1A, 45);
+    // Dingir constellation stars — now with azure tint.
+    for (sx, sy, sr) in [(wi*11/100, hi*28/100, 10), (wi*88/100, hi*80/100, 13),
+                         (wi*35/100, hi*68/100, 8), (wi*62/100, hi*11/100, 9)] {
+        fb.glow(sx, sy, sr*5, 0x0E2A4A, 55);
+        fb.draw_star8(sx, sy, sr, 0x1A4A7A);
     }
-    let vr = wi*58/100;
-    for (vx, vy) in [(0,0),(wi,0),(0,hi),(wi,hi)] { fb.glow(vx, vy, vr, 0x06090D, 60); }
+    // Corner vignette for depth.
+    let vr = wi * 55 / 100;
+    for (vx, vy) in [(0,0),(wi,0),(0,hi),(wi,hi)] { fb.glow(vx, vy, vr, 0x03050C, 65); }
 }
 
 /// Scatter stars on a coarse grid using hash2 (used by several night scenes).
@@ -1614,6 +1623,7 @@ const MENU_ITEMS: &[MenuItem] = &[
     MenuItem { label: "Clock",          desc: "Time, stopwatch, timer, world",  color: 0x6FE18B, icon: icons::IC_CLOCK, kind: MenuLaunch::App(15) },
     MenuItem { label: "Task Manager",   desc: "Processes, CPU & memory",        color: 0x8CC6E5, icon: icons::IC_TASKS, kind: MenuLaunch::App(16) },
     MenuItem { label: "Notes",          desc: "Quick notes — Ctrl+S to save",   color: 0xF5C451, icon: icons::IC_EDIT,  kind: MenuLaunch::App(17) },
+    MenuItem { label: "RustyPhone",    desc: "SIP dialer + phone verification", color: 0x22C55E, icon: icons::IC_TERM,  kind: MenuLaunch::App(18) },
     // games start at index 14
     MenuItem { label: "Snake",        desc: "Classic arcade",             color: 0x4ADE80, icon: icons::IC_SNAKE,    kind: MenuLaunch::App(6) },
     MenuItem { label: "Minesweeper",  desc: "Find the mines",             color: 0xFCD34D, icon: icons::IC_MINES,    kind: MenuLaunch::App(7) },
@@ -2115,6 +2125,24 @@ fn open_process_monitor(w: i32, h: i32, n: usize) -> Option<TermWin> {
                 win_dirty: true,
                 initial_cmd: None,
             })
+        }
+        Err(_) => None,
+    }
+}
+
+fn open_rusty_phone(w: i32, h: i32, n: usize) -> Option<TermWin> {
+    match term::Terminal::spawn() {
+        Ok(t) => {
+            let phone = alloc::boxed::Box::new(app::RustyPhone::new());
+            let off = n as i32 * 20;
+            // Default to portrait-ish size — shows full dialer.
+            let pw = 340.min(w - 90);
+            let ph = 580.min(h - 28 - TOPBAR_H as i32);
+            let wx = ((w - pw) / 2 + off).max(75).min(w - pw);
+            let wy = ((h - ph - 28) / 2 + off).max(TOPBAR_H as i32).min(h - ph - 28);
+            let mut win = wm::Window::new(wx, wy, "RustyPhone");
+            win.w = pw; win.h = ph; win.restore_w = pw; win.restore_h = ph;
+            Some(TermWin { win, term: t, editor: None, app: Some(phone), win_dirty: true, initial_cmd: None })
         }
         Err(_) => None,
     }
@@ -2848,6 +2876,7 @@ pub extern "C" fn _start() -> ! {
                             MenuLaunch::App(15)  => open_system_clock(w, h, wins.len()),
                             MenuLaunch::App(16)  => open_process_monitor(w, h, wins.len()),
                             MenuLaunch::App(17)  => open_notes(w, h, wins.len()),
+                            MenuLaunch::App(18)  => open_rusty_phone(w, h, wins.len()),
                             MenuLaunch::App(_)   => None,
                         };
                         if let Some(mut tw) = opened {

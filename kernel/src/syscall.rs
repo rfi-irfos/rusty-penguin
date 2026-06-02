@@ -709,6 +709,25 @@ pub extern "C" fn syscall_handler(nr: u64, arg1: u64, arg2: u64, arg3: u64) -> u
             }
             u64::MAX
         }
+        45 => {
+            // sys_https_post(desc_ptr, desc_len, out_ptr|(out_cap<<32))
+            // desc is: host\0path\0content-type\0body  (null-separated sections)
+            // Returns bytes written into out, or 0 on failure.
+            let desc_ptr = arg1 as *const u8;
+            let desc_len = (arg2 as usize).min(4096);
+            let out_ptr  = (arg3 & 0xFFFF_FFFF) as *mut u8;
+            let out_cap  = ((arg3 >> 32) as usize).min(65536);
+            if desc_ptr.is_null() || desc_len == 0 || out_ptr.is_null() || out_cap == 0 { return 0; }
+            let desc = unsafe { core::slice::from_raw_parts(desc_ptr, desc_len) };
+            // Split on NUL into [host, path, content-type, body].
+            let mut parts = desc.splitn(4, |&b| b == 0);
+            let host  = match parts.next().and_then(|s| core::str::from_utf8(s).ok()) { Some(s) => s, None => return 0 };
+            let path  = parts.next().and_then(|s| core::str::from_utf8(s).ok()).unwrap_or("/");
+            let ctype = parts.next().and_then(|s| core::str::from_utf8(s).ok()).unwrap_or("application/x-www-form-urlencoded");
+            let body  = parts.next().unwrap_or(b"");
+            let out   = unsafe { core::slice::from_raw_parts_mut(out_ptr, out_cap) };
+            crate::tls::https_post(host, path, ctype, body, out).unwrap_or(0) as u64
+        }
         44 => {
             // sys_ls(buf_ptr, buf_len) → bytes written
             // Fills buf with newline-separated VFS entry names from the ramfs.

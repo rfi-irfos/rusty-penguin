@@ -292,7 +292,9 @@ fn verdict_str(v: crate::x509::Verdict) -> &'static str {
 
 /// Fetch `https://host{path}` and write the raw HTTP response (headers+body,
 /// truncated to `out`) into `out`. Returns bytes written, or None on failure.
-pub fn https_get(host: &str, path: &str, out: &mut [u8]) -> Option<usize> {
+/// Internal: perform a TLS 1.3 HTTPS request with any method + optional body.
+fn https_request(host: &str, method: &str, path: &str,
+                 content_type: &str, body: &[u8], out: &mut [u8]) -> Option<usize> {
     let ip = crate::net::resolve_host(host)?;
     let conn = TcpConn::connect(ip, 443)?;
     crate::serial::write_str("  [tls] TCP 443 connected, starting handshake\n");
@@ -448,11 +450,25 @@ pub fn https_get(host: &str, path: &str, out: &mut [u8]) -> Option<usize> {
     // 6. Send the HTTP request under the client application key.
     let mut req: Vec<u8> = Vec::new();
     let safe_path = if path.is_empty() { "/" } else { path };
-    req.extend_from_slice(b"GET ");
+    req.extend_from_slice(method.as_bytes());
+    req.push(b' ');
     req.extend_from_slice(safe_path.as_bytes());
     req.extend_from_slice(b" HTTP/1.1\r\nHost: ");
     req.extend_from_slice(host.as_bytes());
-    req.extend_from_slice(b"\r\nUser-Agent: RustyPenguin/2.1\r\nAccept: */*\r\nConnection: close\r\n\r\n");
+    req.extend_from_slice(b"\r\nUser-Agent: RustyPenguin/2.7\r\nAccept: */*\r\nConnection: close\r\n");
+    if !body.is_empty() {
+        req.extend_from_slice(b"Content-Type: ");
+        req.extend_from_slice(content_type.as_bytes());
+        req.extend_from_slice(b"\r\nContent-Length: ");
+        // Write body length as ASCII digits.
+        let mut n = body.len();
+        let mut digits = [0u8; 10]; let mut di = 0;
+        loop { digits[di] = b'0' + (n % 10) as u8; n /= 10; di += 1; if n == 0 { break; } }
+        for k in (0..di).rev() { req.push(digits[k]); }
+        req.extend_from_slice(b"\r\n");
+    }
+    req.extend_from_slice(b"\r\n");
+    req.extend_from_slice(body);
     let req_rec = seal_record(&c_ap.key, &c_ap.iv, 0, &req, CT_APPLICATION_DATA);
     if !s.send_raw(&req_rec) { return None; }
     crate::serial::write_str("  [tls] HTTPS request sent; reading response\n");
@@ -485,10 +501,18 @@ pub fn https_get(host: &str, path: &str, out: &mut [u8]) -> Option<usize> {
     }
     s.conn.close();
     if written > 0 {
-        crate::serial::write_str("  [tls] response ");
-        crate::serial::write_str("received\n");
+        crate::serial::write_str("  [tls] response received\n");
         Some(written)
     } else {
         None
     }
+}
+
+pub fn https_get(host: &str, path: &str, out: &mut [u8]) -> Option<usize> {
+    https_request(host, "GET", path, "", b"", out)
+}
+
+/// POST `body` as `content_type` to `https://host{path}`.
+pub fn https_post(host: &str, path: &str, content_type: &str, body: &[u8], out: &mut [u8]) -> Option<usize> {
+    https_request(host, "POST", path, content_type, body, out)
 }
