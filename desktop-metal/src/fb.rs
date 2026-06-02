@@ -408,6 +408,12 @@ impl Framebuffer {
     // over the framebuffer — the mockup's crisp line-art look, no SVG runtime.
     pub fn draw_icon(&mut self, x: i32, y: i32, id: usize, color: u32) {
         if id >= crate::icons::ICON_OFF.len() { return; }
+        // Extended icons stored in their own arrays to avoid growing the main atlas.
+        let ext: Option<&[u8]> = match id {
+            crate::icons::IC_PHONE => Some(&crate::icons::PHONE_ICON),
+            crate::icons::IC_NOTES => Some(&crate::icons::NOTES_ICON),
+            _ => None,
+        };
         let off = crate::icons::ICON_OFF[id] as usize;
         let px = crate::icons::ICON_PX as i32;
         let cr = (color >> 16) & 0xFF; let cg = (color >> 8) & 0xFF; let cb = color & 0xFF;
@@ -415,7 +421,12 @@ impl Framebuffer {
             let py = y + row;
             if py < 0 || py as u32 >= self.height { continue; }
             for col in 0..px {
-                let a = crate::icons::ICON_COV[off + (row * px + col) as usize] as u32;
+                let idx = (row * px + col) as usize;
+                let a = if let Some(ext_cov) = ext {
+                    ext_cov[idx] as u32
+                } else {
+                    crate::icons::ICON_COV[off + idx] as u32
+                };
                 if a == 0 { continue; }
                 let pxn = x + col;
                 if pxn < 0 || pxn as u32 >= self.width { continue; }

@@ -194,6 +194,39 @@ fn sys_app_surface_dims() -> u64 {
     n
 }
 
+/// sys_initrd_read (#29): read a file from the kernel CPIO initramfs into a
+/// caller-provided buffer. Returns bytes written or u64::MAX on failure.
+/// arg3 packs: low 32 bits = out_ptr, high 32 bits = out_len.
+fn sys_initrd_read(path: &[u8], out: &mut [u8]) -> usize {
+    let out_cap = out.len().min(0xFFFF_FFFF);
+    let packed_out = (out.as_mut_ptr() as u64) | ((out_cap as u64) << 32);
+    let n: u64;
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            inout("rax") 29u64 => n,
+            in("rdi") path.as_ptr(),
+            in("rsi") path.len(),
+            in("rdx") packed_out,
+            out("rcx") _, out("r11") _,
+            options(nostack),
+        );
+    }
+    if n == u64::MAX { 0 } else { n as usize }
+}
+
+/// Read a kernel CPIO file into a freshly heap-allocated Vec. Returns None if
+/// missing or too large.
+fn load_cpio_file(path: &str) -> Option<alloc::vec::Vec<u8>> {
+    // First pass: measure size (read into a 1-byte probe returns 0, not ideal).
+    // Instead allocate a generous cap and shrink.
+    let mut buf = alloc::vec![0u8; 256 * 1024]; // 256 KiB — enough for any icon/logo
+    let n = sys_initrd_read(path.as_bytes(), &mut buf);
+    if n == 0 { return None; }
+    buf.truncate(n);
+    Some(buf)
+}
+
 /// sys_wallpaper (#23): system-background index from `wallpaper=N`, or u64::MAX.
 fn sys_wallpaper() -> u64 {
     let n: u64;
@@ -317,7 +350,7 @@ fn menu_btn_rect(h: u32) -> (i32, i32, i32, i32) { (PANEL_MARGIN + 8, panel_top(
 // DESKTOP_ICONS so the existing click-handler match (keyed on that index) is
 // unchanged. Keeping the dock to 5 also avoids the 10-icon overflow regression.
 const N_FAV: usize = 7;
-const FAV_IDX: [usize; N_FAV] = [0, 1, 10, 2, 3, 6, 9]; // Term, Files, Web, Edit, Calc, TIS, Doom
+const FAV_IDX: [usize; N_FAV] = [0, 1, 10, 2, 11, 12, 9]; // Term, Files, Web, Edit, Phone, Notes, Doom
 
 // favourites_row: CSS FlexRow for the icon strip inside the dock.
 // Left edge starts after Menu button + separator gap.
@@ -586,11 +619,12 @@ fn parse_ppm_dims(data: &[u8]) -> Option<(usize, usize, usize)> {
     Some((nums[0], nums[1], i))
 }
 
-/// Render a PPM image from VFS centered at (cx, cy), scaled to fit in `size`×`size`.
-/// Pixels close to the OS background color are skipped (transparent).
+/// Render a PPM image from the kernel CPIO centered at (cx, cy), scaled to `size`×`size`.
+/// Pixels near the OS bg color (#0B0F19) are treated as transparent.
 /// Returns true if the image was found and rendered.
 fn draw_ppm_icon_centered(fb: &mut Framebuffer, path: &str, cx: i32, cy: i32, size: u32) -> bool {
-    let data = match vfs::vfs().read(path) { Some(d) => d, None => return false };
+    let owned = match load_cpio_file(path) { Some(v) => v, None => return false };
+    let data: &[u8] = &owned;
     let (iw, ih, off) = match parse_ppm_dims(data) { Some(v) => v, None => return false };
     if iw == 0 || ih == 0 || off + iw * ih * 3 > data.len() { return false; }
     let sx = cx - size as i32 / 2;
@@ -610,10 +644,10 @@ fn draw_ppm_icon_centered(fb: &mut Framebuffer, path: &str, cx: i32, cy: i32, si
     true
 }
 
-/// Render a PPM image from VFS at (x, y) clipped to `size`×`size`, very lightly
-/// blended over whatever is already on the framebuffer (ghost/watermark effect).
+/// Render a PPM image from the kernel CPIO at (x, y) as a ghost watermark (~20% blend).
 fn draw_ppm_watermark(fb: &mut Framebuffer, path: &str, x: u32, y: u32, size: u32) {
-    let data = match vfs::vfs().read(path) { Some(d) => d, None => return };
+    let owned = match load_cpio_file(path) { Some(v) => v, None => return };
+    let data: &[u8] = &owned;
     let (iw, ih, off) = match parse_ppm_dims(data) { Some(v) => v, None => return };
     if iw == 0 || ih == 0 || off + iw * ih * 3 > data.len() { return; }
     let fw = fb.width; let fh = fb.height;
@@ -1283,6 +1317,8 @@ const DESKTOP_ICONS: &[DesktopIcon] = &[
     DesktopIcon { label: "Minesweeper", icon: icons::IC_MINES,    color: 0xFCD34D, launcher_idx: 11 },
     DesktopIcon { label: "Doom",        icon: icons::IC_DOOM,     color: 0xEF4444, launcher_idx: 12 },
     DesktopIcon { label: "Web",         icon: icons::IC_WEB,      color: 0x8CC6E5, launcher_idx: 13 }, // index 10
+    DesktopIcon { label: "RustyPhone",  icon: icons::IC_PHONE,    color: 0x22C55E, launcher_idx: 99 }, // index 11
+    DesktopIcon { label: "Notes",       icon: icons::IC_NOTES,    color: AMBER,    launcher_idx: 98 }, // index 12
 ];
 
 // Favourites are horizontal 40×40 tiles inside the bottom panel (see fav_rect).
@@ -3039,6 +3075,8 @@ pub extern "C" fn _start() -> ! {
                             8 => open_minesweeper(w, h, wins.len()),
                             9 => open_doom_raycaster(w, h, wins.len()),
                             10 => open_browser(w, h, wins.len()),
+                            11 => open_rusty_phone(w, h, wins.len()),
+                            12 => open_notes(w, h, wins.len()),
                             _ => None,
                         };
                         if let Some(mut tw) = opened {
