@@ -227,6 +227,15 @@ extern "x86-interrupt" fn irq_mouse(_f: InterruptFrame) {
 extern "x86-interrupt" fn irq_keyboard(_f: InterruptFrame) {
     let sc = unsafe { port::inb(0x60) };
 
+    // A SCHEDULED Linux app (windowed DOOM) is the focused interactive window:
+    // route every raw scancode to it, regardless of which task happened to be
+    // current when this IRQ fired. is_preemptive_linux() is set by the kernel when
+    // it spawns the Linux process, so it's reliably visible here.
+    if crate::sched::is_preemptive_linux() {
+        crate::linux::push_linux_key(sc);
+        unsafe { pic::eoi(1); }
+        return;
+    }
     // Raw keyboard mode: a Linux app (fbDOOM) set KDSKBMODE=K_RAW/K_MEDIUMRAW and
     // reads raw keycodes itself. PS/2 set-1 scancodes ARE that stream (make=code,
     // break=code|0x80, E0 prefix passed through), so deliver every byte verbatim.
