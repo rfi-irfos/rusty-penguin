@@ -263,6 +263,20 @@ pub fn syscall_handler(nr: u64, _a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64
             let handle = w_a1;
             if free_handle(handle) { 0 } else { 0xC0000008 } 
         }
+        // NtReadFile
+        0x06 => {
+            serial::write_str("  [wine] NtReadFile handle=0x");
+            serial::write_hex_u32(w_a1 as u32);
+            serial::write_str("\n");
+            0 
+        }
+        // NtWriteFile
+        0x08 => {
+            serial::write_str("  [wine] NtWriteFile handle=0x");
+            serial::write_hex_u32(w_a1 as u32);
+            serial::write_str("\n");
+            0 
+        }
         // NtOpenFile
         0x33 => {
             serial::write_str("  [wine] NtOpenFile stub\n");
@@ -272,6 +286,11 @@ pub fn syscall_handler(nr: u64, _a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64
         0x55 => {
             serial::write_str("  [wine] NtCreateFile stub\n");
             alloc_handle(WinObject::File)
+        }
+        // NtCreateNamedPipeFile
+        0x5c => {
+            serial::write_str("  [wine] NtCreateNamedPipeFile stub\n");
+            alloc_handle(WinObject::Pipe)
         }
         0x2c => {
             serial::write_str("  [wine] NtTerminateProcess\n");
@@ -368,6 +387,7 @@ pub enum WinObject {
     Thread,
     Event,
     File,
+    Pipe,
 }
 
 const MAX_HANDLES: usize = 256;
