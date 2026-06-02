@@ -243,6 +243,7 @@ fn enable_sse() {
 pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
     vga::clear();
     serial::init();
+    crate::drivers::init();
     enable_sse();
 
     // Higher-half migration (docs/VMM_HIGHER_HALF.md): the kernel is now linked
