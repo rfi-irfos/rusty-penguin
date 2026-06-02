@@ -1837,8 +1837,10 @@ pub fn selftest_linuxwin() -> ! {
             None => { write_str("[lwn] surface alloc failed\n"); halt(); }
         }
     };
-    // The Linux fb app as a scheduled process (renders orange into the surface).
-    let a = spawn_linux_static_elf(app);
+    // The Linux fb app as a scheduled process (renders into the surface). Uses the
+    // dynamic loader so this works for both the static fb-test AND the real fbdoom
+    // (a dynamic PIE) — same flag, just a different binary in the initrd.
+    let a = spawn_linux_dyn_elf(app);
     if a == 0 { write_str("[lwn] linux app spawn failed\n"); halt(); }
     // Map the SAME surface (read-only) into the desktop's AS at APP_SURF_VA, and
     // publish VA + dims so the desktop composites it.

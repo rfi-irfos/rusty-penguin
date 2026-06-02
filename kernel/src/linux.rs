@@ -99,6 +99,25 @@ const LFB_BYTES: u64 = (LFB_W as u64) * (LFB_H as u64) * 4;       // 1,024,000
 const LFB_PAGES: usize = ((LFB_BYTES + 0xFFF) / 0x1000) as usize; // 250
 const LFB_VA: u64 = 0x0900_0000; // 144 MiB — between BRK_CAP (128) and MMAP_BASE (160)
 static mut LFB_PHYS: u64 = 0;     // contiguous surface base phys (0 = not yet allocated)
+static mut LFB_WR_OFF: usize = 0; // byte offset for write()-based /dev/fb0 blits (lseek)
+
+/// Copy `bytes` into the framebuffer via the write()-based path (fbdoom lseeks to
+/// an offset then write()s a whole frame). A scheduled process writes into its
+/// private surface; the enter() path writes the real hardware framebuffer.
+unsafe fn fb_write(bytes: &[u8]) {
+    let (dst, cap) = if crate::sched::is_preemptive_linux() {
+        if LFB_PHYS == 0 { return; }
+        (crate::vmm::phys_to_virt(LFB_PHYS) as *mut u8, (LFB_W * LFB_H * 4) as usize)
+    } else {
+        let base = crate::fb::base();
+        if base.is_null() { return; }
+        (base, (crate::fb::pitch() * crate::fb::height()) as usize)
+    };
+    let off = LFB_WR_OFF.min(cap);
+    let n = bytes.len().min(cap - off);
+    core::ptr::copy_nonoverlapping(bytes.as_ptr(), dst.add(off), n);
+    LFB_WR_OFF = off + n;
+}
 
 /// The scheduled Linux app's framebuffer surface: (phys base, width, height).
 /// phys==0 means none yet. The desktop maps this to composite the app's output.
@@ -147,6 +166,7 @@ pub fn reset() {
         BRK_CUR   = BRK_BASE;
         BRK_MAPPED = 0;
         LFB_PHYS  = 0;
+        LFB_WR_OFF = 0;
         MMAP_CUR  = MMAP_BASE;
         LKEYS_H   = 0;
         LKEYS_T   = 0;
@@ -307,6 +327,11 @@ pub fn syscall(nr: u64, a1: u64, a2: u64, a3: u64) -> u64 {
         3 => { if let Some(i) = fd_slot(a1) { unsafe { FDS[i].used = false; } } 0 }
         // lseek(fd, off, whence): 0=SET 1=CUR 2=END.
         8 => unsafe {
+            // /dev/fb0 seek (fbdoom seeks then write()s a frame): track the offset.
+            if a1 == DEV_FB_FD {
+                LFB_WR_OFF = match a3 { 1 => LFB_WR_OFF.wrapping_add(a2 as usize), _ => a2 as usize };
+                return LFB_WR_OFF as u64;
+            }
             if let Some(i) = fd_slot(a1) {
                 let no = match a3 {
                     0 => a2 as usize,
@@ -344,25 +369,38 @@ pub fn syscall(nr: u64, a1: u64, a2: u64, a3: u64) -> u64 {
             }
         }
         // write(fd, buf, len) → console + serial (so headless boots are captured).
+        // A SCHEDULED (windowed) app's stdout goes to SERIAL ONLY — the VGA/fb
+        // console renders onto the real screen and would clobber the desktop that
+        // is compositing this app's window.
         1 => {
             let len = (a3 as usize).min(1 << 20);
             let ptr = a2 as *const u8;
             let bytes = unsafe { core::slice::from_raw_parts(ptr, len) };
-            // vga::write_byte already mirrors to serial — don't double-emit.
-            for &b in bytes { vga::write_byte(b, vga::Color::White); }
+            if a1 == DEV_FB_FD {
+                // fbdoom blits a frame to /dev/fb0 via write() — into the surface.
+                unsafe { fb_write(bytes); }
+            } else if crate::sched::is_preemptive_linux() {
+                // windowed app stdout → serial only (the fb console would clobber the desktop)
+                for &b in bytes { serial::write_byte(b); }
+            } else {
+                // vga::write_byte already mirrors to serial — don't double-emit.
+                for &b in bytes { vga::write_byte(b, vga::Color::White); }
+            }
             len as u64
         }
         // writev(fd, iov, iovcnt) — array of {base, len}.
         20 => {
             let iov = a2 as *const u64; // pairs: [base, len]
             let cnt = (a3 as usize).min(1024);
+            let to_screen = !crate::sched::is_preemptive_linux();
             let mut total = 0u64;
             for i in 0..cnt {
                 let base = unsafe { *iov.add(i * 2) } as *const u8;
                 let len  = unsafe { *iov.add(i * 2 + 1) } as usize;
                 if len == 0 { continue; }
                 let bytes = unsafe { core::slice::from_raw_parts(base, len.min(1 << 20)) };
-                for &b in bytes { vga::write_byte(b, vga::Color::White); }
+                if to_screen { for &b in bytes { vga::write_byte(b, vga::Color::White); } }
+                else { for &b in bytes { serial::write_byte(b); } }
                 total += len as u64;
             }
             total
@@ -546,8 +584,12 @@ pub fn syscall(nr: u64, a1: u64, a2: u64, a3: u64) -> u64 {
                         let p = a3 as *mut u8;
                         if p.is_null() { return 0; }
                         core::ptr::write_bytes(p, 0, 160);
-                        let fw = crate::fb::width();
-                        let fh = crate::fb::height();
+                        // A scheduled (windowed) process renders into the private
+                        // surface, so report ITS size — the app then draws at window
+                        // resolution, not the whole screen.
+                        let sched = crate::sched::is_preemptive_linux();
+                        let fw = if sched { LFB_W } else { crate::fb::width() };
+                        let fh = if sched { LFB_H } else { crate::fb::height() };
                         (p as *mut u32).write_unaligned(fw);         // xres
                         (p.add(4)  as *mut u32).write_unaligned(fh); // yres
                         (p.add(8)  as *mut u32).write_unaligned(fw); // xres_virtual
@@ -572,15 +614,18 @@ pub fn syscall(nr: u64, a1: u64, a2: u64, a3: u64) -> u64 {
                         core::ptr::write_bytes(p, 0, 68);
                         let id = b"VESA VGA\0\0\0\0\0\0\0\0";
                         core::ptr::copy_nonoverlapping(id.as_ptr(), p, 16);
+                        let sched = crate::sched::is_preemptive_linux();
                         // smem_start at offset 16 (unsigned long = u64 on x86-64)
                         (p.add(16) as *mut u64).write_unaligned(crate::fb::base() as u64);
                         // smem_len at offset 24
-                        let fb_len = crate::fb::pitch() as u64 * crate::fb::height() as u64;
+                        let fb_len = if sched { (LFB_W * LFB_H * 4) as u64 }
+                                     else { crate::fb::pitch() as u64 * crate::fb::height() as u64 };
                         (p.add(24) as *mut u32).write_unaligned(fb_len as u32);
                         // visual=FB_VISUAL_TRUECOLOR(2) at offset 36
                         (p.add(36) as *mut u32).write_unaligned(2);
-                        // line_length at offset 48
-                        (p.add(48) as *mut u32).write_unaligned(crate::fb::pitch());
+                        // line_length at offset 48 (bytes per row)
+                        let pitch = if sched { LFB_W * 4 } else { crate::fb::pitch() };
+                        (p.add(48) as *mut u32).write_unaligned(pitch);
                         0
                     }
                     _ => 0,
