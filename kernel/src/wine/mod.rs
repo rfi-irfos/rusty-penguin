@@ -109,26 +109,40 @@ extern "C" {
     static _lx_a4: u64;
     static _lx_a5: u64;
     static _lx_a6: u64;
+    static _user_rsp: u64;
 }
 
 #[inline]
-fn extra_args() -> (u64, u64, u64) {
-    let (a4, a5, a6): (u64, u64, u64);
+fn extra_args() -> (u64, u64, u64, u64) {
+    let (a4, a5, a6, ursp): (u64, u64, u64, u64);
     unsafe {
         core::arch::asm!(
             "mov {0}, qword ptr [rip + _lx_a4]",
             "mov {1}, qword ptr [rip + _lx_a5]",
             "mov {2}, qword ptr [rip + _lx_a6]",
-            out(reg) a4, out(reg) a5, out(reg) a6,
+            "mov {3}, qword ptr [rip + _user_rsp]",
+            out(reg) a4, out(reg) a5, out(reg) a6, out(reg) ursp,
             options(nostack, readonly, preserves_flags),
         );
     }
-    (a4, a5, a6)
+    (a4, a5, a6, ursp)
 }
 
 pub fn syscall_handler(nr: u64, _a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64) -> u64 {
-    let (w_a1, w_a3, w_a4) = extra_args();
-    let w_a2 = _a3; 
+    let (a4, a5, a6, ursp) = extra_args();
+    // Windows x64 syscall convention:
+    // rax: nr
+    // r10: arg1
+    // rdx: arg2
+    // r8: arg3
+    // r9: arg4
+    // stack: arg5, arg6...
+    let w_a1 = a4;
+    let w_a2 = _a3; // rdx
+    let w_a3 = a5; // r8
+    let w_a4 = a6; // r9
+    let w_a5 = unsafe { *(ursp as *const u64).add(4) }; // shadow space (32) + 0? No, arg5 is at [rsp+32]
+    let w_a6 = unsafe { *(ursp as *const u64).add(5) }; // arg6 is at [rsp+40]
 
     serial::write_str("  [wine] Syscall nr=0x");
     serial::write_hex_u32(nr as u32);
@@ -140,6 +154,50 @@ pub fn syscall_handler(nr: u64, _a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64
             crate::sched::yield_();
             0
         }
+        // NtAllocateVirtualMemory
+        0x18 => unsafe {
+            let _process_handle = w_a1;
+            let base_address_ptr = w_a2 as *mut u64;
+            let region_size_ptr = w_a4 as *mut u64;
+            // let allocation_type = w_a5 as u32;
+            // let protect = w_a6 as u32;
+            
+            if base_address_ptr.is_null() || region_size_ptr.is_null() {
+                return 0xC000000D; // STATUS_INVALID_PARAMETER
+            }
+            
+            let mut base = *base_address_ptr;
+            let size = *region_size_ptr;
+            
+            serial::write_str("  [wine] NtAllocateVirtualMemory base=0x");
+            serial::write_hex_u32(base as u32);
+            serial::write_str(" size=0x");
+            serial::write_hex_u32(size as u32);
+            serial::write_str("\n");
+            
+            if base == 0 {
+                base = crate::linux::mmap_cur();
+                crate::linux::set_mmap_cur(base + ((size + 4095) & !4095));
+            }
+            
+            let num_pages = (size + 4095) / 4096;
+            let cr3 = vmm::current_cr3();
+            let pfw = vmm::PTE_PRESENT | vmm::PTE_WRITABLE | vmm::PTE_USER;
+            
+            for p in 0..num_pages {
+                let va = (base + p * 4096) & !4095;
+                if let Some(phys) = pmm::alloc_frame() {
+                    vmm::map_page_in(cr3, va, phys, pfw);
+                    core::ptr::write_bytes(vmm::phys_to_virt(phys) as *mut u8, 0, 4096);
+                }
+            }
+            
+            *base_address_ptr = base;
+            *region_size_ptr = num_pages * 4096;
+            0 // STATUS_SUCCESS
+        }
+        // NtFreeVirtualMemory stub
+        0x1e => 0, // STATUS_SUCCESS
         // NtWaitForSingleObject stub
         0x04 => {
             serial::write_str("  [wine] NtWaitForSingleObject stub\n");
