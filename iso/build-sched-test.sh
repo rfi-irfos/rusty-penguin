@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Build a headless test ISO for a kernel self-test boot flag, and a trace runner.
 # Used to verify the scheduler / VMM migration increments (docs/SCHEDULER.md,
-# docs/VMM_HIGHER_HALF.md). NOTE (2026-05-31): QEMU now runs INSIDE the Claude
-# agent's sandbox, so the agent can build + run the trace itself end-to-end —
-# no need to leave increments [UNVERIFIED] for the human to boot. Just run both
-# steps below in sequence and read /tmp/sched-serial.log.
+# docs/VMM_HIGHER_HALF.md). NOTE (2026-05-31): QEMU runs inside the local
+# sandbox, so the trace can be built and exercised end-to-end without leaving
+# increments [UNVERIFIED] for the human to boot. Just run both steps below in
+# sequence and read /tmp/sched-serial.log.
 #
 #   bash iso/build-sched-test.sh <flag>
 #     <flag> ∈ schedtest schedtest2 schedtest3 schedtest4 schedtest5 physmaptest
