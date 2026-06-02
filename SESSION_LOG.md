@@ -21,6 +21,7 @@ already closed earlier; this session worked items 3–6.
 | Software brightness | 5 — power | Present-time dimming LUT (`v*b/100`), fast-path at 100%; Quick Settings brightness slider; `brightness=N` boot arg (default/kiosk/accessibility knob + headless verification idiom). Works on any panel incl. those with no hardware backlight. | `brightness=40` → whole desktop at **0.380× baseline luminance** (expected ~0.40); normal boot unchanged. `docs/brightness-40pct.png` | `0d29059` |
 | WPA2 auth core | 3 — WiFi | The hardware-independent half of WiFi: `wpa2.rs` — SHA-1, HMAC-SHA1, PBKDF2, `wpa_passphrase_to_psk`→PMK, IEEE 802.11i PRF→PTK. | Verified vs **published vectors** (FIPS 180-1, RFC 2202, RFC 6070, IEEE 802.11i §H.4 PMK `f42c…a12e`). `tools/wpa2_test.rs` (host) + boot serial `[wifi: WPA2 auth core OK]`. | `a70c4af` |
 | VIRGL 3D detection | 6 — GPU accel | Kernel reads `VIRTIO_GPU_F_VIRGL` + `num_capsets` (device cfg); `has_3d()`. Read-only — 2D path untouched. | Two-sided: `-device virtio-gpu-gl -display egl-headless` → "VIRGL 3D offered, host capsets 2"; plain virtio-gpu → "no VIRGL, 2D only". Both still pass the 2D scanout self-test. | `1014f4e` |
+| Windowed app | 4 — multi-app | The desktop (a scheduled process) composites a SECOND real app process's live surface into a titled on-screen window: kernel maps the surface read-only into the desktop AS (0x3000000), desktop reads it via `sys_app_surface` (#41) and blits it 4× scaled. The full windowed multi-app model, the path to windowed DOOM. | `schedesktop2`: orange app window on the live desktop, 128×128 (16384) px, 0 faults; normal-boot regression 0 faults/clean. `docs/multiproc-windowed-app-on-desktop.png` | `66cbf45` |
 
 Also confirmed item 5's **real battery** readout is already wired: `sys_battery_pct`
 (#20) reads the ACPI EC, and Quick Settings shows "AC" gracefully when no battery
@@ -35,9 +36,10 @@ is present (as under QEMU).
   the EAPOL 4-way handshake wired to the driver — **needs real Intel hardware**
   QEMU can't emulate.
 - **4. Preemptive multitasking + isolation maturity** — ✅ the concurrency #GP is
-  fixed; the real desktop + a 2nd real app run isolated & preemptively at once.
-  Remaining polish: the desktop compositing a 2nd app's surface into a visible
-  on-screen window (a desktop-code change — the easy part now).
+  fixed; the real desktop + a 2nd real app run isolated & preemptively at once,
+  and the desktop now composites that 2nd app's surface into an on-screen window.
+  The full windowed multi-app model is proven end to end (with a synthetic app);
+  remaining toward windowed DOOM = swap in the real DOOM binary + a full-size surface.
 - **5. Power management** — 🟡 ACPI S5 shutdown+reboot ✅; software brightness ✅;
   real battery ✅ wired. Remaining: hardware backlight control + S3 suspend/resume
   (large, and largely **hardware-bound** / not meaningfully verifiable under QEMU).

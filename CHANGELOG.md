@@ -4,6 +4,21 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+### Added — Multiproc brick 6: the desktop composites a 2nd real app into an on-screen window (2026-06-02)
+
+- Item 4's visible payoff — windowed multi-app, real and visible. The real desktop
+  runs as an isolated, preemptively-scheduled process; a SECOND real app process
+  renders into its private surface; the kernel maps that surface read-only into the
+  desktop's address space (0x3000000, its free VA gap); the desktop reads it via
+  `sys_app_surface` (#41) and blits it into a titled on-screen window (4× scaled).
+  The desktop — itself a scheduled process — hosting another isolated process's
+  output in a window, end to end. The same model scales to windowed DOOM.
+- Now safe because the per-task syscall stack makes concurrent syscalls #GP-free.
+  Flag-gated behind `schedesktop2`; normal boot path unchanged.
+- Verified in QEMU: orange app window composited on the live desktop, exactly
+  128×128 surface px, 0 faults; normal-boot regression 0 faults / clean desktop.
+  Proof: docs/multiproc-windowed-app-on-desktop.png.
+
 ### Added — GPU: detect virtio-gpu VIRGL 3D capability (item-6 foundation) (2026-06-01)
 
 - The first real brick toward 3D acceleration: the kernel reads the GPU's full

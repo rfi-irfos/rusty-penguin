@@ -160,6 +160,7 @@ velocity equals completion.
 | **Multi-process windowed apps (real ELF processes → isolated offscreen surfaces → compositor → on-screen windows; two apps at once; hung app force-quit)** | ✅ pipeline proven + screenshot-verified behind flags |
 | **The real desktop run as a scheduled, isolated process** | ✅ QEMU-verified (`schedesktop` flag) — the bridge to a multi-process desktop |
 | **The real desktop + a 2nd real app, both scheduled & isolated, no syscall-stack collision** | ✅ QEMU-verified (`schedesktop2` flag) — per-task syscall stack fixes the concurrent-syscall #GP |
+| **The desktop composites a 2nd real app into an on-screen window** | ✅ QEMU-verified (`schedesktop2`) — the desktop (a scheduled process) hosts another isolated process's surface in a titled window; the model for windowed DOOM |
 | **ACPI power management — S5 shutdown + reboot** | ✅ QEMU-verified; the Shut Down button powers the machine off |
 | **Multi-user login (SHA-256 passwords, /home/<user>)** | ✅ |
 | In-memory VFS within a session | ✅ |
@@ -272,10 +273,14 @@ process isolation, and a per-task syscall stack — so the **real desktop and a
 second real app run concurrently** as isolated, preemptively-scheduled
 processes without clobbering each other through the syscall path (the concurrent-
 syscall #GP is fixed; `schedesktop2`, QEMU-verified — see `docs/SCHEDULER.md`).
-Remaining: the desktop compositing a second app's surface into a visible on-screen
-window (a desktop-code change), a virtual `/dev/fb0`, and a higher-half-kernel VMM
+The desktop — itself a scheduled process — now **composites a second real app's
+live surface into a titled on-screen window** (`sys_app_surface`, QEMU-verified),
+so the full windowed multi-app model is proven end to end with a synthetic app.
+Remaining toward windowed DOOM: swap the synthetic app for the real DOOM binary
+with a full-size surface, a virtual `/dev/fb0`, and a higher-half-kernel VMM
 migration (`docs/VMM_HIGHER_HALF.md`). Honest status: real DOOM runs fullscreen as
-a standalone process today; the side-by-side windowed form is the next step.
+a standalone process today; a real app *in a window* is the remaining step, and the
+compositing path it needs is now in place.
 
 ---
 
