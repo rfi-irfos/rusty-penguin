@@ -4,7 +4,10 @@ use crate::term;
 
 pub const TITLEBAR_H: i32 = 34;
 pub const WINDOW_W:   i32 = term::TERM_PIX_W as i32 + 2;
-pub const WINDOW_H:   i32 = term::TERM_PIX_H as i32 + 2 + TITLEBAR_H;
+// Roomier default: the antialiased UI font is ~2x the old bitmap height, so the
+// old terminal-sized 192px content area clipped GUI apps. ~372px content fits
+// them. Pure terminals reflow to this height; GUI apps render to the full window.
+pub const WINDOW_H:   i32 = 408;
 
 // Window styling — deep azure/midnight theme. Translucent navy panels,
 // sky-blue active borders, rose/pink close button, turquoise max button.
