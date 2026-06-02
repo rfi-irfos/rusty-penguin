@@ -1096,7 +1096,7 @@ fn draw_scene_static_v(fb: &mut Framebuffer, variant: u8) {
     draw_round_border(fb, mbx, mby, mbw, PANEL_H - 14, 12, 0x8FF0E0);
     fb.fill_rect_s(mbx + 6, mby + 1, mbw - 12, 1, 0xB0FFF0); // top light catch
     let star_cy = mby + (PANEL_H - 14) / 2;
-    fb.draw_star8(mbx + mbw / 2, star_cy, 15, WHITE);
+    fb.draw_star8(mbx + mbw / 2, star_cy, 15, 0x06100E); // near-black dingir on teal
     // separator
     fb.fill_rect_s(mbx + mbw + 8, ptop + 14, 1, PANEL_H - 28, 0x435059);
 
@@ -2638,8 +2638,8 @@ fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, 
         fb.fill_rounded_rect(mbx, mby, mbw, bh, 12, 0x5EEAD4); // brighter teal
         draw_round_border(fb, mbx, mby, mbw, bh, 12, WHITE);
         let star_cy = mby + bh / 2;
-        fb.draw_star8(mbx + mbw / 2, star_cy, 15, WHITE);
-        fb.fill_rect_s(mbx + 8, mby + bh - 3, mbw - 16, 3, WHITE);
+        fb.draw_star8(mbx + mbw / 2, star_cy, 15, 0x06100E); // near-black dingir on teal
+        fb.fill_rect_s(mbx + 8, mby + bh - 3, mbw - 16, 3, 0x06100E);
     }
     let up = rtc_str();
     // Find the focused index on the current desktop (last non-minimized window there).
@@ -2665,7 +2665,7 @@ fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, 
         tw.term.dirty = false;
         tw.win_dirty  = false;
     }
-    if start_menu { draw_start_menu(fb); }
+    if start_menu { draw_start_menu(fb); if menu_cat_sel() >= 0 { draw_cat_flyout(fb); } }
     if let Some((cmx, cmy)) = ctx_menu { draw_ctx_menu(fb, cmx, cmy); }
     draw_topbar(fb, up.as_str(), stats, sys_ticks(), current_desktop);
     if unsafe { QS_OPEN } { draw_quick_settings(fb); }
@@ -3412,10 +3412,12 @@ pub extern "C" fn _start() -> ! {
                     tw.term.dirty = false;
                 }
                 if start_menu_open { draw_start_menu(&mut fb); if menu_cat_sel() >= 0 { draw_cat_flyout(&mut fb); } }
-        if let Some((ami, ax, ay)) = app_ctx { draw_app_ctx_menu(&mut fb, ami, ax, ay); }
                 if let Some((cmx, cmy)) = ctx_menu { draw_ctx_menu(&mut fb, cmx, cmy); }
                 if unsafe { QS_OPEN } { draw_quick_settings(&mut fb); }
             }
+            // App context popup (right-click on a menu item) — drawn on top of
+            // BOTH render paths, since right-click triggers a full recomposite.
+            if let Some((ami, ax, ay)) = app_ctx { draw_app_ctx_menu(&mut fb, ami, ax, ay); }
 
             if topbar_due && !any_chrome {
                 let up = rtc_str();
