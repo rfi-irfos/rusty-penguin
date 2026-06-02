@@ -103,7 +103,7 @@ pub fn load_pe(data: &[u8]) -> Option<(u64, u64)> {
     }
 
     // Process Imports
-    let import_dir = nt.optional_header.data_directory[1];
+    let import_dir = nt.optional_header.data_directory[1].clone();
     if import_dir.virtual_address != 0 {
         resolve_imports(image_base, import_dir.virtual_address as u64);
     }
@@ -228,6 +228,45 @@ pub fn syscall_handler(nr: u64, _a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64
     
     match nr {
         0x01 => { crate::sched::yield_(); 0 }
+        // NtQuerySystemTime (Brick 19)
+        0x57 => unsafe {
+            let time_ptr = w_a1 as *mut u64;
+            if !time_ptr.is_null() {
+                // Return rough Windows-epoch time
+                *time_ptr = 132645600000000000 + (crate::idt::ticks() * 100000); 
+            }
+            0
+        }
+        // NtDelayExecution (Brick 19)
+        0x34 => {
+            crate::sched::yield_();
+            0
+        }
+        // NtCreateMutant (Brick 18)
+        0x1b => {
+            serial::write_str("  [wine] NtCreateMutant stub\n");
+            alloc_handle(WinObject::Mutant)
+        }
+        // NtReleaseMutant (Brick 18)
+        0x21 => {
+            serial::write_str("  [wine] NtReleaseMutant stub\n");
+            0
+        }
+        // NtCreateSemaphore (Brick 18)
+        0x1c => {
+            serial::write_str("  [wine] NtCreateSemaphore stub\n");
+            alloc_handle(WinObject::Semaphore)
+        }
+        // NtCreateSection (Brick 20)
+        0x4a => {
+            serial::write_str("  [wine] NtCreateSection stub\n");
+            alloc_handle(WinObject::Section)
+        }
+        // NtMapViewOfSection (Brick 20)
+        0x28 => {
+            serial::write_str("  [wine] NtMapViewOfSection stub\n");
+            0
+        }
         0x18 => unsafe {
             let base_address_ptr = w_a2 as *mut u64;
             let region_size_ptr = w_a4 as *mut u64;
@@ -286,6 +325,36 @@ pub fn syscall_handler(nr: u64, _a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64
         0x55 => {
             serial::write_str("  [wine] NtCreateFile stub\n");
             alloc_handle(WinObject::File)
+        }
+        // NtQueryInformationFile (Brick 21)
+        0x22 => {
+            serial::write_str("  [wine] NtQueryInformationFile stub\n");
+            0 
+        }
+        // NtSetInformationFile (Brick 21)
+        0x23 => {
+            serial::write_str("  [wine] NtSetInformationFile stub\n");
+            0 
+        }
+        // NtOpenThread (Brick 22)
+        0x4e => {
+            serial::write_str("  [wine] NtOpenThread stub\n");
+            alloc_handle(WinObject::Thread)
+        }
+        // NtTerminateThread (Brick 22)
+        0x50 => {
+            serial::write_str("  [wine] NtTerminateThread stub\n");
+            0
+        }
+        // NtOpenProcess (Brick 23)
+        0x26 => {
+            serial::write_str("  [wine] NtOpenProcess stub\n");
+            alloc_handle(WinObject::Process)
+        }
+        // NtQueryInformationProcess (Brick 23)
+        0x19 => {
+            serial::write_str("  [wine] NtQueryInformationProcess stub\n");
+            0
         }
         // NtCreateNamedPipeFile
         0x5c => {
@@ -404,6 +473,9 @@ pub enum WinObject {
     File,
     Pipe,
     Key,
+    Mutant,
+    Semaphore,
+    Section,
 }
 
 const MAX_HANDLES: usize = 256;

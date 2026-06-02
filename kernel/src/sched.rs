@@ -220,7 +220,7 @@ fn spawn(entry: extern "C" fn() -> !) -> usize {
                 sp &= !0xF;                 // 16-byte align
                 sp -= 8; *(sp as *mut u64) = entry as usize as u64;  // ret target
                 for _ in 0..6 { sp -= 8; *(sp as *mut u64) = 0; }    // rbp..r15
-                TASKS[i] = Task { rsp: sp, used: true, alive: true, cr3: 0 };
+                TASKS[i] = Task { rsp: sp, used: true, alive: true, cr3: 0, gs_base: 0 };
                 return i;
             }
         }
@@ -295,7 +295,7 @@ pub fn selftest() {
     use crate::serial::write_str;
     write_str("\n[sched] === Increment 1: cooperative context-switch self-test ===\n");
     unsafe {
-        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: 0 };
+        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: 0, gs_base: 0 };
         CUR_TASK = 0;
     }
     spawn(task_a);
@@ -345,7 +345,7 @@ fn spawn_preempt(entry: extern "C" fn() -> !) -> usize {
                 push(&mut sp, 0x08);   // cs  = kernel code
                 push(&mut sp, entry as usize as u64); // rip = entry
                 for _ in 0..15 { push(&mut sp, 0); }  // 15 GPRs = 0
-                TASKS[i] = Task { rsp: sp, used: true, alive: true, cr3: 0 };
+                TASKS[i] = Task { rsp: sp, used: true, alive: true, cr3: 0, gs_base: 0 };
                 return i;
             }
         }
@@ -451,7 +451,7 @@ pub fn selftest_preempt() -> ! {
     write_str("\n[sched] === Increment 2: timer-PREEMPTION self-test ===\n");
     unsafe {
         core::arch::asm!("cli");
-        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: 0 };
+        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: 0, gs_base: 0 };
         CUR_TASK = 0;
     }
     spawn_preempt(ptask_a);
@@ -539,7 +539,7 @@ pub fn selftest_cr3_sched() -> ! {
     crate::vmm::extend_identity_map(512);
     unsafe {
         core::arch::asm!("cli");
-        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3() };
+        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3(), gs_base: 0 };
         CUR_TASK = 0;
     }
     spawn_preempt_as(catask_a);
@@ -628,7 +628,7 @@ fn spawn_ring3(stub: &[u8]) -> usize {
                 push(&mut sp, 0x23);          // cs     = user code | RPL3
                 push(&mut sp, R3_CODE_VA);    // rip    = stub entry
                 for _ in 0..15 { push(&mut sp, 0); } // 15 GPRs = 0
-                TASKS[i] = Task { rsp: sp, used: true, alive: true, cr3: as_ };
+                TASKS[i] = Task { rsp: sp, used: true, alive: true, cr3: as_, gs_base: 0 };
                 return i;
             }
         }
@@ -691,7 +691,7 @@ fn spawn_ring3_low_with(stub: &[u8], tag: Option<u8>) -> usize {
                 push(&mut sp, 0x23);            // cs = user code | RPL3
                 push(&mut sp, LOW_CODE_VA);     // rip = stub entry (private low)
                 for _ in 0..15 { push(&mut sp, 0); }
-                TASKS[i] = Task { rsp: sp, used: true, alive: true, cr3: as_ };
+                TASKS[i] = Task { rsp: sp, used: true, alive: true, cr3: as_, gs_base: 0 };
                 return i;
             }
         }
@@ -710,7 +710,7 @@ pub fn selftest_ring3_lowhalf() -> ! {
     write_str("\n[sched] === Increment 3d: private low half per process ===\n");
     unsafe {
         core::arch::asm!("cli");
-        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3() };
+        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3(), gs_base: 0 };
         CUR_TASK = 0;
     }
     let a = spawn_ring3_low(0xA1);
@@ -738,7 +738,7 @@ pub fn selftest_multiproc() -> ! {
     write_str("\n[mp] === multiproc: a hung app must NOT freeze the system ===\n");
     unsafe {
         core::arch::asm!("cli");
-        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3() };
+        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3(), gs_base: 0 };
         CUR_TASK = 0;
     }
     let healthy = spawn_ring3_low(0xA1);                  // cooperative, syscalls
@@ -770,7 +770,7 @@ pub fn selftest_watchdog() -> ! {
     write_str("\n[wd] === watchdog: detect + force-quit a hung process ===\n");
     unsafe {
         core::arch::asm!("cli");
-        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3() };
+        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3(), gs_base: 0 };
         CUR_TASK = 0;
     }
     let a = spawn_ring3_low(0xA1);                     // healthy (syscalls)
@@ -1020,7 +1020,7 @@ fn spawn_ring3_elf_cfg(elf: &[u8], stack_top: u64, stack_pages: u32, fb_frame: u
             push(&mut sp, 0x23);          // cs
             push(&mut sp, entry);         // rip
             for _ in 0..15 { push(&mut sp, 0); }
-            TASKS[i] = Task { rsp: sp, used: true, alive: true, cr3: as_ };
+            TASKS[i] = Task { rsp: sp, used: true, alive: true, cr3: as_, gs_base: 0 };
             TASK_LINUX[i] = false; // native by default; caller marks Linux tasks
             return i;
         }
@@ -1144,7 +1144,7 @@ fn spawn_linux_static_elf(elf: &[u8]) -> usize {
             push(&mut sp, 0x23);        // cs
             push(&mut sp, entry);       // rip
             for _ in 0..15 { push(&mut sp, 0); }
-            TASKS[i] = Task { rsp: sp, used: true, alive: true, cr3: as_ };
+            TASKS[i] = Task { rsp: sp, used: true, alive: true, cr3: as_, gs_base: 0 };
             TASK_LINUX[i] = true; // a Linux-ABI process — routes to the Linux table
             PREEMPTIVE_LINUX = true; // its exit() must kill the task, not halt the CPU
             return i;
@@ -1272,7 +1272,7 @@ fn spawn_linux_dyn_elf(elf: &[u8]) -> usize {
             push(&mut sp, 0x23);        // cs
             push(&mut sp, rip);         // rip = ld.so entry (dynamic) or prog entry
             for _ in 0..15 { push(&mut sp, 0); }
-            TASKS[i] = Task { rsp: sp, used: true, alive: true, cr3: as_ };
+            TASKS[i] = Task { rsp: sp, used: true, alive: true, cr3: as_, gs_base: 0 };
             TASK_LINUX[i] = true;
             PREEMPTIVE_LINUX = true;
             return i;
@@ -1291,7 +1291,7 @@ pub fn selftest_realelf() -> ! {
     write_str("\n[elf] === realelf: two REAL ELF programs as scheduled processes ===\n");
     unsafe {
         core::arch::asm!("cli");
-        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3() };
+        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3(), gs_base: 0 };
         CUR_TASK = 0;
     }
     let e1 = make_test_elf(0x0050_0000, 0xE1);
@@ -1325,7 +1325,7 @@ pub fn selftest_offscreen() -> ! {
     write_str("\n[fb] === offscreen: a scheduled process renders into a buffer the compositor reads ===\n");
     unsafe {
         core::arch::asm!("cli");
-        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3() };
+        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3(), gs_base: 0 };
         CUR_TASK = 0;
     }
     let fb_frame = match crate::pmm::alloc_frame() { Some(f) => f, None => { write_str("[fb] no frame\n"); halt(); } };
@@ -1461,7 +1461,7 @@ pub fn selftest_multiwin() -> ! {
     write_str("\n[wm] === multiwin: TWO real app processes, two surfaces, two windows ===\n");
     unsafe {
         core::arch::asm!("cli");
-        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3() };
+        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3(), gs_base: 0 };
         CUR_TASK = 0;
     }
     let f1 = crate::pmm::alloc_frame().unwrap_or(0);
@@ -1502,7 +1502,7 @@ pub fn selftest_recover_win() -> ! {
     write_str("\n[wm] === recoverwin: one windowed app hangs -> force-quit; the other keeps running ===\n");
     unsafe {
         core::arch::asm!("cli");
-        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3() };
+        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3(), gs_base: 0 };
         CUR_TASK = 0;
     }
     let f1 = crate::pmm::alloc_frame().unwrap_or(0);
@@ -1564,7 +1564,7 @@ pub fn selftest_schedesktop() -> ! {
     };
     unsafe {
         core::arch::asm!("cli");
-        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3() };
+        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3(), gs_base: 0 };
         CUR_TASK = 0;
     }
     write_str("[mpd] loading real desktop into a private address space (24 MiB heap)...\n");
@@ -1602,7 +1602,7 @@ pub fn selftest_schedesktop2() -> ! {
     };
     unsafe {
         core::arch::asm!("cli");
-        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3() };
+        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3(), gs_base: 0 };
         CUR_TASK = 0;
     }
     write_str("[mpd2] loading real desktop into a private address space (24 MiB heap)...\n");
@@ -1655,7 +1655,7 @@ pub fn selftest_linuxroute() -> ! {
     write_str("\n[lxr] === linuxroute: native + Linux process scheduled together (per-task ABI mode) ===\n");
     unsafe {
         core::arch::asm!("cli");
-        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3() };
+        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3(), gs_base: 0 };
         CUR_TASK = 0;
         TASK_LINUX[0] = false; // the boot thread is native
     }
@@ -1693,7 +1693,7 @@ pub fn selftest_linuxsched() -> ! {
     };
     unsafe {
         core::arch::asm!("cli");
-        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3() };
+        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3(), gs_base: 0 };
         CUR_TASK = 0;
         TASK_LINUX[0] = false;
     }
@@ -1722,7 +1722,7 @@ pub fn selftest_linuxmmap() -> ! {
     write_str("\n[lxm] === linuxmmap: private-AS mmap for a scheduled Linux process ===\n");
     unsafe {
         core::arch::asm!("cli");
-        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3() };
+        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3(), gs_base: 0 };
         CUR_TASK = 0;
         TASK_LINUX[0] = false;
     }
@@ -1754,7 +1754,7 @@ pub fn selftest_linuxdyn() -> ! {
     };
     unsafe {
         core::arch::asm!("cli");
-        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3() };
+        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3(), gs_base: 0 };
         CUR_TASK = 0;
         TASK_LINUX[0] = false;
     }
@@ -1786,7 +1786,7 @@ pub fn selftest_linuxfb() -> ! {
     };
     unsafe {
         core::arch::asm!("cli");
-        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3() };
+        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3(), gs_base: 0 };
         CUR_TASK = 0;
         TASK_LINUX[0] = false;
     }
@@ -1853,7 +1853,7 @@ pub fn selftest_linuxwin() -> ! {
     };
     unsafe {
         core::arch::asm!("cli");
-        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3() };
+        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3(), gs_base: 0 };
         CUR_TASK = 0;
         TASK_LINUX[0] = false;
     }
@@ -1913,7 +1913,7 @@ pub fn selftest_composite() -> ! {
     write_str("\n[wm] === composite: process renders offscreen -> compositor blits to screen ===\n");
     unsafe {
         core::arch::asm!("cli");
-        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3() };
+        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3(), gs_base: 0 };
         CUR_TASK = 0;
     }
     let fb_frame = match crate::pmm::alloc_frame() { Some(f) => f, None => { write_str("[wm] no frame\n"); halt(); } };
@@ -1963,7 +1963,7 @@ pub fn selftest_ring3() -> ! {
     crate::vmm::extend_identity_map(512);
     unsafe {
         core::arch::asm!("cli");
-        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3() };
+        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3(), gs_base: 0 };
         CUR_TASK = 0;
     }
     let r3 = spawn_ring3(&R3_STUB);

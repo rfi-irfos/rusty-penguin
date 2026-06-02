@@ -91,8 +91,7 @@ static mut BRK_MAPPED: u64 = 0;
 pub fn mmap_cur() -> u64 { unsafe { MMAP_CUR } }
 pub fn set_mmap_cur(v: u64) { unsafe { MMAP_CUR = v; } }
 
-// Windowed framebuffer surface for a SCHEDULED Linux process.
- When such a process
+// Windowed framebuffer surface for a SCHEDULED Linux process. When such a process
 // mmaps /dev/fb0 it must NOT get the real hardware framebuffer (a) it's not mapped
 // in its private AS, (b) it would draw over the whole screen. Instead it gets a
 // private, physically-contiguous surface it renders into; the desktop composites

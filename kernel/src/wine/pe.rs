@@ -38,6 +38,7 @@ pub struct ImageFileHeader {
 }
 
 #[repr(C, packed)]
+#[derive(Clone, Copy)]
 pub struct ImageDataDirectory {
     pub virtual_address: u32,
     pub size: u32,
