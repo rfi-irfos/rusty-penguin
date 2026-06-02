@@ -4,6 +4,18 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+### Added — GPU: detect virtio-gpu VIRGL 3D capability (item-6 foundation) (2026-06-01)
+
+- The first real brick toward 3D acceleration: the kernel reads the GPU's full
+  feature set, recognises `VIRTIO_GPU_F_VIRGL`, and reads `num_capsets` from the
+  device config (non-zero only when the host's virglrenderer is live). `has_3d()`
+  accessor added; the previously-ignored DEVICE_CFG cap is now captured.
+- Read-only detection — VIRGL is NOT negotiated yet, so the 2D scanout path is
+  unchanged. Two-sided QEMU verification: `-device virtio-gpu-gl -display
+  egl-headless` → "VIRGL 3D offered — host capsets 2"; `-device virtio-gpu` →
+  "no VIRGL — 2D only"; both still pass the 2D scanout self-test. The virgl 3D
+  command stream itself remains the multi-year part.
+
 ### Added — WiFi: WPA2 authentication core (PSK/PMK/PTK), host + bare-metal verified (2026-06-01)
 
 - The hardware-independent half of bare-metal WiFi. `kernel/src/wpa2.rs` (pure
