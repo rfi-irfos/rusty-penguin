@@ -719,7 +719,12 @@ pub extern "C" fn syscall_handler(nr: u64, arg1: u64, arg2: u64, arg3: u64) -> u
             vga::write_str("\n  [psh exited]\n", vga::Color::Green);
             loop { unsafe { core::arch::asm!("hlt", options(nostack)); } }
         }
-        _ => u64::MAX,
+        _ => {
+            crate::serial::write_str("  [syscall] ERROR: Undefined syscall nr=0x");
+            crate::serial::write_hex_u64(nr);
+            crate::serial::write_str("\n");
+            u64::MAX
+        },
     }
 }
 
