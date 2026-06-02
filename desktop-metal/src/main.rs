@@ -1698,9 +1698,20 @@ fn qs_icon_speaker(fb: &mut Framebuffer, cx: i32, cy: i32) {
     fb.fill_rect_s(cx + 4, cy - 4, 1, 9, 0x6FE18B);          // wave
 }
 
-// ── Start menu ───────────────────────────────────────────────────────────────
-// Matches the HTML mockup form: user header · app list with icons+desc ·
-// games section · footer. Width 280px, items 34px tall.
+// ── Start menu — accordion categories ────────────────────────────────────────
+// Five collapsible categories; click a header to expand/collapse.
+// Indices into MENU_ITEMS for each category.
+const MENU_CATS: &[(&str, &[usize])] = &[
+    ("Productivity",      &[1, 2, 3, 14]),        // Files, Text Editor, Calculator, Notes
+    ("Internet & Media",  &[0, 9, 10, 11]),        // Web, Media Player, Sound, Screenshot
+    ("System",            &[4, 5, 12, 13, 6, 7]),  // Terminal, Settings, Clock, Task Mgr, TIS, KM
+    ("Communications",    &[15]),                   // RustyPhone
+    ("Games",             &[16, 17, 18]),           // Snake, Minesweeper, Doom
+];
+// Open state per category — mutable, toggled on click.
+static mut CAT_OPEN: [bool; 5] = [true, false, false, false, false];
+fn cat_open(i: usize) -> bool { unsafe { CAT_OPEN[i] } }
+fn cat_toggle(i: usize) { unsafe { CAT_OPEN[i] = !CAT_OPEN[i]; } }
 #[derive(Copy, Clone)]
 enum MenuLaunch { App(u8), Term(usize) }
 
@@ -1744,12 +1755,15 @@ const MENU_ITEM_H:  i32 = 34;   // icon + name + description per row
 const MENU_SEP_H:   i32 = 9;    // separator between sections
 const MENU_FOOT_H:  i32 = 38;   // footer: Settings + Shut down
 
+const MENU_CAT_H: i32 = 26; // accordion category header height
+
 fn menu_total_h() -> i32 {
-    MENU_HDR_H + MENU_SECT_H
-    + MENU_APPS_END as i32 * MENU_ITEM_H
-    + MENU_SEP_H + MENU_SECT_H
-    + (MENU_ITEMS.len() - MENU_APPS_END) as i32 * MENU_ITEM_H
-    + MENU_FOOT_H
+    let mut h = MENU_HDR_H + MENU_FOOT_H + 4;
+    for (ci, (_, items)) in MENU_CATS.iter().enumerate() {
+        h += MENU_CAT_H + 2;
+        if cat_open(ci) { h += items.len() as i32 * MENU_ITEM_H; }
+    }
+    h
 }
 
 fn start_menu_bounds(fh: u32) -> (i32, i32, i32, i32) {
@@ -1799,24 +1813,38 @@ fn draw_start_menu(fb: &mut Framebuffer) {
     // Hairline below header
     fb.fill_rect_s(x + 8, y + MENU_HDR_H - 1, w - 16, 1, 0x46525A);
 
-    // ── Applications section ─────────────────────────────────────────────────
-    let apps_y = y + MENU_HDR_H;
-    fb.draw_aa(x + 14, apps_y + 3, "APPLICATIONS", 0x98A3AA, crate::fb::AA_T);
-    for i in 0..MENU_APPS_END {
-        let iy = apps_y + MENU_SECT_H + i as i32 * MENU_ITEM_H;
-        draw_menu_item(fb, x, iy, w, &MENU_ITEMS[i], false);
-    }
-
-    // Separator
-    let sep_y = apps_y + MENU_SECT_H + MENU_APPS_END as i32 * MENU_ITEM_H + MENU_SEP_H / 2;
-    fb.fill_rect_s(x + 12, sep_y, w - 24, 1, 0x46525A);
-
-    // ── Games section ────────────────────────────────────────────────────────
-    let games_y = apps_y + MENU_SECT_H + MENU_APPS_END as i32 * MENU_ITEM_H + MENU_SEP_H;
-    fb.draw_aa(x + 14, games_y + 3, "GAMES", 0x98A3AA, crate::fb::AA_T);
-    for i in MENU_APPS_END..MENU_ITEMS.len() {
-        let iy = games_y + MENU_SECT_H + (i - MENU_APPS_END) as i32 * MENU_ITEM_H;
-        draw_menu_item(fb, x, iy, w, &MENU_ITEMS[i], false);
+    // ── Accordion categories ──────────────────────────────────────────────────
+    let mut cur_y = y + MENU_HDR_H + 4;
+    for (ci, (cat_name, items)) in MENU_CATS.iter().enumerate() {
+        let open = cat_open(ci);
+        // Category header row — clickable
+        let ch_bg = if open { 0x1A2A38u32 } else { 0x151C24 };
+        fb.fill_rect(x as u32, cur_y as u32, w as u32, MENU_CAT_H as u32, ch_bg);
+        // Arrow indicator
+        let arrow = if open { "v" } else { ">" };
+        fb.draw_str((x + 10) as u32, (cur_y + 8) as u32, arrow, TEAL, ch_bg);
+        fb.draw_aa(x + 24, cur_y + 6, cat_name, 0xB0BCC8, crate::fb::AA_T);
+        // Item count badge (when collapsed)
+        if !open {
+            let mut cnt_buf = [0u8; 8];
+            let cnt = items.len();
+            cnt_buf[0] = b'0' + (cnt / 10) as u8; cnt_buf[1] = b'0' + (cnt % 10) as u8;
+            let cs = if cnt < 10 { &cnt_buf[1..2] } else { &cnt_buf[0..2] };
+            let cstr = core::str::from_utf8(cs).unwrap_or("?");
+            fb.draw_aa(x + w - 24, cur_y + 6, cstr, 0x4A5568, crate::fb::AA_T);
+        }
+        cur_y += MENU_CAT_H;
+        // Expanded items
+        if open {
+            for &mi in *items {
+                if mi < MENU_ITEMS.len() {
+                    draw_menu_item(fb, x, cur_y, w, &MENU_ITEMS[mi], false);
+                    cur_y += MENU_ITEM_H;
+                }
+            }
+        }
+        fb.fill_rect_s(x + 8, cur_y, w - 16, 1, 0x1E2A38);
+        cur_y += 2;
     }
 
     // ── Footer: Settings · Shut Down ─────────────────────────────────────────
@@ -1837,25 +1865,40 @@ fn draw_start_menu(fb: &mut Framebuffer) {
     fb.draw_aa(dbx + 10, by + 8, "Shut Down", TRIT_NEG, crate::fb::AA_S);
 }
 
+// Returns: 0..MENU_ITEMS.len() = launch that item; 1000+ci = toggle category ci;
+//          5 = Settings footer shortcut; 99 = Shut Down.
 fn start_menu_hit(fh: u32, mx: i32, my: i32) -> Option<usize> {
-    let (x, y, w, _) = start_menu_bounds(fh);
+    let (x, y, w, h) = start_menu_bounds(fh);
     if mx < x || mx >= x + w { return None; }
-    let apps_y = y + MENU_HDR_H + MENU_SECT_H;
-    for i in 0..MENU_APPS_END {
-        let iy = apps_y + i as i32 * MENU_ITEM_H;
-        if my >= iy && my < iy + MENU_ITEM_H { return Some(i); }
+    if my < y || my >= y + h  { return None; }
+    // Footer row
+    let foot_y = y + h - MENU_FOOT_H;
+    if my >= foot_y {
+        let by = foot_y + 5;
+        if my >= by && my < by + 28 {
+            if mx < x + w / 2 { return Some(5); }   // Settings (MENU_ITEMS[5])
+            return Some(99);                          // Shut Down
+        }
+        return None;
     }
-    let games_y = apps_y + MENU_APPS_END as i32 * MENU_ITEM_H + MENU_SEP_H + MENU_SECT_H;
-    for i in MENU_APPS_END..MENU_ITEMS.len() {
-        let iy = games_y + (i - MENU_APPS_END) as i32 * MENU_ITEM_H;
-        if my >= iy && my < iy + MENU_ITEM_H { return Some(i); }
-    }
-    // Footer: Settings (index 4 = existing Settings app), Shut Down
-    let foot_y = y + menu_total_h() - MENU_FOOT_H;
-    if my >= foot_y + 6 && my < foot_y + 30 {
-        if mx < x + w / 2 { return Some(4); }  // Settings
-        // Shut Down — handled by special value
-        return Some(99);
+    // Header — not clickable
+    if my < y + MENU_HDR_H { return None; }
+    // Walk the same accordion layout as draw_start_menu
+    let mut cur_y = y + MENU_HDR_H + 4;
+    for (ci, (_, items)) in MENU_CATS.iter().enumerate() {
+        if my >= cur_y && my < cur_y + MENU_CAT_H {
+            return Some(1000 + ci);  // toggle this category
+        }
+        cur_y += MENU_CAT_H;
+        if cat_open(ci) {
+            for &mi in *items {
+                if my >= cur_y && my < cur_y + MENU_ITEM_H {
+                    return Some(mi);
+                }
+                cur_y += MENU_ITEM_H;
+            }
+        }
+        cur_y += 2; // separator line
     }
     None
 }
@@ -3077,22 +3120,27 @@ pub extern "C" fn _start() -> ! {
                 scene_dirty = true;
             } else if start_menu_open {
                 if let Some(mi) = start_menu_hit(fb.height, cx, cy) {
-                    if mi == 99 {
-                        // Shut Down: real ACPI S5 soft-off (syscall 37). The kernel
-                        // drives the PM1 control register; the machine actually
-                        // powers off. Falls through to halt only if ACPI is absent.
-                        unsafe { core::arch::asm!("syscall", in("rax") 37u64, out("rcx") _, out("r11") _, options(nostack)); }
-                        loop { unsafe { core::arch::asm!("hlt", options(nostack)); } }
-                    }
-                    if mi < MENU_ITEMS.len() {
-                        let opened = launch_menu_item(&MENU_ITEMS[mi].kind, w, h, wins.len());
-                        if let Some(mut tw) = opened {
-                            tw.win.desktop = current_desktop;
-                            wins.push(tw);
+                    if mi >= 1000 {
+                        // Category header — toggle expand/collapse, keep menu open.
+                        cat_toggle(mi - 1000);
+                    } else {
+                        if mi == 99 {
+                            // Shut Down: real ACPI S5 soft-off (syscall 37).
+                            unsafe { core::arch::asm!("syscall", in("rax") 37u64, out("rcx") _, out("r11") _, options(nostack)); }
+                            loop { unsafe { core::arch::asm!("hlt", options(nostack)); } }
                         }
+                        if mi < MENU_ITEMS.len() {
+                            let opened = launch_menu_item(&MENU_ITEMS[mi].kind, w, h, wins.len());
+                            if let Some(mut tw) = opened {
+                                tw.win.desktop = current_desktop;
+                                wins.push(tw);
+                            }
+                        }
+                        start_menu_open = false;
                     }
+                } else {
+                    start_menu_open = false;
                 }
-                start_menu_open = false;
                 scene_dirty = true;
             } else if dingir_hit(fb.height, cx, cy) {
                 start_menu_open = true;
