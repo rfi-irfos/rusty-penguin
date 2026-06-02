@@ -97,12 +97,15 @@ A from-scratch x86_64 OS, written in Rust top to bottom:
   ring-3 userspace, PS/2 keyboard + mouse, a 1920×1080 framebuffer, and Intel
   HDA audio.
 - **A native desktop** — frosted-glass window manager (drag / resize / minimize /
-  maximize), a floating dock, a start menu, an arrow cursor, and a warm
-  stone-green visual language. No external UI toolkit; every pixel is drawn by
-  our own framebuffer + ternary-CSS engine.
+  maximize), a floating dock, a start menu with a **dingir launcher** and a
+  **flyout category menu** (hover a category, its apps slide out), an arrow
+  cursor, and a deep azure/teal **"Nebula"** visual language. No external UI
+  toolkit; every pixel is drawn by our own framebuffer + ternary-CSS engine.
 - **Real apps** — terminal (psh), file manager (sortable, with a status bar),
-  text editor (line numbers + Ln/Col status bar), calculator, system monitor,
-  settings, the TIS console, a media player (kernel-decoded video + audio, with a
+  text editor (line numbers + Ln/Col status bar), a scientific calculator (with a
+  balanced-ternary panel), Notes, system monitor, settings, the TIS console,
+  **RustyPhone** (SIP dialer + phone-number verification — Rusty Penguin on any
+  device), a media player (kernel-decoded video + audio, with a
   Windows-Media-Player-style plasma visualizer easter egg), a screenshot tool
   (also right-click → Take Screenshot), an image viewer, a clock (live time +
   stopwatch + timer + world clocks), plus Snake, Minesweeper and a pure-Rust
@@ -157,7 +160,8 @@ velocity equals completion.
 | **Window snapping (drag to left/right/top edge → half-screen or maximize preview)** | ✅ |
 | **4 virtual desktops (dock-tray dots, fully isolated rendering + input)** | ✅ |
 | **Quick Settings panel (Wi-Fi/BT/dark/volume tiles, tray-anchored)** | ✅ GNOME-style |
-| Apps: terminal, files, editor, calculator, monitor, settings, TIS console | ✅ |
+| Apps: terminal, files, editor, scientific calculator, Notes, monitor, settings, TIS console | ✅ |
+| **RustyPhone — SIP dialer UI + phone-number verification flow (Rusty Penguin on any device)** | ⚠️ UI + verification flow built; live telephony (Twilio) wiring ready, not yet placing real calls |
 | **File manager: sortable columns (name/size) + status bar** | ✅ |
 | **Text editor: line numbers + Ln/Col/modified status bar** | ✅ QEMU-verified |
 | **Media player (kernel-decoded video + audio in a window; WMP plasma visualizer easter egg)** | ✅ QEMU-verified |
@@ -220,7 +224,7 @@ Paste this into a fresh Linux or macOS terminal. It installs the Rust toolchain
 and all required tools, builds the ISO, and launches it in QEMU automatically:
 
 ```bash
-curl -sSf https://raw.githubusercontent.com/rfi-irfos/rusty-penguin/main/install-dev.sh | bash
+curl -sSf https://raw.githubusercontent.com/rfi-irfos/rusty-penguin/master/install-dev.sh | bash
 ```
 
 What it does: installs `rustup` (nightly + required targets), `grub-mkrescue`/
