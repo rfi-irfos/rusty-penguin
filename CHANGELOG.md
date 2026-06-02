@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented here.
 
+## [3.3.0] — 2026-06-02 — Smooth dingir, upward flyouts, mint context menu
+
+### Changed — Dingir start button (anti-aliased)
+- The dingir glyph was pixelated when scaled down (96px PPM → ~30px via
+  nearest-neighbour). `draw_ppm_icon_centered` now does **area-averaging**
+  (box-filter) downscaling with per-pixel coverage as edge alpha, so the dingir
+  comes out smooth and clean at button size in both idle and active states.
+- Active button tile darkened (teal tint 96→60) so the teal dingir reads with
+  contrast instead of washing out against a too-bright tile.
+
+### Changed — Flyout grows upward
+- Category flyouts now **bottom-anchor to the hovered row and grow upward**,
+  toward the top of the screen, so low categories (Games, Communications) are no
+  longer cramped against the dock.
+
+### Changed — App context menu restyle (right-click popup)
+- Rebuilt with the smooth antialiased sans (was the old 8×8 bitmap font),
+  rounded mint-tinted frosted glass, a proper app-name header with a hairline,
+  and a faint mint pill + left accent on the primary "Run" action. Shared
+  geometry between draw + hit-test so clicks line up exactly.
+
+### Changed — Font consistency in chrome
+- Tray clock and start-menu category arrows/counts now render with the
+  antialiased sans instead of the legacy bitmap font.
+
 ## [3.2.0] — 2026-06-02 — Flyout start menu, real dingir button, hover navigation
 
 ### Changed — Start menu redesign (flyout sub-panels)

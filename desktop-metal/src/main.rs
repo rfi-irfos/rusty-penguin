@@ -648,16 +648,42 @@ fn draw_ppm_icon_centered(fb: &mut Framebuffer, _path: &str, cx: i32, cy: i32, s
     if iw == 0 || ih == 0 || off + iw * ih * 3 > data.len() { return false; }
     let sx = cx - size as i32 / 2;
     let sy = cy - size as i32 / 2;
+    // Area-averaging (box filter) downscale: each output pixel averages the whole
+    // source block it covers, instead of grabbing one nearest pixel. Edges come out
+    // smooth + anti-aliased (coverage = fraction of lit source pixels) instead of
+    // the jagged, "pixelated" nearest-neighbour look.
     for py in 0..size {
-        let src_y = (py as usize * ih / size as usize).min(ih - 1);
+        let sy0 = (py as usize * ih / size as usize).min(ih - 1);
+        let sy1 = (((py + 1) as usize * ih / size as usize).max(sy0 + 1)).min(ih);
+        let dy = sy + py as i32;
+        if dy < 0 || dy as u32 >= fb.height { continue; }
         for px in 0..size {
-            let src_x = (px as usize * iw / size as usize).min(iw - 1);
-            let p = off + (src_y * iw + src_x) * 3;
-            let (r, g, b) = (data[p] as u32, data[p+1] as u32, data[p+2] as u32);
-            // Skip pixels that are near the bg color (transparent area from JPEG bg removal).
-            if r < 0x18 && g < 0x20 && b < 0x2C { continue; }
-            let col = (r << 16) | (g << 8) | b;
-            fb.set_pixel((sx + px as i32) as u32, (sy + py as i32) as u32, col);
+            let sx0 = (px as usize * iw / size as usize).min(iw - 1);
+            let sx1 = (((px + 1) as usize * iw / size as usize).max(sx0 + 1)).min(iw);
+            let (mut ar, mut ag, mut ab) = (0u32, 0u32, 0u32);
+            let mut lit = 0u32; let mut total = 0u32;
+            for syy in sy0..sy1 {
+                for sxx in sx0..sx1 {
+                    let p = off + (syy * iw + sxx) * 3;
+                    let (r, g, b) = (data[p] as u32, data[p+1] as u32, data[p+2] as u32);
+                    total += 1;
+                    // Skip near-bg pixels (transparent area from JPEG bg removal).
+                    if r < 0x18 && g < 0x20 && b < 0x2C { continue; }
+                    ar += r; ag += g; ab += b; lit += 1;
+                }
+            }
+            if lit == 0 || total == 0 { continue; }
+            let dx = sx + px as i32;
+            if dx < 0 || dx as u32 >= fb.width { continue; }
+            // Average colour of the lit pixels; coverage = lit/total → edge alpha.
+            let (r, g, b) = (ar / lit, ag / lit, ab / lit);
+            let a = lit * 255 / total;
+            let d = fb.get_pixel(dx as u32, dy as u32);
+            let ia = 255 - a;
+            let nr = (r * a + ((d >> 16) & 0xFF) * ia) / 255;
+            let ng = (g * a + ((d >> 8) & 0xFF) * ia) / 255;
+            let nb = (b * a + (d & 0xFF) * ia) / 255;
+            fb.set_pixel(dx as u32, dy as u32, (nr << 16) | (ng << 8) | nb);
         }
     }
     true
@@ -1435,7 +1461,7 @@ fn draw_taskbar_clock(fb: &mut Framebuffer, time_str: &str) {
         &time_str[start..end]
     } else { "" };
     if hhmm.is_empty() { return; }
-    let tw = hhmm.len() as u32 * 8;
+    let tw = Framebuffer::aa_w(hhmm, crate::fb::AA_S) as u32;
     let x = fw - tw - 10;
     // Clear the clock area and redraw
     fb.fill_rect(x - 3, tb_y + 5, tw + 6, 18, TASKBAR);
@@ -1443,7 +1469,7 @@ fn draw_taskbar_clock(fb: &mut Framebuffer, time_str: &str) {
     fb.fill_rounded_rect(x as i32 - 7, tb_y as i32 + 4, tw as i32 + 14, 22, 9, 0x293137);
     fb.fill_rect_s(x as i32 - 2, tb_y as i32 + 4, tw as i32 + 4, 1, 0x6F7B83);
     fb.fill_rect_s(x as i32 - 2, tb_y as i32 + 24, tw as i32 + 4, 1, 0x181D22);
-    fb.draw_str(x, tb_y + 10, hhmm, WHITE, 0x293137);
+    fb.draw_aa(x as i32, tb_y as i32 + 5, hhmm, WHITE, crate::fb::AA_S);
 }
 
 fn tbwin_hit(fw: u32, fh: u32, wins: &[TermWin], mx: i32, my: i32, current_desktop: usize) -> Option<usize> {
@@ -1819,16 +1845,16 @@ fn draw_start_menu(fb: &mut Framebuffer) {
         if is_sel {
             fb.fill_rect(x as u32, cur_y as u32, 3, MENU_CAT_H as u32, TEAL);
         }
-        let ty = cur_y + (MENU_CAT_H - 14) / 2;
+        let ty = cur_y + (MENU_CAT_H - Framebuffer::aa_line(crate::fb::AA_S)) / 2;
         let arrow_col = if is_sel { TEAL } else { 0x4A6070 };
-        fb.draw_str((x + 10) as u32, ty as u32, ">", arrow_col, row_bg);
+        fb.draw_aa(x + 12, ty, ">", arrow_col, crate::fb::AA_S);
         let name_col = if is_sel { WHITE } else { 0xB0BCC8 };
         fb.draw_aa(x + 26, ty, cat_name, name_col, crate::fb::AA_S);
         // Item count on the right
         let cnt = items.len();
         let cnt_char = b'0' + cnt as u8;
         let cnt_str = core::str::from_utf8(core::slice::from_ref(&cnt_char)).unwrap_or("?");
-        fb.draw_str((x + w - 20) as u32, ty as u32, cnt_str, if is_sel { 0x38BDF8 } else { 0x4A5568 }, row_bg);
+        fb.draw_aa(x + w - 22, ty, cnt_str, if is_sel { 0x38BDF8 } else { 0x4A5568 }, crate::fb::AA_S);
         cur_y += MENU_CAT_H;
         fb.fill_rect_s(x + 8, cur_y, w - 16, 1, 0x1E2A38);
         cur_y += 2;
@@ -1858,10 +1884,12 @@ fn cat_flyout_bounds(fh: u32) -> Option<(i32, i32, i32, i32)> {
     let (sx, sy, sw, _) = start_menu_bounds(fh);
     let fw = FLYOUT_W;
     let fh_panel = FLYOUT_HDR_H + items.len() as i32 * MENU_ITEM_H + 10;
-    // Align flyout top with the selected category row
+    // Grow the flyout UPWARD from the hovered row: anchor its BOTTOM to the
+    // bottom of the category row, so panels open toward the top of the screen
+    // and never get cramped against the dock (esp. for low categories like Games).
     let cat_row_y = sy + MENU_HDR_H + 4 + ci as i32 * (MENU_CAT_H + 2);
-    let max_y = fh as i32 - fh_panel - 8;
-    let fy = cat_row_y.min(max_y).max(8);
+    let cat_row_bottom = cat_row_y + MENU_CAT_H;
+    let fy = (cat_row_bottom - fh_panel).max(8).min(fh as i32 - fh_panel - 8);
     Some((sx + sw + 8, fy, fw, fh_panel))
 }
 
@@ -2015,39 +2043,57 @@ fn draw_ctx_menu_hover(fb: &mut Framebuffer, mx: i32, my: i32, hover: Option<usi
 // ── App context menu (right-click on start menu item) ────────────────────────
 // Items: 0=Run, 1=Pin to dock, 2=Pin to desktop, 3=Run as admin
 const APP_CTX_ITEMS: &[&str] = &["Run", "Pin to dock", "Pin to desktop", "Run as admin"];
-const APP_CTX_W: i32 = 180;
+const APP_CTX_W:      i32 = 198;
 const APP_CTX_ITEM_H: i32 = 30;
+const APP_CTX_HDR_H:  i32 = 26;
+const APP_CTX_PAD:    i32 = 6;
+
+// Shared geometry so draw + hit agree exactly. Returns clamped (x, y, h).
+fn app_ctx_geom(fb_w: i32, fb_h: i32, x: i32, y: i32) -> (i32, i32, i32) {
+    let h = APP_CTX_PAD * 2 + APP_CTX_HDR_H + APP_CTX_ITEMS.len() as i32 * APP_CTX_ITEM_H;
+    let x = x.max(4).min(fb_w - APP_CTX_W - 4);
+    let y = y.max(4).min(fb_h - h - 4);
+    (x, y, h)
+}
 
 fn draw_app_ctx_menu(fb: &mut Framebuffer, mi: usize, x: i32, y: i32) {
-    let h = APP_CTX_ITEMS.len() as i32 * APP_CTX_ITEM_H + 8;
-    // Clamp to screen.
-    let x = x.max(4).min(fb.width as i32 - APP_CTX_W - 4);
-    let y = y.min(fb.height as i32 - h - 4);
-    fb.fill_rounded_rect(x + 2, y + 4, APP_CTX_W, h, 10, 0x050810);
-    fb.fill_rounded_rect_glass(x, y, APP_CTX_W, h, 10, 0x16202C, 240);
-    fb.fill_rect_s(x + 6, y, APP_CTX_W - 12, 2, TEAL);
-    // App name header
+    let (x, y, h) = app_ctx_geom(fb.width as i32, fb.height as i32, x, y);
+    // Soft shadow + frosted mint-tinted glass, rounded.
+    fb.fill_rounded_rect(x + 3, y + 5, APP_CTX_W + 1, h, 13, 0x070B0A);
+    fb.fill_rounded_rect_glass(x, y, APP_CTX_W, h, 12, 0x16201E, 240);
+    draw_round_border(fb, x, y, APP_CTX_W, h, 12, 0x2E6E64);
+    fb.fill_rect_s(x + 10, y + 1, APP_CTX_W - 20, 1, TEAL); // mint top light-catch
+
+    // Header: app name in mint, hairline under.
+    let hdr_y = y + APP_CTX_PAD;
     if mi < MENU_ITEMS.len() {
-        fb.draw_aa(x + 14, y + 4, MENU_ITEMS[mi].label, WHITE, crate::fb::AA_T);
+        fb.draw_aa(x + 14, hdr_y + 3, MENU_ITEMS[mi].label, TEAL, crate::fb::AA_S);
     }
+    fb.fill_rect_s(x + 8, hdr_y + APP_CTX_HDR_H - 2, APP_CTX_W - 16, 1, 0x243430);
+
+    // Action rows — smooth AA font, rounded hover-style accent on the primary "Run".
+    let items_top = hdr_y + APP_CTX_HDR_H;
     for (i, label) in APP_CTX_ITEMS.iter().enumerate() {
-        let iy = y + 4 + i as i32 * APP_CTX_ITEM_H + 14;
-        // Grey out "Pin to dock" if already pinned.
+        let iy = items_top + i as i32 * APP_CTX_ITEM_H;
         let di = if mi < MENU_TO_DI.len() { MENU_TO_DI[mi] } else { 0xFF };
         let greyed = *label == "Pin to dock" && dock_is_pinned(di);
-        let col = if greyed { 0x4A5568u32 } else { 0xCDD6E0 };
-        fb.fill_rect_s(x + 6, iy + APP_CTX_ITEM_H - 2, APP_CTX_W - 12, 1, 0x1E2A38);
-        fb.draw_str((x + 14) as u32, (iy + 8) as u32, label, col, 0x16202C);
+        let col = if greyed { 0x4A5568u32 } else if i == 0 { 0xEAF4F0 } else { 0xC6D2CC };
+        if i == 0 {
+            // Primary action gets a faint mint pill + left accent.
+            fb.fill_rounded_rect(x + 6, iy + 3, APP_CTX_W - 12, APP_CTX_ITEM_H - 6, 7, tint(TEAL, 30));
+            fb.fill_rect_s(x + 8, iy + 7, 3, APP_CTX_ITEM_H - 14, TEAL);
+        }
+        let ty = iy + (APP_CTX_ITEM_H - Framebuffer::aa_line(crate::fb::AA_S)) / 2;
+        fb.draw_aa(x + 16, ty, label, col, crate::fb::AA_S);
     }
 }
 
-fn app_ctx_menu_hit(mx: i32, my: i32, ax: i32, ay: i32) -> Option<usize> {
-    let h = APP_CTX_ITEMS.len() as i32 * APP_CTX_ITEM_H + 8;
-    let ax = ax.max(4); let ay = ay.min(9999);
-    if mx < ax || mx >= ax + APP_CTX_W || my < ay || my >= ay + h { return None; }
-    let rel = my - ay - 18;
-    if rel < 0 { return None; }
-    let idx = (rel / APP_CTX_ITEM_H) as usize;
+fn app_ctx_menu_hit(fb_w: i32, fb_h: i32, mx: i32, my: i32, ax: i32, ay: i32) -> Option<usize> {
+    let (x, y, h) = app_ctx_geom(fb_w, fb_h, ax, ay);
+    if mx < x || mx >= x + APP_CTX_W || my < y || my >= y + h { return None; }
+    let items_top = y + APP_CTX_PAD + APP_CTX_HDR_H;
+    if my < items_top { return None; }
+    let idx = ((my - items_top) / APP_CTX_ITEM_H) as usize;
     if idx < APP_CTX_ITEMS.len() { Some(idx) } else { None }
 }
 
@@ -2637,7 +2683,7 @@ fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, 
         // Active: brighter teal-glass tile, dingir lit up, teal underline.
         let (mbx, mby, mbw, _) = menu_btn_rect(fb.height);
         let bh = PANEL_H - 14;
-        fb.fill_rounded_rect(mbx, mby, mbw, bh, 12, tint(TEAL, 96));
+        fb.fill_rounded_rect(mbx, mby, mbw, bh, 12, tint(TEAL, 60));
         draw_round_border(fb, mbx, mby, mbw, bh, 12, TEAL);
         fb.fill_rect_s(mbx + 6, mby + 1, mbw - 12, 1, 0x6BE0CE);
         let dcx = mbx + mbw / 2; let dcy = mby + bh / 2;
@@ -3134,7 +3180,7 @@ pub extern "C" fn _start() -> ! {
                 scene_dirty = true;
             } else if let Some((ami, ax, ay)) = app_ctx {
                 // Left-click on the app context menu.
-                if let Some(opt) = app_ctx_menu_hit(cx, cy, ax, ay) {
+                if let Some(opt) = app_ctx_menu_hit(fb.width as i32, fb.height as i32, cx, cy, ax, ay) {
                     let di = if ami < MENU_TO_DI.len() { MENU_TO_DI[ami] } else { 0xFF };
                     match opt {
                         0 | 3 => { // Run / Run as admin — same for now
