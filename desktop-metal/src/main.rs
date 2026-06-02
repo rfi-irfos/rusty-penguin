@@ -296,7 +296,7 @@ const MENU_BTN_W:   i32 = 88;   // "Menu" button width
 const FAV_TILE:     i32 = 40;   // favourite icon tile
 const FAV_GAP:      i32 = 8;    // gap between favourites
 const PANEL_SOLID:  u32 = 0x262D33;  // dock body: graphite glass
-const DOCK_ALPHA:   u32 = 185;       // panel opacity — wallpaper still shows but panel reads clearly
+const DOCK_ALPHA:   u32 = 115;       // semi-transparent — wallpaper shows through, panel reads clearly
 const PANEL_EDGE:   u32 = 0x5E6B72;  // panel hairline / top sheen
 const PANEL_R:      i32 = 16;        // panel corner radius
 

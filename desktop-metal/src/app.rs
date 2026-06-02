@@ -4410,17 +4410,17 @@ impl App for WadDoom {
             }
         }
 
-        // Status bar (DOOM aesthetic: dark with health/ammo display)
+        // Status bar — label row at +4, value row at +18 (two distinct lines).
         let bar_y = y + game_h as u32;
         fb.fill_rect(x, bar_y, w, bar_h as u32, 0x181008);
-        // Health "100%"
-        fb.draw_aa(x as i32 + 12, bar_y as i32 + 4, "100%", 0xEF7575, crate::fb::AA_T);
-        fb.draw_aa(x as i32 + 8,  bar_y as i32 + 2, "HLTH", 0x888880, crate::fb::AA_T);
-        // Ammo "50"
-        fb.draw_aa(x as i32 + w as i32 - 50, bar_y as i32 + 4, "50", 0xF5C451, crate::fb::AA_T);
-        fb.draw_aa(x as i32 + w as i32 - 54, bar_y as i32 + 2, "AMMO", 0x888880, crate::fb::AA_T);
-        // Title
-        fb.draw_aa(x as i32 + w as i32 / 2 - 30, bar_y as i32 + 3,
+        // Health
+        fb.draw_aa(x as i32 + 10, bar_y as i32 + 4,  "HLTH", 0x888880, crate::fb::AA_T);
+        fb.draw_aa(x as i32 + 10, bar_y as i32 + 18, "100%", 0xEF7575, crate::fb::AA_T);
+        // Ammo (right-aligned)
+        fb.draw_aa(x as i32 + w as i32 - 56, bar_y as i32 + 4,  "AMMO", 0x888880, crate::fb::AA_T);
+        fb.draw_aa(x as i32 + w as i32 - 46, bar_y as i32 + 18, "50",   0xF5C451, crate::fb::AA_T);
+        // Title centered
+        fb.draw_aa(x as i32 + w as i32 / 2 - 30, bar_y as i32 + 11,
             "E1M1 DOOM", 0xEF4444, crate::fb::AA_T);
 
         self.dirty = false;
