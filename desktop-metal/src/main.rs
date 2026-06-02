@@ -326,7 +326,7 @@ const TRIT_POS:  u32 = 0x38BDF8;  // ternary +1 (azure)
 const PANEL_MARGIN: i32 = 14;   // inset from screen left/right
 const PANEL_BOTTOM: i32 = 12;   // gap below the panel
 const PANEL_H:      i32 = 54;   // panel height
-const MENU_BTN_W:   i32 = 88;   // "Menu" button width
+const MENU_BTN_W:   i32 = 100;  // "Menu" button width (wider to fit 36px dingir + label)
 const FAV_TILE:     i32 = 40;   // favourite icon tile
 const FAV_GAP:      i32 = 8;    // gap between favourites
 const PANEL_SOLID:  u32 = 0x0E1828;  // dock body: deep navy glass
@@ -644,7 +644,9 @@ fn draw_ppm_icon_centered(fb: &mut Framebuffer, path: &str, cx: i32, cy: i32, si
     true
 }
 
-/// Render a PPM image from the kernel CPIO at (x, y) as a ghost watermark (~20% blend).
+/// Render a PPM from the kernel CPIO as a ghost watermark at `(x, y)`.
+/// Dark pixels in the source (the logo's bg) are skipped — only the
+/// lit areas (gear teeth, penguin body, beak) show through at ~28% blend.
 fn draw_ppm_watermark(fb: &mut Framebuffer, path: &str, x: u32, y: u32, size: u32) {
     let owned = match load_cpio_file(path) { Some(v) => v, None => return };
     let data: &[u8] = &owned;
@@ -658,16 +660,19 @@ fn draw_ppm_watermark(fb: &mut Framebuffer, path: &str, x: u32, y: u32, size: u3
             let tx = x + px; if tx >= fw { break; }
             let src_x = (px as usize * iw / size as usize).min(iw - 1);
             let p = off + (src_y * iw + src_x) * 3;
+            if p + 2 >= data.len() { continue; }
             let (r, g, b) = (data[p] as u32, data[p+1] as u32, data[p+2] as u32);
-            // Only draw non-bg pixels; blend at ~20% opacity over existing pixel.
-            if r < 0x14 && g < 0x18 && b < 0x22 { continue; }
+            // Skip very dark pixels (logo background) — they'd just create a dark square.
+            let luma = (r * 77 + g * 150 + b * 29) >> 8;
+            if luma < 20 { continue; }
+            // Blend: 28% source, 72% background.
             let bg = fb.get_pixel(tx, ty);
             let br = (bg >> 16) & 0xFF;
             let bg_ = (bg >> 8) & 0xFF;
             let bb = bg & 0xFF;
-            let nr = (r * 20 + br * 80) / 100;
-            let ng = (g * 20 + bg_ * 80) / 100;
-            let nb = (b * 20 + bb * 80) / 100;
+            let nr = (r * 28 + br * 72) / 100;
+            let ng = (g * 28 + bg_ * 72) / 100;
+            let nb = (b * 28 + bb * 72) / 100;
             fb.set_pixel(tx, ty, (nr << 16) | (ng << 8) | nb);
         }
     }
@@ -754,8 +759,6 @@ fn draw_bg_stone(fb: &mut Framebuffer) {
     // Corner vignette for depth.
     let vr = wi * 55 / 100;
     for (vx, vy) in [(0,0),(wi,0),(0,hi),(wi,hi)] { fb.glow(vx, vy, vr, 0x03050C, 65); }
-    // Rusty Penguin logo as a ghost watermark — very subtle, bottom-right.
-    draw_ppm_watermark(fb, "bin/rp_watermark.ppm", w.saturating_sub(140), h.saturating_sub(140), 120);
 }
 
 /// Scatter stars on a coarse grid using hash2 (used by several night scenes).
@@ -1036,16 +1039,13 @@ fn draw_scene_static_v(fb: &mut Framebuffer, variant: u8) {
     // Ambient depth: a soft warm light pool lifts the hero off the wall, and a
     // cream halo makes the dingir luminous. (Also improves hero legibility over
     // any wallpaper, including the Bliss easter egg.)
-    fb.glow(cx, hero_cy - 18, w as i32 * 18 / 100, 0x21333A, 54);
-    fb.glow(cx - w as i32 * 12 / 100, hero_cy + 8, w as i32 * 10 / 100, 0x1E3A36, 36);
-    fb.glow(cx + w as i32 * 13 / 100, hero_cy - 52, w as i32 * 9 / 100, 0x4A3B25, 34);
-    fb.glow(cx, hero_cy - 64, 72, 0x0A2A3A, 82);
-    fb.glow(cx, hero_cy - 64, 30, TEAL, 64);
-    // Try to render the real dingir logo; fall back to drawn star.
-    if !draw_ppm_icon_centered(fb, "bin/dingir.ppm", cx, hero_cy - 64, 48) {
-        fb.draw_star8(cx, hero_cy - 64, 28, TEAL);
-    }
-    fb.fill_rect_s(cx - 92, hero_cy - 52, 184, 1, 0x736C54);
+    // Rusty Penguin gear+penguin logo, ghost-watermarked over the background.
+    // This IS the visual identity of the desktop — no separate star.
+    let logo_size = (w.min(h) * 38 / 100) as u32;
+    let lx = (cx as u32).saturating_sub(logo_size / 2);
+    let ly = (hero_cy as u32).saturating_sub(logo_size / 2 + 20);
+    draw_ppm_watermark(fb, "bin/rp_watermark.ppm", lx, ly, logo_size);
+    fb.fill_rect_s(cx - 92, hero_cy - 8, 184, 1, 0x2A3548);
     // Title in the smooth AA display font. "Rusty " white + "Penguin" green.
     let w1 = Framebuffer::aa_w("Rusty ", crate::fb::AA_L);
     let w2 = Framebuffer::aa_w("Penguin", crate::fb::AA_L);
@@ -1083,13 +1083,13 @@ fn draw_scene_static_v(fb: &mut Framebuffer, variant: u8) {
     fb.fill_rounded_rect_glass(mbx, mby, mbw, PANEL_H - 14, 12, 0x303940, 202);
     draw_round_border(fb, mbx, mby, mbw, PANEL_H - 14, 12, 0x58656C);
     fb.fill_rect_s(mbx + 12, mby + 1, mbw - 24, 1, 0x7B878E);
-    // Dingir icon: real logo if available, drawn star fallback. Both in teal.
+    // Dingir icon — full quality, 36px render of the 64x64 source.
     let star_cy = mby + (PANEL_H - 14) / 2;
-    let icon_drawn = draw_ppm_icon_centered(fb, "bin/dingir.ppm", mbx + 19, star_cy, 24);
-    if !icon_drawn { fb.draw_star8(mbx + 19, star_cy, 13, TEAL); }
-    // "Menu" label: AA font, vertically centered, generous left pad
+    let icon_drawn = draw_ppm_icon_centered(fb, "bin/dingir.ppm", mbx + 22, star_cy, 36);
+    if !icon_drawn { fb.draw_star8(mbx + 22, star_cy, 15, TEAL); }
+    // "Menu" label
     let label_y = star_cy - 6;
-    fb.draw_aa(mbx + 38, label_y, "Menu", 0xE3ECEE, crate::fb::AA_S);
+    fb.draw_aa(mbx + 44, label_y, "Menu", 0xE3ECEE, crate::fb::AA_S);
     // separator
     fb.fill_rect_s(mbx + mbw + 8, ptop + 14, 1, PANEL_H - 28, 0x435059);
 
