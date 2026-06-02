@@ -1,4 +1,4 @@
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// Set once the higher-half physmap is built. Until then, the VMM reaches page-
 /// table frames (and other physical memory) through the low identity map
@@ -7,6 +7,22 @@ use core::sync::atomic::{AtomicBool, Ordering};
 /// the prerequisite for dropping the low identity alias and giving each process
 /// a private low half. See `build_physmap`.
 static PHYSMAP_READY: AtomicBool = AtomicBool::new(false);
+/// Saved once at boot (after physmap is up) for use by the S3 resume trampoline.
+/// The boot CR3 has PML4[0]=identity (0–64 MiB), PML4[256]=physmap, PML4[511]=kernel.
+/// Process CR3s created with `new_address_space_private()` drop PML4[0], so the
+/// trampoline MUST restore this CR3, not the current task's CR3.
+static KERNEL_BOOT_CR3: AtomicU64 = AtomicU64::new(0);
+
+/// Snapshot the current CR3 as the "kernel boot CR3". Call once, right after
+/// `build_physmap`, before any `new_address_space_private()` calls.
+pub fn save_kernel_cr3() {
+    KERNEL_BOOT_CR3.store(cr3(), Ordering::Relaxed);
+}
+
+/// Return the saved kernel boot CR3 (for the S3 resume trampoline).
+pub fn kernel_boot_cr3() -> u64 {
+    KERNEL_BOOT_CR3.load(Ordering::Relaxed)
+}
 
 /// Virtual address through which to touch a physical page-table frame (or any
 /// physical RAM the VMM dereferences): the physmap once it's up, else the low

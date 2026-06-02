@@ -306,6 +306,7 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
     let phys_mib = (total / 256) as usize;            // frames → MiB (256 × 4 KiB)
     let map_mib  = ((phys_mib + 4) & !1).max(64);     // round up to 2 MiB, small margin
     unsafe { vmm::build_physmap(map_mib); }
+    vmm::save_kernel_cr3(); // snapshot boot CR3 for S3 resume trampoline
     vga::write_str("  [VMM] physmap: RAM direct-mapped at higher half (", vga::Color::Green);
     vga::write_i32(map_mib as i32);
     vga::write_str(" MiB)\n", vga::Color::Green);
@@ -552,6 +553,15 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
     }
     if unsafe { mb2_cmdline_contains(mb2, b"acpireboot") } {
         acpi::reboot(); // verify ACPI/8042 reset
+    }
+    if unsafe { mb2_cmdline_contains(mb2, b"s3test") } {
+        // S3 suspend-to-RAM: sets up the trampoline, writes firmware_waking_vector,
+        // flushes caches, and writes the S3 sleep register. QEMU enters "suspended";
+        // issue QMP system_wakeup — SeaBIOS jumps to the trampoline at 0x8000 which
+        // restores CR3/CR4/RSP and calls acpi_s3_resumed (serial: "resumed from S3").
+        acpi::suspend();
+        // Only reached if S3 is not supported by this platform.
+        loop { unsafe { core::arch::asm!("hlt", options(nostack)); } }
     }
     if unsafe { mb2_cmdline_contains(mb2, b"multiproc") } {
         // Hung-app isolation: a healthy + a wedged ring-3 process under preemption.
