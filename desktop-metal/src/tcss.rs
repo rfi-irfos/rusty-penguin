@@ -515,6 +515,55 @@ pub fn bench_spec_cmp() -> (u64, u64, u64) {
     (trit_ops, bin_ops, agree)
 }
 
+// ── @sparseskip: cascade dormancy gate ───────────────────────────────────────
+// A rule is DORMANT for an element when none of its selectors match — its whole
+// declaration block is the `0` state and is physically skipped. This mirrors the
+// kernel's @sparseskip (skip Zero-weight work). The HONEST question the bench
+// answers: is this a *ternary* advantage, or just standard selector culling that
+// a binary engine does identically?
+#[inline]
+pub fn is_rule_dormant(rule: &Rule, el: &Element) -> bool {
+    !rule.selectors.iter().any(|s| s.matches(el))
+}
+
+/// Measure cascade work over a representative sheet × page. Returns
+/// (applied_decls, dormant_decls_skipped, match_checks). `applied` are the
+/// declaration-applies actually performed; `dormant` are the ones skipped
+/// because the rule didn't match; `match_checks` is the selector-match work paid
+/// either way (and which a binary engine pays too).
+pub fn bench_sparseskip() -> (u64, u64, u64) {
+    let sheet = Stylesheet::parse(
+        "* { color:#222; } body { color:#111; } p { color:#333; font-size:16px; } \
+         h1 { color:#1a4a80; font-size:24px; } h2 { color:#b4502a; } a { color:#1a5fbe; } \
+         .warn { color:red; text-align:right; } .muted { color:#888; } .big { font-size:24px; } \
+         #title { color:#000; font-weight:bold; } #nav { display:none; } li { color:#333; } \
+         .card { color:#222; } .card h2 { color:#444; } strong { font-weight:bold; } code { color:#a33; }",
+    );
+    // A small but realistic page: 9 elements with varied tags/classes/ids.
+    let els = [
+        Element::new("p"),
+        Element::new("h1").id("title"),
+        Element::new("p").class("warn"),
+        Element::new("a").class("muted"),
+        Element::new("h2").class("card"),
+        Element::new("li"),
+        Element::new("div").id("nav"),
+        Element::new("strong"),
+        Element::new("span").class("big"),
+    ];
+    let mut applied = 0u64;
+    let mut dormant = 0u64;
+    let mut checks = 0u64;
+    for el in els.iter() {
+        for rule in &sheet.rules {
+            checks += rule.selectors.len() as u64; // paid by binary engines too
+            let decls = rule.decls.len() as u64;
+            if is_rule_dormant(rule, el) { dormant += decls; } else { applied += decls; }
+        }
+    }
+    (applied, dormant, checks)
+}
+
 /// In-code verification. Returns true iff every assert holds.
 pub fn self_test() -> bool {
     // 1. Value parsers.
