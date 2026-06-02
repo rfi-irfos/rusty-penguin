@@ -1,5 +1,6 @@
 use crate::vga;
 use crate::gdt;
+use crate::wine::mod_impl::{is_wine as is_wine_ab, syscall_handler as wine_handler, load_pe as wine_load_pe, enter_wine as wine_enter};
 
 // ── ACPI EC battery reader ────────────────────────────────────────────────────
 // ACPI Embedded Controller (EC) at I/O ports 0x62 (data) / 0x66 (command).
@@ -212,8 +213,8 @@ pub extern "C" fn syscall_handler(nr: u64, arg1: u64, arg2: u64, arg3: u64) -> u
     if crate::linux::is_linux() {
         return crate::linux::syscall(nr, arg1, arg2, arg3);
     }
-    if crate::wine::is_wine() {
-        return crate::wine::syscall_handler(nr, arg1, arg2, arg3, 0, 0);
+    if is_wine_ab() {
+        return wine_handler(nr, arg1, arg2, arg3, 0, 0);
     }
     match nr {
         // Scheduler Increment-3c proof: a ring-3 task running in its own address
@@ -701,8 +702,8 @@ pub extern "C" fn syscall_handler(nr: u64, arg1: u64, arg2: u64, arg3: u64) -> u
             let path = unsafe { core::slice::from_raw_parts(path_ptr, path_len) };
             let p = if path.starts_with(b"/") { &path[1..] } else { path };
             if let Some(pe_data) = crate::ramfs::find(p) {
-                if let Some((entry, image_base)) = crate::wine::load_pe(pe_data) {
-                    crate::wine::enter_wine(entry, image_base);
+                if let Some((entry, image_base)) = wine_load_pe(pe_data) {
+                    wine_enter(entry, image_base);
                 }
             }
             u64::MAX

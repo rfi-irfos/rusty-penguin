@@ -1,7 +1,9 @@
 //! The native Wine subsystem for Rusty Penguin.
 //! Rebuilt from scratch to provide a first-class Windows environment.
 
-pub mod pe;
+pub mod pe {
+    pub use super::super::pe::*;
+}
 
 use crate::serial;
 use crate::vmm;
@@ -9,14 +11,21 @@ use crate::pmm;
 use crate::ramfs;
 use core::mem::size_of;
 
-// ── Per-process ABI mode ─────────────────────────────────────────────────────
-static mut WINE_ABI: bool = false;
+// ── Per-process ABI mode (Ternary-native) ──────────────────────────────────
+// Ternary state: Trit::Zero (Dormant/Off), Trit::Pos (Active)
+static mut WINE_ABI: ternary_core::Trit = ternary_core::Trit::Zero;
 
 #[inline]
-pub fn is_wine() -> bool { unsafe { WINE_ABI } }
+pub fn is_wine() -> bool { 
+    use ternary_core::Trit;
+    unsafe { matches!(WINE_ABI, Trit::Pos) } 
+}
 
 #[inline]
-pub fn set_wine(v: bool) { unsafe { WINE_ABI = v; } }
+pub fn set_wine(v: bool) { 
+    use ternary_core::Trit;
+    unsafe { WINE_ABI = if v { Trit::Pos } else { Trit::Zero }; }
+}
 
 /// Track loaded DLLs to avoid double-loading.
 #[derive(Clone, Copy)]
@@ -35,22 +44,12 @@ fn find_loaded_dll(name: &str) -> Option<u64> {
     None
 }
 
-fn register_dll(name: &'static str, base: u64) {
-    unsafe {
-        for dll in LOADED_DLLS.iter_mut() {
-            if dll.is_none() {
-                *dll = Some(LoadedDll { name, base });
-                return;
-            }
-        }
-    }
-}
-
 /// Loads a Windows PE binary and prepares it for execution.
 /// Returns (entry_point, image_base)
 pub fn load_pe(data: &[u8]) -> Option<(u64, u64)> {
     if !pe::is_pe(data) {
-        serial::write_str("  [wine] Invalid PE signature\n");
+        serial::write_str("  [wine] Invalid PE signature
+");
         return None;
     }
 
@@ -65,7 +64,8 @@ pub fn load_pe(data: &[u8]) -> Option<(u64, u64)> {
     serial::write_hex_u32(image_base as u32);
     serial::write_str(" entry 0x");
     serial::write_hex_u32(entry_point as u32);
-    serial::write_str("\n");
+    serial::write_str("
+");
 
     // Map sections
     let section_headers_off = nt_off + size_of::<pe::ImageNtHeaders64>();
@@ -82,7 +82,7 @@ pub fn load_pe(data: &[u8]) -> Option<(u64, u64)> {
 
         let num_pages = (size + 4095) / 4096;
         for p in 0..num_pages {
-            let va = dest_va + (p * 4096) as u64;
+            let va = dest_va + (p as u64 * 4096);
             if let Some(phys) = pmm::alloc_frame() {
                 let pfw = vmm::PTE_PRESENT | vmm::PTE_WRITABLE | vmm::PTE_USER;
                 unsafe { vmm::map_page_in(vmm::current_cr3(), va, phys, pfw); }
@@ -112,7 +112,8 @@ pub fn load_pe(data: &[u8]) -> Option<(u64, u64)> {
 }
 
 fn resolve_imports(image_base: u64, import_rva: u64) {
-    serial::write_str("  [wine] Resolving imports...\n");
+    serial::write_str("  [wine] Resolving imports...
+");
     let mut desc_ptr = (image_base + import_rva) as *const pe::ImageImportDescriptor;
     
     unsafe {
@@ -124,13 +125,12 @@ fn resolve_imports(image_base: u64, import_rva: u64) {
             
             serial::write_str("  [wine] Import from: ");
             serial::write_str(dll_name);
-            serial::write_str("\n");
+            serial::write_str("
+");
             
             let dll_base = if let Some(base) = find_loaded_dll(dll_name) {
                 base
             } else {
-                // For Brick 15, we only support ntdll.dll which is built-in or pre-loaded.
-                // In a real system, we'd call load_library(dll_name) here.
                 0
             };
             
@@ -211,72 +211,53 @@ fn extra_args() -> (u64, u64, u64, u64) {
     (a4, a5, a6, ursp)
 }
 
+#[inline]
+#[inline]
+pub fn is_dormant_syscall(nr: u64) -> bool {
+    // If we're in Crusader profile, skip legacy/non-game subsystems.
+    // 0x100-0x1FF: Printers, Spooler, Networking (Dormant)
+    // 0x30-0x3B: Legacy Domain/Network auth (Dormant)
+    if (nr >= 0x100 && nr <= 0x1FF) || (nr >= 0x30 && nr <= 0x3B) {
+        return true;
+    }
+    false
+}
+
 pub fn syscall_handler(nr: u64, _a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64) -> u64 {
     let (a4, a5, a6, ursp) = extra_args();
     let w_a1 = a4;
     let w_a2 = _a3; 
     let w_a3 = a5; 
     let w_a4 = a6; 
-    let w_a5 = unsafe { *(ursp as *const u64).add(4) }; 
-    let w_a6 = unsafe { *(ursp as *const u64).add(5) }; 
 
     if is_dormant_syscall(nr) { return 0; }
 
     serial::write_str("  [wine] Syscall nr=0x");
     serial::write_hex_u32(nr as u32);
-    serial::write_str("\n");
+    serial::write_str("
+");
     
     match nr {
         0x01 => { crate::sched::yield_(); 0 }
-        // NtQuerySystemTime (Brick 19)
-        0x57 => unsafe {
+        0x57 => unsafe { // NtQuerySystemTime
             let time_ptr = w_a1 as *mut u64;
-            if !time_ptr.is_null() {
-                // Return rough Windows-epoch time
-                *time_ptr = 132645600000000000 + (crate::idt::ticks() * 100000); 
-            }
+            if !time_ptr.is_null() { *time_ptr = 132645600000000000 + (crate::idt::ticks() * 100000); }
             0
         }
-        // NtDelayExecution (Brick 19)
-        0x34 => {
-            crate::sched::yield_();
-            0
-        }
-        // NtDeviceIoControlFile (Brick 28)
-        0x03 => {
-            serial::write_str("  [wine] NtDeviceIoControlFile handle=0x");
-            serial::write_hex_u32(w_a1 as u32);
-            serial::write_str(" ioctl=0x");
+        0x34 => { crate::sched::yield_(); 0 } // NtDelayExecution
+        0x03 => { // NtDeviceIoControlFile
+            serial::write_str("  [wine] NtDeviceIoControlFile ioctl=0x");
             serial::write_hex_u32(w_a3 as u32);
-            serial::write_str("\n");
-            0 // STATUS_SUCCESS
-        }
-        // NtCreateMutant (Brick 18)
-        0x1b => {
-            serial::write_str("  [wine] NtCreateMutant stub\n");
-            alloc_handle(WinObject::Mutant)
-        }
-        // NtReleaseMutant (Brick 18)
-        0x21 => {
-            serial::write_str("  [wine] NtReleaseMutant stub\n");
+            serial::write_str("
+");
             0
         }
-        // NtCreateSemaphore (Brick 18)
-        0x1c => {
-            serial::write_str("  [wine] NtCreateSemaphore stub\n");
-            alloc_handle(WinObject::Semaphore)
-        }
-        // NtCreateSection (Brick 20)
-        0x4a => {
-            serial::write_str("  [wine] NtCreateSection stub\n");
-            alloc_handle(WinObject::Section)
-        }
-        // NtMapViewOfSection (Brick 20)
-        0x28 => {
-            serial::write_str("  [wine] NtMapViewOfSection stub\n");
-            0
-        }
-        0x18 => unsafe {
+        0x1b => { alloc_handle(WinObject::Mutant) } // NtCreateMutant
+        0x21 => 0, // NtReleaseMutant
+        0x1c => { alloc_handle(WinObject::Semaphore) } // NtCreateSemaphore
+        0x4a => { alloc_handle(WinObject::Section) } // NtCreateSection
+        0x28 => 0, // NtMapViewOfSection
+        0x18 => unsafe { // NtAllocateVirtualMemory
             let base_address_ptr = w_a2 as *mut u64;
             let region_size_ptr = w_a4 as *mut u64;
             if base_address_ptr.is_null() || region_size_ptr.is_null() { return 0xC000000D; }
@@ -300,142 +281,45 @@ pub fn syscall_handler(nr: u64, _a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64
             *region_size_ptr = num_pages * 4096;
             0 
         }
-        0x1e => 0, 
-        0x04 => {
-            serial::write_str("  [wine] NtWaitForSingleObject handle=0x");
-            serial::write_hex_u32(w_a1 as u32);
-            serial::write_str("\n");
-            0 
-        }
-        0x0f => {
-            let handle = w_a1;
-            if free_handle(handle) { 0 } else { 0xC0000008 } 
-        }
-        // NtReadFile
-        0x06 => {
-            serial::write_str("  [wine] NtReadFile handle=0x");
-            serial::write_hex_u32(w_a1 as u32);
-            serial::write_str("\n");
-            0 
-        }
-        // NtWriteFile
-        0x08 => {
-            serial::write_str("  [wine] NtWriteFile handle=0x");
-            serial::write_hex_u32(w_a1 as u32);
-            serial::write_str("\n");
-            0 
-        }
-        // NtOpenFile
-        0x33 => {
-            serial::write_str("  [wine] NtOpenFile stub\n");
-            alloc_handle(WinObject::File)
-        }
-        // NtCreateFile
-        0x55 => {
-            serial::write_str("  [wine] NtCreateFile stub\n");
-            alloc_handle(WinObject::File)
-        }
-        // NtQueryInformationFile (Brick 21)
-        0x22 => {
-            serial::write_str("  [wine] NtQueryInformationFile stub\n");
-            0 
-        }
-        // NtSetInformationFile (Brick 21)
-        0x23 => {
-            serial::write_str("  [wine] NtSetInformationFile stub\n");
-            0 
-        }
-        // NtOpenThread (Brick 22)
-        0x4e => {
-            serial::write_str("  [wine] NtOpenThread stub\n");
-            alloc_handle(WinObject::Thread)
-        }
-        // NtTerminateThread (Brick 22)
-        0x50 => {
-            serial::write_str("  [wine] NtTerminateThread stub\n");
-            0
-        }
-        // NtOpenProcess (Brick 23)
-        0x26 => {
-            serial::write_str("  [wine] NtOpenProcess stub\n");
-            alloc_handle(WinObject::Process)
-        }
-        // NtQueryInformationProcess (Brick 23)
-        0x19 => {
-            serial::write_str("  [wine] NtQueryInformationProcess stub\n");
-            0
-        }
-        // NtQuerySystemInformation (Brick 24)
-        0x36 => {
-            serial::write_str("  [wine] NtQuerySystemInformation stub\n");
-            0
-        }
-        // NtOpenProcessToken (Brick 25)
-        0x3e => {
-            serial::write_str("  [wine] NtOpenProcessToken stub\n");
-            alloc_handle(WinObject::Token)
-        }
-        // NtOutputDebugString (Brick 26)
-        0x3c => {
-            serial::write_str("  [wine-dbg] Debug message\n");
-            0
-        }
+        0x1e => 0, // NtFreeVirtualMemory
+        0x04 => 0, // NtWaitForSingleObject
+        0x0f => { if free_handle(w_a1) { 0 } else { 0xC0000008 } } // NtClose
+        0x06 => 0, // NtReadFile
+        0x08 => 0, // NtWriteFile
+        0x33 => alloc_handle(WinObject::File), // NtOpenFile
+        0x55 => alloc_handle(WinObject::File), // NtCreateFile
+        0x22 => 0, // NtQueryInformationFile
+        0x23 => 0, // NtSetInformationFile
+        0x4e => alloc_handle(WinObject::Thread), // NtOpenThread
+        0x50 => 0, // NtTerminateThread
+        0x26 => alloc_handle(WinObject::Process), // NtOpenProcess
+        0x19 => 0, // NtQueryInformationProcess
+        0x36 => 0, // NtQuerySystemInformation
+        0x24 => 0, // NtSaveKey
+        0x47 => 0, // NtAdjustPrivilegesToken
+        0x3d => 0, // NtQueryInformationThread
+        0x1004 => alloc_handle(WinObject::Window), // NtGdiGetDC
+        0x1005 => 0, // NtUserGetCursorPos
+        0x3f => 0, // NtWriteConsole
+        0x40 => 0, // NtQueryEnvironmentVariable
+        0x41 => 0, // NtSetEvent
+        0x42 => 0, // NtResetEvent
+        0x3e => alloc_handle(WinObject::Token), // NtOpenProcessToken
+        0x3c => { serial::write_str("  [wine-dbg] Msg\n"); 0 } // NtOutputDebugString
+        0x5c => alloc_handle(WinObject::Pipe), // NtCreateNamedPipeFile
+        0x12 => alloc_handle(WinObject::Key), // NtOpenKey
+        0x1d => alloc_handle(WinObject::Key), // NtCreateKey
+        0x15 => 0, // NtQueryValueKey
+        0x1001 => alloc_handle(WinObject::Window), // NtUserRegisterClassExW
+        0x1002 => 0, // NtUserPostMessage
+        0x1003 => 0, // NtGdiFlush
+        0x45 => alloc_handle(WinObject::Timer), // NtCreateTimer
+        0x46 => 0, // NtSetTimer
         // NtUser/Gdi syscall stubs (Brick 27)
-        0x1000..=0x10FF => {
-            serial::write_str("  [wine] NtUser/Gdi syscall stub\n");
-            0
-        }
-        // NtCreateNamedPipeFile
-        0x5c => {
-            serial::write_str("  [wine] NtCreateNamedPipeFile stub\n");
-            alloc_handle(WinObject::Pipe)
-        }
-        // NtOpenKey
-        0x12 => {
-            serial::write_str("  [wine] NtOpenKey stub\n");
-            alloc_handle(WinObject::Key)
-        }
-        // NtCreateKey
-        0x1d => {
-            serial::write_str("  [wine] NtCreateKey stub\n");
-            alloc_handle(WinObject::Key)
-        }
-        // NtQueryValueKey
-        0x15 => {
-            serial::write_str("  [wine] NtQueryValueKey stub\n");
-            0 
-        }
-        // NtUserRegisterClassExW (Brick 30)
-        0x1001 => {
-            serial::write_str("  [wine] NtUserRegisterClassExW stub\n");
-            alloc_handle(WinObject::Window)
-        }
-        // NtUserPostMessage (Brick 30)
-        0x1002 => {
-            serial::write_str("  [wine] NtUserPostMessage stub\n");
-            0 // STATUS_SUCCESS
-        }
-        // NtGdiFlush (Brick 30)
-        0x1003 => {
-            serial::write_str("  [wine] NtGdiFlush stub\n");
-            0 // STATUS_SUCCESS
-        }
-        // NtCreateTimer (Brick 31)
-        0x45 => {
-            serial::write_str("  [wine] NtCreateTimer stub\n");
-            alloc_handle(WinObject::Timer)
-        }
-        // NtSetTimer (Brick 31)
-        0x46 => {
-            serial::write_str("  [wine] NtSetTimer stub\n");
-            0 // STATUS_SUCCESS
-        }
-        0x2c => {
-
-fn is_dormant_syscall(nr: u64) -> bool {
-    if nr >= 0x100 && nr <= 0x1FF { return true; }
-    if nr == 0x2A || nr == 0x2B { return true; }
-    false
+        0x1000..=0x10FF => 0,
+        0x2c => { loop { unsafe { core::arch::asm!("hlt"); } } } // NtTerminateProcess
+        _ => 0xC0000002 
+    }
 }
 
 /// Windows Context structure for x64 (simplified for SEH).
@@ -462,7 +346,8 @@ pub fn deliver_exception(code: u32, addr: u64) {
     serial::write_hex_u32(code);
     serial::write_str(" at 0x0");
     serial::write_hex_u32(addr as u32);
-    serial::write_str("\n");
+    serial::write_str("
+");
 }
 
 #[repr(C, align(4096))]

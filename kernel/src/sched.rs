@@ -393,7 +393,7 @@ extern "C" fn preempt_tick(cur_rsp: u64) -> u64 {
         );
         // Route the next task's syscalls to the right ABI table (native vs Linux vs Wine).
         crate::linux::set_linux(TASK_LINUX[nxt]);
-        crate::wine::set_wine(TASK_WINE[nxt]);
+        crate::wine::mod_impl::set_wine(TASK_WINE[nxt]);
         TASKS[nxt].rsp
     }
 }
