@@ -192,17 +192,19 @@ velocity equals completion.
 | Recovery console | ✅ |
 
 ### Remaining gaps for "replace Ubuntu" daily driving
-- GPU acceleration (framebuffer + from-scratch virtio-gpu 2D; no 3D/virgl yet — software rendering)
-- WiFi on the bare-metal kernel: the Intel firmware-image parser is done and
-  host-verified, but device bring-up (MMIO, firmware DMA, 802.11/WPA2) needs real
-  Intel hardware — QEMU can't emulate iwlwifi. (The Linux track has full WiFi.)
-- Battery / brightness / S3 suspend-resume (ACPI shutdown + reboot work; these
-  need an AML interpreter, backlight access, and real power states)
-- Multi-process desktop: the kernel side is proven end to end (real ELF
-  processes in isolated address spaces → private offscreen surfaces → a
-  compositor that blits them into on-screen windows, two apps at once). The
-  remaining step is wiring the *real* desktop + real apps (fbDOOM) through this
-  pipeline — the application-level refactor on top of the proven kernel work.
+- **virgl 3D GPU rendering**: the control path is fully proven (6-step pipeline:
+  GET_CAPSET → CTX_CREATE → RESOURCE_CREATE_3D → CTX_ATTACH, QEMU-verified with
+  `-device virtio-gpu-gl -display egl-headless`). What remains is SUBMIT_3D with a
+  real TGSI command stream and routing the desktop compositor through a 3D surface.
+  Honest multi-year scope.
+- **WiFi on the bare-metal kernel**: WPA2+AES+EAPOL crypto done, Intel firmware parser
+  done. Device bring-up (MMIO, firmware DMA, 802.11 assoc) needs real Intel hardware —
+  QEMU can't emulate iwlwifi. Linux track has full WiFi.
+- **Battery level + backlight brightness**: ACPI S3 suspend/resume is done (full
+  real-mode trampoline, QMP-verified). Battery BST and backlight need an AML interpreter.
+- **Preemptive multitasking maturity**: the kernel model is proven (isolated ELF
+  processes → private surfaces → compositor → on-screen windows, windowed DOOM playable).
+  Remaining: robust re-entrant preemption of a task mid-syscall (re-entrant TSS.rsp0).
 - **The real work-week path today: install to disk + rp.web mode**
 
 ---

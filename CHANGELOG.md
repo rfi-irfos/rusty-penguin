@@ -4,6 +4,30 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+### Added — Item 6: virgl 3D resource path end-to-end proved (2026-06-02)
+
+- 6-step virgl pipeline verified against `-device virtio-gpu-gl -display egl-headless`:
+  GET_CAPSET_INFO → GET_CAPSET (308-byte capability blob) → CTX_CREATE → RESOURCE_CREATE_3D
+  (1 KiB vertex buffer on host GPU, cmd 0x0207) → CTX_ATTACH_RESOURCE → clean teardown.
+  Every step round-trips through virglrenderer on the host.
+- `iso/build-virgltest.sh` reproducible headless CI.
+
+### Added — Item 5: ACPI S3 suspend-to-RAM — trampoline + QMP-verified (2026-06-02)
+
+- 121-byte real-mode resume trampoline (real16 → pm32 → lm64), written to phys 0x8000
+  at suspend time. Restores CR4, boot CR3 (PML4[0] identity-mapped), LME, paging, RSP,
+  then jumps to acpi_s3_resumed() in the kernel image.
+- parse_s3() reads \_S3_ SLP_TYP from DSDT; FACS.firmware_waking_vector = 0x8000.
+- vmm::save_kernel_cr3() snapshots boot CR3 before any private address spaces are created.
+- `iso/build-s3test.sh` QMP end-to-end CI: QEMU status=suspended → system_wakeup → serial
+  "resumed from S3 — kernel alive". PASS.
+
+### Added — UI palette pivot: graphite/teal/amber "premium automotive UI" (2026-06-02)
+
+- CSS + bare-metal window chrome + dock rethemed: deep graphite, teal accent (#6dd3c6),
+  amber (#d8b26e), frosted glass panels, 4-layer atmospheric shadow, Aero spatial depth.
+- cargo check: 0 errors.
+
 ### Added — Windowed DOOM is PLAYABLE: keyboard routed to the focused scheduled app (2026-06-02)
 
 - The capstone. Keys reached a Linux process only when it was the current task at
