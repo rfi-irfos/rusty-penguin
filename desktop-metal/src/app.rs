@@ -435,31 +435,32 @@ impl Calendar {
 
 impl App for Calendar {
     fn render(&mut self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, h: u32) {
-        // Draw calendar header
-        fb.fill_rect(x, y, w, 30, 0x2C2C38);
-        fb.draw_str(x + 8, y + 10, "May 2026", 0xF5F5F7, 0x2C2C38);
+        // Body + header
+        fb.fill_rect(x, y, w, h, 0x14181F);
+        fb.fill_rect(x, y, w, 30, 0x1B2230);
+        fb.draw_aa(x as i32 + 10, y as i32 + 6, "May 2026", 0xEAF4F0, crate::fb::AA_S);
 
-        // Draw day headers
+        // Day headers
         let days = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
         let day_width = (w - 16) / 7;
         for (i, day) in days.iter().enumerate() {
-            let dx = x + 8 + (i as u32 * day_width);
-            fb.draw_str(dx, y + 35, day, 0xB8B8B8, 0x1A1A24);
+            let dx = x as i32 + 8 + (i as i32 * day_width as i32);
+            fb.draw_aa(dx, y as i32 + 36, day, 0x8A949E, crate::fb::AA_T);
         }
 
-        // Draw calendar grid (simplified - just draw a 7x5 grid)
+        // Grid (7×5)
         let mut day: u32 = 1;
         let mut sbuf = [0u8; 24];
         for week in 0..5 {
             for dow in 0..7 {
                 if day > 31 { break; }
-                let cx = x + 8 + (dow as u32 * day_width);
-                let cy = y + 55 + (week * 20);
+                let cx = x as i32 + 8 + (dow as i32 * day_width as i32);
+                let cy = y as i32 + 56 + (week * 22);
                 if day == 28 { // Today
-                    fb.fill_rect(cx - 2, cy - 2, 16, 14, 0x4A9EFF);
+                    fb.fill_rounded_rect(cx - 3, cy - 1, 22, 19, 5, 0x2DD4BF);
                 }
                 let day_str = u64_into(&mut sbuf, day as u64);
-                fb.draw_str(cx, cy, day_str, if day == 28 { 0xF5F5F7 } else { 0xB8B8B8 }, 0x1A1A24);
+                fb.draw_aa(cx, cy, day_str, if day == 28 { 0x0B1413 } else { 0xC2CCD4 }, crate::fb::AA_T);
                 day += 1;
             }
         }
@@ -572,52 +573,53 @@ impl KernelManager {
 
 impl App for KernelManager {
     fn render(&mut self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, h: u32) {
-        // Header
-        fb.fill_rect(x, y, w, 28, 0x2C2C38);
-        fb.draw_str(x + 12, y + 9, "Kernel Manager", 0xF5F5F7, 0x2C2C38);
-        fb.draw_str(x + 168, y + 9, "bring your own kernel", 0x8CC6E5, 0x2C2C38);
+        // Body + header
+        fb.fill_rect(x, y, w, h, 0x14181F);
+        fb.fill_rect(x, y, w, 28, 0x1B2230);
+        fb.draw_aa(x as i32 + 12, y as i32 + 5, "Kernel Manager", 0xEAF4F0, crate::fb::AA_S);
+        fb.draw_aa(x as i32 + 168, y as i32 + 7, "bring your own kernel", 0x8CC6E5, crate::fb::AA_T);
 
         // Running kernel + ABI
-        fb.fill_rect(x, y + 28, w, 26, 0x232333);
-        fb.draw_str(x + 12, y + 36, "Running: RustyPenguin 1.0.0 x86_64  (psh syscall ABI v1)",
-                    0x6FE18B, 0x232333);
+        fb.fill_rect(x, y + 28, w, 26, 0x18222B);
+        fb.draw_aa(x as i32 + 12, y as i32 + 33, "Running: RustyPenguin 3.3.0 x86_64  (psh syscall ABI v1)",
+                    0x6FE18B, crate::fb::AA_T);
 
         // Section label
-        fb.draw_str(x + 12, y + 62, "Available kernels (.elf in /):", 0xB8B8B8, 0x1A1A24);
+        fb.draw_aa(x as i32 + 12, y as i32 + 60, "Available kernels (.elf in /):", 0xB8C2CC, crate::fb::AA_T);
 
         // Candidate list
         if self.candidates.is_empty() {
-            fb.draw_str(x + 12, y + KM_LIST_TOP as u32,
+            fb.draw_aa(x as i32 + 12, y as i32 + KM_LIST_TOP,
                         "None found. Copy a multiboot2 kernel.elf into / (or psh: kinstall).",
-                        0xB8B8B8, 0x1A1A24);
+                        0x9CA3AF, crate::fb::AA_T);
         } else {
             for (i, name) in self.candidates.iter().enumerate() {
                 let row_y = y + KM_LIST_TOP as u32 + (i as u32 * KM_ROW_H as u32);
                 if row_y + KM_ROW_H as u32 > y + h - (KM_BTN_H as u32 + 24) { break; }
                 let is_sel = i == self.selected;
                 let is_staged = self.staged.as_deref() == Some(name.as_str());
-                let bg = if is_sel { 0x4A5568 } else if i % 2 == 0 { 0x1A1A24 } else { 0x232333 };
+                let bg = if is_sel { 0x243442 } else if i % 2 == 0 { 0x161B22 } else { 0x1A2028 };
                 fb.fill_rect(x, row_y, w, KM_ROW_H as u32, bg);
                 if is_staged { fb.fill_rect(x, row_y, 4, KM_ROW_H as u32, 0x6FE18B); }
                 let fg = if is_sel { 0xF5F5F7 } else { 0xCFCFD6 };
-                fb.draw_str(x + 14, row_y + 6, name, fg, bg);
+                fb.draw_aa(x as i32 + 14, row_y as i32 + 3, name, fg, crate::fb::AA_S);
                 if is_staged {
-                    fb.draw_str(x + w - 80, row_y + 6, "staged", 0x6FE18B, bg);
+                    fb.draw_aa(x as i32 + w as i32 - 70, row_y as i32 + 4, "staged", 0x6FE18B, crate::fb::AA_T);
                 }
             }
         }
 
         // Status line (above the buttons)
         let status_y = y + h - (KM_BTN_H as u32 + 22);
-        fb.fill_rect(x, status_y, w, 18, 0x1A1A24);
-        fb.draw_str(x + 12, status_y + 2, &self.status, 0xF5C451, 0x1A1A24);
+        fb.fill_rect(x, status_y, w, 18, 0x18222B);
+        fb.draw_aa(x as i32 + 12, status_y as i32 + 1, &self.status, 0xF5C451, crate::fb::AA_T);
 
         // Buttons: Install (green) + Rescan (blue)
         let btn_y = y + h - KM_BTN_H as u32 - 2;
-        fb.fill_rect(x + 12, btn_y, 220, KM_BTN_H as u32, 0x2E7D4F);
-        fb.draw_str(x + 40, btn_y + 9, "Install Selected Kernel", 0xF5F5F7, 0x2E7D4F);
-        fb.fill_rect(x + 244, btn_y, 110, KM_BTN_H as u32, 0x355B8C);
-        fb.draw_str(x + 280, btn_y + 9, "Rescan", 0xF5F5F7, 0x355B8C);
+        fb.fill_rounded_rect(x as i32 + 12, btn_y as i32, 220, KM_BTN_H, 8, 0x2E7D4F);
+        fb.draw_aa(x as i32 + 40, btn_y as i32 + 7, "Install Selected Kernel", 0xF5F5F7, crate::fb::AA_S);
+        fb.fill_rounded_rect(x as i32 + 244, btn_y as i32, 110, KM_BTN_H, 8, 0x355B8C);
+        fb.draw_aa(x as i32 + 280, btn_y as i32 + 7, "Rescan", 0xF5F5F7, crate::fb::AA_S);
 
         self.dirty = false;
     }
@@ -927,15 +929,15 @@ impl TisConsole {
 
 impl App for TisConsole {
     fn render(&mut self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, h: u32) {
-        // Draw header
-        fb.fill_rect(x, y, w, 24, 0x1A1A2E);
-        fb.draw_str(x + 8, y + 7, "TIS Console", 0x4A9EFF, 0x1A1A2E);
-        fb.fill_rect(x, y + 24, w, 1, 0x2C3E50);
+        // Body + header
+        fb.fill_rect(x, y, w, h, 0x0A0E1A);
+        fb.fill_rect(x, y, w, 26, 0x141A2E);
+        fb.draw_aa(x as i32 + 10, y as i32 + 4, "TIS Console", 0x4A9EFF, crate::fb::AA_S);
+        fb.fill_rect(x, y + 26, w, 1, 0x2C3E50);
 
-        // Draw output. scroll_offset shifts the window of visible lines up
-        // from the latest. Clamp to the buffer size so it can't overscroll.
-        let line_h = 13u32;
-        let max_lines = ((h - 44) / line_h) as usize;
+        // Output. scroll_offset shifts the visible window up from the latest.
+        let line_h = 17u32;
+        let max_lines = ((h.saturating_sub(50)) / line_h) as usize;
         let total = self.output_lines.len();
         let max_off = total.saturating_sub(max_lines);
         if self.scroll_offset > max_off { self.scroll_offset = max_off; }
@@ -943,23 +945,22 @@ impl App for TisConsole {
         let start = end.saturating_sub(max_lines);
 
         for (i, line) in self.output_lines[start..end].iter().enumerate() {
-            let y_pos = y + 28 + (i as u32 * line_h);
-            if y_pos + line_h > y + h - 20 { break; }
-            fb.draw_str(x + 8, y_pos, line, 0x00FF00, 0x0A0E27);
+            let y_pos = y as i32 + 30 + (i as i32 * line_h as i32);
+            if (y_pos + line_h as i32) > (y + h - 24) as i32 { break; }
+            fb.draw_aa(x as i32 + 10, y_pos, line, 0x6FE18B, crate::fb::AA_T);
         }
 
-        // Scroll indicator on the right edge when not at the bottom.
+        // Scroll indicator when not at the bottom.
         if self.scroll_offset > 0 && w > 12 {
-            let indicator_x = x + w - 8;
-            fb.draw_str(indicator_x, y + 28, "^", 0x6B7280, 0x0A0E27);
+            fb.draw_aa(x as i32 + w as i32 - 14, y as i32 + 30, "^", 0x6B7280, crate::fb::AA_T);
         }
 
-        // Draw input box
-        fb.fill_rect(x, y + h - 20, w, 20, 0x2C3E50);
-        let disp = if self.input_buffer.len() > 40 {
-            &self.input_buffer[self.input_buffer.len()-40..]
+        // Input box
+        fb.fill_rect(x, y + h - 24, w, 24, 0x1E2C3A);
+        let disp = if self.input_buffer.len() > 48 {
+            &self.input_buffer[self.input_buffer.len()-48..]
         } else { &self.input_buffer };
-        fb.draw_str(x + 8, y + h - 14, disp, 0xA0D0FF, 0x2C3E50);
+        fb.draw_aa(x as i32 + 10, y as i32 + h as i32 - 21, disp, 0xA0D0FF, crate::fb::AA_S);
 
         self.dirty = false;
     }
@@ -1220,14 +1221,14 @@ impl SystemInfo {
 
 impl App for SystemInfo {
     fn render(&mut self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, h: u32) {
-        // Draw header
-        fb.fill_rect(x, y, w, 24, 0x2C2C38);
-        fb.draw_str(x + 8, y + 7, "System Information", 0xF5F5F7, 0x2C2C38);
-        fb.fill_rect(x, y + 24, w, 1, 0x3C3C48);
+        // Body + header
+        fb.fill_rect(x, y, w, h, 0x14181F);
+        fb.fill_rect(x, y, w, 28, 0x1B2230);
+        fb.draw_aa(x as i32 + 12, y as i32 + 5, "System Information", 0xEAF4F0, crate::fb::AA_S);
+        fb.fill_rect(x, y + 28, w, 1, 0x2C3A38);
 
-        // System info items
         let items = [
-            "OS: Rusty Penguin v1.0.0",
+            "OS: Rusty Penguin v3.3.0",
             "Kernel: Bare-Metal (Pure Rust)",
             "Arch: x86_64",
             "Memory: 512 MB available",
@@ -1238,12 +1239,11 @@ impl App for SystemInfo {
         ];
 
         for (i, item) in items.iter().enumerate() {
-            let y_pos = y + 32 + (i as u32 * 16);
-            if y_pos + 16 > y + h { break; }
-
-            let bg_color = if i % 2 == 0 { 0x1A1A24 } else { 0x232333 };
-            fb.fill_rect(x, y_pos, w, 16, bg_color);
-            fb.draw_str(x + 8, y_pos + 3, item, 0xB8B8B8, bg_color);
+            let y_pos = y + 34 + (i as u32 * 24);
+            if y_pos + 24 > y + h { break; }
+            let bg_color = if i % 2 == 0 { 0x161B22 } else { 0x1A2028 };
+            fb.fill_rect(x, y_pos, w, 24, bg_color);
+            fb.draw_aa(x as i32 + 12, y_pos as i32 + 3, item, 0xC2CCD4, crate::fb::AA_S);
         }
 
         self.dirty = false;
@@ -1453,23 +1453,23 @@ impl App for Calculator {
 
         // Decimal result (right-aligned).
         let disp = if self.error { "Error" } else { &self.display };
-        let dw = (disp.len() as u32) * 8;
-        let dx = x + w.saturating_sub(dw + 10);
+        let dw = Framebuffer::aa_w(disp, crate::fb::AA_S);
+        let dx = x as i32 + w as i32 - dw - 10;
         let disp_col = if self.error { 0xEF4444u32 } else { 0xF0F0F0 };
-        fb.draw_str(dx, dp_y + 8, disp, disp_col, 0x0D1117);
+        fb.draw_aa(dx, dp_y as i32 + 5, disp, disp_col, crate::fb::AA_S);
 
         // Balanced ternary of the integer part (right-aligned, smaller).
         if !self.error {
             if let Ok(v) = self.display.parse::<f64>() {
                 let trit = to_balanced_ternary(v as i64);
-                let tw = (trit.len() as u32) * 7;
-                let tx = x + w.saturating_sub(tw + 10);
-                fb.draw_str(tx, dp_y + 26, &trit, 0x4A9EFF, 0x0D1117);
+                let tw = Framebuffer::aa_w(&trit, crate::fb::AA_T);
+                let tx = x as i32 + w as i32 - tw - 10;
+                fb.draw_aa(tx, dp_y as i32 + 30, &trit, 0x4A9EFF, crate::fb::AA_T);
                 // mode indicator
                 let mode = if self.deg_mode { "DEG" } else { "RAD" };
-                fb.draw_str(x + 10, dp_y + 26, mode, 0x6B7280, 0x0D1117);
+                fb.draw_aa(x as i32 + 10, dp_y as i32 + 30, mode, 0x6B7280, crate::fb::AA_T);
                 // mem indicator
-                if self.mem != 0.0 { fb.draw_str(x + 32, dp_y + 26, "M", 0x6FE18B, 0x0D1117); }
+                if self.mem != 0.0 { fb.draw_aa(x as i32 + 46, dp_y as i32 + 30, "M", 0x6FE18B, crate::fb::AA_T); }
             }
         }
 
@@ -1488,11 +1488,11 @@ impl App for Calculator {
             let btn_bg = if is_eq { 0x1A5C42u32 } else { *accent };
             fb.fill_rect(bx, by, btn_w, btn_h, btn_bg);
             fb.fill_rect(bx, by, btn_w, 1, btn_bg.saturating_add(0x181818));
-            let lw = (label.len() as u32) * 7;
-            let lx = bx + btn_w.saturating_sub(lw) / 2;
-            let ly = by + btn_h.saturating_sub(8) / 2;
+            let lw = Framebuffer::aa_w(label, crate::fb::AA_S);
+            let lx = bx as i32 + (btn_w as i32 - lw) / 2;
+            let ly = by as i32 + (btn_h as i32 - Framebuffer::aa_line(crate::fb::AA_S)) / 2;
             let lc = if is_eq { 0x6FE18Bu32 } else { 0xCDD6E0 };
-            fb.draw_str(lx, ly, label, lc, btn_bg);
+            fb.draw_aa(lx, ly, label, lc, crate::fb::AA_S);
         }
 
         self.dirty = false;
@@ -1596,20 +1596,20 @@ impl App for SystemClock {
     fn render(&mut self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, h: u32) {
         fb.fill_rect(x, y, w, h, 0x14171A);
         // Tab bar.
-        fb.fill_rect(x, y, w, 26, 0x252E2A);
+        fb.fill_rect(x, y, w, 28, 0x1B2230);
         let tabs = ["Clock", "Stopwatch", "Timer", "World"];
-        let mut tx = x + 12;
+        let mut tx = x as i32 + 12;
         for (i, t) in tabs.iter().enumerate() {
             let active = self.tab as usize == i;
             let col = if active { 0x6FE18B } else { 0x8A938C };
-            let tw_px = (t.len() as u32) * 7;   // tiny font ≈ 6px + 1px tracking
-            if active { fb.fill_rect(tx - 4, y + 22, tw_px + 8, 2, 0x6FE18B); }
-            fb.draw_str_t(tx, y + 9, t, col);
-            tx += tw_px + 20;
+            let tw_px = Framebuffer::aa_w(t, crate::fb::AA_S);
+            if active { fb.fill_rect_s(tx - 4, y as i32 + 25, tw_px + 8, 2, 0x6FE18B); }
+            fb.draw_aa(tx, y as i32 + 5, t, col, crate::fb::AA_S);
+            tx += tw_px + 22;
         }
 
-        let cx = x + w / 2;
-        let body_y = y + 30;
+        let cx = x as i32 + w as i32 / 2;
+        let body_y = y as i32 + 34;
         match self.tab {
             0 => { // Clock
                 let rtc = sys_rtc();
@@ -1623,14 +1623,21 @@ impl App for SystemClock {
                     (hour, min, sec)
                 } else { let t = sys_ticks() / 100; (t / 3600 % 24, t / 60 % 60, t % 60) };
                 let s = Self::hms(&mut tbuf, hh, mm, ss);
-                fb.draw_str_scaled_t(cx - (s.len() as u32 * 7 * 4) / 2, body_y + 30, s, 0x6FE18B, 4);
+                let sw = Framebuffer::aa_w(s, crate::fb::AA_L);
+                fb.draw_aa(cx - sw / 2, body_y + 26, s, 0x6FE18B, crate::fb::AA_L);
                 // Date line.
                 const MON: [&str; 13] = ["", "Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
                 if month >= 1 && month <= 12 {
                     let mut db = [0u8; 24];
-                    fb.draw_str_t(cx - 40, body_y + 90, MON[month as usize], 0xA8B0A6);
-                    fb.draw_str_t(cx - 10, body_y + 90, u64_into(&mut db, mday), 0xECEDE5);
-                    fb.draw_str_t(cx + 14, body_y + 90, "2026", 0xA8B0A6);
+                    let dstr = u64_into(&mut db, mday);
+                    let dy = body_y + 80;
+                    let mw = Framebuffer::aa_w(MON[month as usize], crate::fb::AA_S);
+                    let dw = Framebuffer::aa_w(dstr, crate::fb::AA_S);
+                    let yw = Framebuffer::aa_w("2026", crate::fb::AA_S);
+                    let mut px = cx - (mw + 8 + dw + 8 + yw) / 2;
+                    px += fb.draw_aa(px, dy, MON[month as usize], 0xA8B0A6, crate::fb::AA_S) + 8;
+                    px += fb.draw_aa(px, dy, dstr, 0xECEDE5, crate::fb::AA_S) + 8;
+                    fb.draw_aa(px, dy, "2026", 0xA8B0A6, crate::fb::AA_S);
                 }
             }
             1 => { // Stopwatch — MM:SS.cs
@@ -1638,11 +1645,13 @@ impl App for SystemClock {
                 let cs = (t % 100) as u64; let total = t / 100;
                 let mut tb = [0u8; 12];
                 let s = Self::hms(&mut tb, total / 3600, total / 60 % 60, total % 60);
-                fb.draw_str_scaled_t(cx - (s.len() as u32 * 7 * 4) / 2, body_y + 26, s, 0xECEDE5, 4);
+                let sw = Framebuffer::aa_w(s, crate::fb::AA_L);
+                let adv = fb.draw_aa(cx - sw / 2, body_y + 24, s, 0xECEDE5, crate::fb::AA_L);
                 let mut cb = [0u8; 8];
                 cb[0] = b'.'; cb[1] = b'0' + (cs / 10) as u8; cb[2] = b'0' + (cs % 10) as u8;
-                fb.draw_str_scaled_t(cx + (s.len() as u32 * 8 * 4) / 2 + 6, body_y + 40, core::str::from_utf8(&cb[..3]).unwrap_or(""), 0x8CC6E5, 2);
-                fb.draw_str_t(cx - 86, body_y + 84, "SPACE start/stop   R reset", 0x6B756D);
+                fb.draw_aa(cx - sw / 2 + adv + 4, body_y + 38, core::str::from_utf8(&cb[..3]).unwrap_or(""), 0x8CC6E5, crate::fb::AA_S);
+                let hint = "SPACE start/stop   R reset";
+                fb.draw_aa(cx - Framebuffer::aa_w(hint, crate::fb::AA_T) / 2, body_y + 86, hint, 0x6B756D, crate::fb::AA_T);
             }
             2 => { // Timer — countdown
                 let rem = self.tm_remaining();
@@ -1650,9 +1659,14 @@ impl App for SystemClock {
                 let mut tb = [0u8; 12];
                 let s = Self::hms(&mut tb, rem / 3600, rem / 60 % 60, rem % 60);
                 let col = if done { 0xEF7575 } else { 0xF5C451 };
-                fb.draw_str_scaled_t(cx - (s.len() as u32 * 7 * 4) / 2, body_y + 26, s, col, 4);
-                if done { fb.draw_str_t(cx - 24, body_y + 76, "TIME UP", 0xEF7575); }
-                fb.draw_str_t(cx - 96, body_y + 92, "+/- adjust  SPACE start/stop  R reset", 0x6B756D);
+                let sw = Framebuffer::aa_w(s, crate::fb::AA_L);
+                fb.draw_aa(cx - sw / 2, body_y + 24, s, col, crate::fb::AA_L);
+                if done {
+                    let tu = "TIME UP";
+                    fb.draw_aa(cx - Framebuffer::aa_w(tu, crate::fb::AA_S) / 2, body_y + 72, tu, 0xEF7575, crate::fb::AA_S);
+                }
+                let hint = "+/- adjust   SPACE start/stop   R reset";
+                fb.draw_aa(cx - Framebuffer::aa_w(hint, crate::fb::AA_T) / 2, body_y + 94, hint, 0x6B756D, crate::fb::AA_T);
             }
             _ => { // World clocks
                 let rtc = sys_rtc();
@@ -1666,9 +1680,10 @@ impl App for SystemClock {
                     let hh = (((lh + off) % 24) + 24) % 24;
                     let mut tb = [0u8; 12];
                     let s = Self::hms(&mut tb, hh as u64, lm as u64, ls as u64);
-                    fb.draw_str(x + 16, yy, city, 0xECEDE5, 0x14171A);
-                    fb.draw_str(x + w - 90, yy, s, 0x6FE18B, 0x14171A);
-                    yy += 22;
+                    fb.draw_aa(x as i32 + 16, yy, city, 0xECEDE5, crate::fb::AA_S);
+                    let sw = Framebuffer::aa_w(s, crate::fb::AA_S);
+                    fb.draw_aa(x as i32 + w as i32 - sw - 16, yy, s, 0x6FE18B, crate::fb::AA_S);
+                    yy += 26;
                 }
             }
         }
@@ -1745,10 +1760,11 @@ impl HelpBrowser {
 
 impl App for HelpBrowser {
     fn render(&mut self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, h: u32) {
-        // Header
-        fb.fill_rect(x, y, w, 24, 0x2C2C38);
-        fb.draw_str(x + 8, y + 7, "Help & Reference", 0xF5F5F7, 0x2C2C38);
-        fb.fill_rect(x, y + 24, w, 1, 0x3C3C48);
+        // Body + header
+        fb.fill_rect(x, y, w, h, 0x0F141B);
+        fb.fill_rect(x, y, w, 28, 0x1B2230);
+        fb.draw_aa(x as i32 + 12, y as i32 + 5, "Help & Reference", 0xEAF4F0, crate::fb::AA_S);
+        fb.fill_rect(x, y + 28, w, 1, 0x2C3A38);
 
         let help_text = [
             "KEYBOARD SHORTCUTS",
@@ -1788,23 +1804,23 @@ impl App for HelpBrowser {
             "Use 'help' in Terminal for full list",
         ];
 
-        let mut y_pos = y + 32;
+        let mut y_pos = y as i32 + 34;
         for (i, line) in help_text.iter().enumerate() {
             if i < self.scroll_offset { continue; }
-            if y_pos + 14 > y + h { break; }
+            if y_pos + 18 > (y + h) as i32 { break; }
 
             let color = if line.is_empty() {
-                0x0F172A
+                0x0F141B
             } else if line.contains("=") {
                 0x4A9EFF
             } else if line.starts_with("  ") {
                 0x9CA3AF
             } else {
-                0xB8B8B8
+                0xC2CCD4
             };
 
-            fb.draw_str(x + 8, y_pos, line, color, 0x0F172A);
-            y_pos += 14;
+            fb.draw_aa(x as i32 + 12, y_pos, line, color, crate::fb::AA_T);
+            y_pos += 18;
         }
 
         self.dirty = false;
@@ -3151,8 +3167,8 @@ impl App for MediaPlayer {
 
         if !self.avail {
             fb.fill_rect(x, y, w, h, 0x14171A);
-            fb.draw_str(x + 16, y + 20, "Media Player", 0xECEDE5, 0x14171A);
-            fb.draw_str(x + 16, y + 44, "bin/meta.rpv not found in this build.", 0xA8B0A6, 0x14171A);
+            fb.draw_aa(x as i32 + 16, y as i32 + 16, "Media Player", 0xECEDE5, crate::fb::AA_S);
+            fb.draw_aa(x as i32 + 16, y as i32 + 42, "bin/meta.rpv not found in this build.", 0xA8B0A6, crate::fb::AA_T);
             self.dirty = false;
             return;
         }
