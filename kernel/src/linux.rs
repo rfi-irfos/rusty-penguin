@@ -786,9 +786,13 @@ pub fn syscall(nr: u64, a1: u64, a2: u64, a3: u64) -> u64 {
         }
         // tgkill(tgid, tid, sig) → 0 (no signal delivery yet).
         234 => 0,
-        // rt_sigaction / rt_sigprocmask already stubbed via 13|14 below —
-        // add rt_sigsuspend (130) and sigaltstack (131).
-        130 | 131 => 0,
+        // ── Wine Engine Integration ─────────────────────────────────────────
+        // Wine uses sigaltstack and sigprocmask heavily for exception handling.
+        131 | 14 | 13 => 0,
+        // rt_sigsuspend (130) and rt_sigpending (127) stubs.
+        130 | 127 => 0,
+        // setitimer (38) — Wine uses timers for async operations.
+        38 => 0,
         // waitpid / wait4 → ECHILD (no children).
         61 | 247 => errno(-10),
 
