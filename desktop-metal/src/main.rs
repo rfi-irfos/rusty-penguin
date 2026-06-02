@@ -349,21 +349,40 @@ fn menu_btn_rect(h: u32) -> (i32, i32, i32, i32) { (PANEL_MARGIN + 8, panel_top(
 // Calculator); everything else lives in the start menu. Values index into
 // DESKTOP_ICONS so the existing click-handler match (keyed on that index) is
 // unchanged. Keeping the dock to 5 also avoids the 10-icon overflow regression.
-const N_FAV: usize = 7;
-const FAV_IDX: [usize; N_FAV] = [0, 1, 10, 2, 11, 12, 9]; // Term, Files, Web, Edit, Phone, Notes, Doom
+// Dynamic dock — supports up to 12 pinned app tiles. DESKTOP_ICONS indices.
+const MAX_DOCK: usize = 12;
+static mut DOCK_ITEMS: [usize; MAX_DOCK] = [0, 1, 10, 2, 11, 12, 9, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
+static mut DOCK_COUNT: usize = 7;
+fn dock_count() -> usize       { unsafe { DOCK_COUNT } }
+fn dock_item(i: usize) -> usize{ unsafe { DOCK_ITEMS[i] } }
+fn dock_pin(di: usize) {
+    unsafe {
+        if di == 0xFF || DOCK_COUNT >= MAX_DOCK { return; }
+        if (0..DOCK_COUNT).any(|i| DOCK_ITEMS[i] == di) { return; } // already pinned
+        DOCK_ITEMS[DOCK_COUNT] = di;
+        DOCK_COUNT += 1;
+    }
+}
+fn dock_is_pinned(di: usize) -> bool {
+    unsafe { (0..DOCK_COUNT).any(|i| DOCK_ITEMS[i] == di) }
+}
+// Maps MENU_ITEMS index → DESKTOP_ICONS index (0xFF = not dockable separately).
+const MENU_TO_DI: &[usize] = &[
+    10, 1, 2, 3, 0, 5, 6, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 12, 11, 7, 8, 9,
+];
 
 // favourites_row: CSS FlexRow for the icon strip inside the dock.
 // Left edge starts after Menu button + separator gap.
 fn favourites_row(h: u32) -> css::FlexRow {
     let ptop = panel_top(h);
     let x0 = PANEL_MARGIN + 8 + MENU_BTN_W + 16;  // after menu button
-    css::FlexRow::new(x0, ptop + 7, N_FAV as i32 * (FAV_TILE + FAV_GAP), PANEL_H - 14, FAV_GAP)
+    css::FlexRow::new(x0, ptop + 7, dock_count() as i32 * (FAV_TILE + FAV_GAP), PANEL_H - 14, FAV_GAP)
 }
 
 // fav_rect takes a dock SLOT (0..N_FAV), not a DESKTOP_ICONS index.
 fn fav_rect(slot: usize, h: u32) -> (i32, i32, i32, i32) {
     let row = favourites_row(h);
-    let (x, y) = row.item_rect_centered(N_FAV, slot, FAV_TILE, FAV_TILE);
+    let (x, y) = row.item_rect_centered(dock_count(), slot, FAV_TILE, FAV_TILE);
     (x, y, FAV_TILE, FAV_TILE)
 }
 
@@ -1318,10 +1337,12 @@ const DESKTOP_ICONS: &[DesktopIcon] = &[
 // index (what desktop_icon_hit returns).
 fn draw_desktop_icons(fb: &mut Framebuffer, hover_icon: Option<usize>) {
     let h = fb.height;
-    for slot in 0..N_FAV {
-        let icon = &DESKTOP_ICONS[FAV_IDX[slot]];
+    for slot in 0..dock_count() {
+        let di = dock_item(slot);
+        if di >= DESKTOP_ICONS.len() { continue; }
+        let icon = &DESKTOP_ICONS[di];
         let (x, y, tw, th) = fav_rect(slot, h);
-        let hovered = hover_icon == Some(FAV_IDX[slot]);
+        let hovered = hover_icon == Some(dock_item(slot));
         // Clean solid colored tile — tint at 110 gives a medium-dark colored
         // background (≈43% accent + dark base) matching the original icon style.
         // No glass layers, no sheen lines, no borders — those read as noise at 40px.
@@ -1342,9 +1363,9 @@ fn tint(accent: u32, alpha: u32) -> u32 {
 }
 
 fn desktop_icon_hit(mx: i32, my: i32, h: u32) -> Option<usize> {
-    for slot in 0..N_FAV {
+    for slot in 0..dock_count() {
         let (x, y, tw, th) = fav_rect(slot, h);
-        if mx >= x && mx < x + tw && my >= y && my < y + th { return Some(FAV_IDX[slot]); }
+        if mx >= x && mx < x + tw && my >= y && my < y + th { return Some(dock_item(slot)); }
     }
     None
 }
@@ -1355,7 +1376,7 @@ fn desktop_icon_hit(mx: i32, my: i32, h: u32) -> Option<usize> {
 // Running-window task buttons live INSIDE the bottom dock, in the tasks area
 // after the favourites (and before the right tray), at full panel-row height.
 fn tasks_start_x(fh: u32) -> i32 {
-    let (lx, _, _, _) = fav_rect(N_FAV - 1, fh); // last favourite slot
+    let (lx, _, _, _) = fav_rect(dock_count().saturating_sub(1), fh); // last favourite slot
     lx + FAV_TILE + 18  // + separator gap
 }
 fn tbwin_rect(_fw: u32, fh: u32, slot: usize) -> (i32, i32, i32, i32) {
@@ -1771,7 +1792,10 @@ fn draw_start_menu(fb: &mut Framebuffer) {
     let av_x = x + 14; let av_y = y + 10;
     fb.fill_circle(av_x + 18, av_y + 18, 18, 0x34424A);
     fb.fill_circle(av_x + 18, av_y + 18, 16, 0x232C31);
-    fb.draw_star8(av_x + 18, av_y + 18, 10, TEAL);
+    // Real dingir logo in the menu avatar circle.
+    if !draw_ppm_icon_centered(fb, "bin/dingir.ppm", av_x + 18, av_y + 18, 30) {
+        fb.draw_star8(av_x + 18, av_y + 18, 10, TEAL);
+    }
     fb.draw_aa(av_x + 40, av_y + 1, "Rusty Penguin", WHITE, crate::fb::AA_S);
     fb.draw_aa(av_x + 40, av_y + 21, "OS v2.0.0  .  Ternary", 0x6FE18B, crate::fb::AA_T);
 
@@ -1915,6 +1939,45 @@ fn draw_ctx_menu_hover(fb: &mut Framebuffer, mx: i32, my: i32, hover: Option<usi
             cy += CTX_ITEM_H;
         }
     }
+}
+
+// ── App context menu (right-click on start menu item) ────────────────────────
+// Items: 0=Run, 1=Pin to dock, 2=Pin to desktop, 3=Run as admin
+const APP_CTX_ITEMS: &[&str] = &["Run", "Pin to dock", "Pin to desktop", "Run as admin"];
+const APP_CTX_W: i32 = 180;
+const APP_CTX_ITEM_H: i32 = 30;
+
+fn draw_app_ctx_menu(fb: &mut Framebuffer, mi: usize, x: i32, y: i32) {
+    let h = APP_CTX_ITEMS.len() as i32 * APP_CTX_ITEM_H + 8;
+    // Clamp to screen.
+    let x = x.max(4).min(fb.width as i32 - APP_CTX_W - 4);
+    let y = y.min(fb.height as i32 - h - 4);
+    fb.fill_rounded_rect(x + 2, y + 4, APP_CTX_W, h, 10, 0x050810);
+    fb.fill_rounded_rect_glass(x, y, APP_CTX_W, h, 10, 0x16202C, 240);
+    fb.fill_rect_s(x + 6, y, APP_CTX_W - 12, 2, TEAL);
+    // App name header
+    if mi < MENU_ITEMS.len() {
+        fb.draw_aa(x + 14, y + 4, MENU_ITEMS[mi].label, WHITE, crate::fb::AA_T);
+    }
+    for (i, label) in APP_CTX_ITEMS.iter().enumerate() {
+        let iy = y + 4 + i as i32 * APP_CTX_ITEM_H + 14;
+        // Grey out "Pin to dock" if already pinned.
+        let di = if mi < MENU_TO_DI.len() { MENU_TO_DI[mi] } else { 0xFF };
+        let greyed = *label == "Pin to dock" && dock_is_pinned(di);
+        let col = if greyed { 0x4A5568u32 } else { 0xCDD6E0 };
+        fb.fill_rect_s(x + 6, iy + APP_CTX_ITEM_H - 2, APP_CTX_W - 12, 1, 0x1E2A38);
+        fb.draw_str((x + 14) as u32, (iy + 8) as u32, label, col, 0x16202C);
+    }
+}
+
+fn app_ctx_menu_hit(mx: i32, my: i32, ax: i32, ay: i32) -> Option<usize> {
+    let h = APP_CTX_ITEMS.len() as i32 * APP_CTX_ITEM_H + 8;
+    let ax = ax.max(4); let ay = ay.min(9999);
+    if mx < ax || mx >= ax + APP_CTX_W || my < ay || my >= ay + h { return None; }
+    let rel = my - ay - 18;
+    if rel < 0 { return None; }
+    let idx = (rel / APP_CTX_ITEM_H) as usize;
+    if idx < APP_CTX_ITEMS.len() { Some(idx) } else { None }
 }
 
 fn ctx_menu_item_hit(mx: i32, my: i32, cmx: i32, cmy: i32, fw: u32, fh: u32) -> Option<usize> {
@@ -2218,6 +2281,33 @@ fn open_process_monitor(w: i32, h: i32, n: usize) -> Option<TermWin> {
     }
 }
 
+/// Launch an app from a MenuLaunch kind — shared between left-click and context menu.
+fn launch_menu_item(kind: &MenuLaunch, w: i32, h: i32, n: usize) -> Option<TermWin> {
+    match *kind {
+        MenuLaunch::Term(li) => open_term(w, h, n, &LAUNCHERS[li]),
+        MenuLaunch::App(0)   => open_file_manager(w, h, n),
+        MenuLaunch::App(1)   => open_editor(w, h, n, "readme.txt", "Text Editor"),
+        MenuLaunch::App(2)   => open_calculator(w, h, n),
+        MenuLaunch::App(3)   => open_help_browser(w, h, n),
+        MenuLaunch::App(4)   => open_settings(w, h, n),
+        MenuLaunch::App(5)   => open_tis_console(w, h, n),
+        MenuLaunch::App(6)   => open_snake(w, h, n),
+        MenuLaunch::App(7)   => open_minesweeper(w, h, n),
+        MenuLaunch::App(8)   => open_doom_raycaster(w, h, n),
+        MenuLaunch::App(9)   => open_browser(w, h, n),
+        MenuLaunch::App(10)  => open_kernel_manager(w, h, n),
+        MenuLaunch::App(11)  => open_sound(w, h, n),
+        MenuLaunch::App(12)  => open_media_player(w, h, n),
+        MenuLaunch::App(13)  => open_screenshot(w, h, n),
+        MenuLaunch::App(14)  => open_image_viewer(w, h, n),
+        MenuLaunch::App(15)  => open_system_clock(w, h, n),
+        MenuLaunch::App(16)  => open_process_monitor(w, h, n),
+        MenuLaunch::App(17)  => open_notes(w, h, n),
+        MenuLaunch::App(18)  => open_rusty_phone(w, h, n),
+        MenuLaunch::App(_)   => None,
+    }
+}
+
 fn open_rusty_phone(w: i32, h: i32, n: usize) -> Option<TermWin> {
     match term::Terminal::spawn() {
         Ok(t) => {
@@ -2475,12 +2565,12 @@ fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, 
     if start_menu {
         let (mbx, mby, mbw, _) = menu_btn_rect(fb.height);
         let bh = PANEL_H - 14;
-        fb.fill_rounded_rect(mbx, mby, mbw, bh, 10, 0x4A5A50);
+        fb.fill_rounded_rect(mbx, mby, mbw, bh, 10, 0x1A3A2A);
         let star_cy = mby + bh / 2;
-        fb.draw_star8(mbx + 19, star_cy, 13, TEAL);
-        fb.draw_aa(mbx + 38, star_cy - 6, "Menu", GREEN, crate::fb::AA_S);
-        // Active indicator: solid green line at very bottom of button
-        fb.fill_rect_s(mbx + 14, mby + bh - 3, mbw - 28, 3, GREEN);
+        if !draw_ppm_icon_centered(fb, "bin/dingir.ppm", mbx + mbw / 2, star_cy, 40) {
+            fb.draw_star8(mbx + mbw / 2, star_cy, 16, TEAL);
+        }
+        fb.fill_rect_s(mbx + 8, mby + bh - 3, mbw - 16, 3, TEAL);
     }
     let up = rtc_str();
     // Find the focused index on the current desktop (last non-minimized window there).
@@ -2555,7 +2645,7 @@ fn draw_mp_app_window(fb: &mut Framebuffer, surf_va: u64) {
 
 // A small floating label above a hovered dock favourite.
 fn draw_dock_tooltip(fb: &mut Framebuffer, hi: usize) {
-    let slot = match FAV_IDX.iter().position(|&x| x == hi) { Some(s) => s, None => return };
+    let slot = match (0..dock_count()).find(|&i| dock_item(i) == hi) { Some(s) => s, None => return };
     let (x, y, tw, _) = fav_rect(slot, fb.height);
     let label = DESKTOP_ICONS[hi].label;
     let lw = Framebuffer::aa_w(label, crate::fb::AA_S);
@@ -2623,6 +2713,9 @@ pub extern "C" fn _start() -> ! {
     let mut scene_dirty = true;
     let mut start_menu_open = false;
     let mut ctx_menu: Option<(i32, i32)> = None;
+    // App context menu: right-click on a start menu item.
+    // (menu_item_index, screen_x, screen_y)
+    let mut app_ctx: Option<(usize, i32, i32)> = None;
     let mut hover_icon: Option<usize> = None;
     let mut pending_screenshot = false; // right-click "Take Screenshot" → capture next clean frame
     let mut current_desktop: usize = 0;  // active virtual desktop (0-3)
@@ -2836,20 +2929,32 @@ pub extern "C" fn _start() -> ! {
         let left_edge  = (mouse.btn_pressed & 0x01) != 0;
         let right_edge = (mouse.btn_pressed & 0x02) != 0;
 
-        // Right-click: close any open overlay first; only open ctx menu if nothing was open.
+        // Right-click: close overlays or open app context menu.
         if right_edge {
-            let prev_open = ctx_menu.is_some() || start_menu_open;
-            ctx_menu = None;
-            start_menu_open = false;
-            if !prev_open {
-                // Nothing was open — open the desktop context menu.
-                let on_win = wins.iter().any(|tw|
-                    tw.win.desktop == current_desktop && wm::window_hit(&tw.win, cx, cy));
-                if !on_win && cy >= TOPBAR_H as i32 && cy < h - 28 {
-                    ctx_menu = Some((cx, cy));
+            // If an app context menu is open, just close it.
+            if app_ctx.is_some() { app_ctx = None; scene_dirty = true; }
+            // If start menu is open and cursor is on a menu item, show app ctx menu.
+            else if start_menu_open {
+                if let Some(mi) = start_menu_hit(fb.height, cx, cy) {
+                    if mi < MENU_ITEMS.len() {
+                        app_ctx = Some((mi, cx, cy - APP_CTX_ITEMS.len() as i32 * APP_CTX_ITEM_H - 8));
+                        scene_dirty = true;
+                    }
+                } else {
+                    start_menu_open = false; scene_dirty = true;
                 }
+            } else {
+                let prev_open = ctx_menu.is_some();
+                ctx_menu = None;
+                if !prev_open {
+                    let on_win = wins.iter().any(|tw|
+                        tw.win.desktop == current_desktop && wm::window_hit(&tw.win, cx, cy));
+                    if !on_win && cy >= TOPBAR_H as i32 && cy < h - 28 {
+                        ctx_menu = Some((cx, cy));
+                    }
+                }
+                if ctx_menu.is_some() || prev_open { scene_dirty = true; }
             }
-            if ctx_menu.is_some() || prev_open { scene_dirty = true; }
         }
 
         if left_edge {
@@ -2937,6 +3042,38 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
                 scene_dirty = true;
+            } else if let Some((ami, ax, ay)) = app_ctx {
+                // Left-click on the app context menu.
+                if let Some(opt) = app_ctx_menu_hit(cx, cy, ax, ay) {
+                    let di = if ami < MENU_TO_DI.len() { MENU_TO_DI[ami] } else { 0xFF };
+                    match opt {
+                        0 | 3 => { // Run / Run as admin — same for now
+                            // Launch the app (reuse start menu logic below).
+                            let kind = if ami < MENU_ITEMS.len() { Some(&MENU_ITEMS[ami].kind) } else { None };
+                            if let Some(kind) = kind {
+                                let opened = launch_menu_item(kind, w, h, wins.len());
+                                if let Some(mut tw) = opened { tw.win.desktop = current_desktop; wins.push(tw); }
+                            }
+                            app_ctx = None; start_menu_open = false;
+                        }
+                        1 => { // Pin to dock
+                            dock_pin(di);
+                            app_ctx = None;
+                        }
+                        2 => { // Pin to desktop — not yet implemented, just launch
+                            let kind = if ami < MENU_ITEMS.len() { Some(&MENU_ITEMS[ami].kind) } else { None };
+                            if let Some(kind) = kind {
+                                let opened = launch_menu_item(kind, w, h, wins.len());
+                                if let Some(mut tw) = opened { tw.win.desktop = current_desktop; wins.push(tw); }
+                            }
+                            app_ctx = None; start_menu_open = false;
+                        }
+                        _ => { app_ctx = None; }
+                    }
+                } else {
+                    app_ctx = None; // clicked outside → close
+                }
+                scene_dirty = true;
             } else if start_menu_open {
                 if let Some(mi) = start_menu_hit(fb.height, cx, cy) {
                     if mi == 99 {
@@ -2947,29 +3084,7 @@ pub extern "C" fn _start() -> ! {
                         loop { unsafe { core::arch::asm!("hlt", options(nostack)); } }
                     }
                     if mi < MENU_ITEMS.len() {
-                        let opened = match MENU_ITEMS[mi].kind {
-                            MenuLaunch::Term(li) => open_term(w, h, wins.len(), &LAUNCHERS[li]),
-                            MenuLaunch::App(0)   => open_file_manager(w, h, wins.len()),
-                            MenuLaunch::App(1)   => open_editor(w, h, wins.len(), "readme.txt", "Text Editor"),
-                            MenuLaunch::App(2)   => open_calculator(w, h, wins.len()),
-                            MenuLaunch::App(3)   => open_help_browser(w, h, wins.len()),
-                            MenuLaunch::App(4)   => open_settings(w, h, wins.len()),
-                            MenuLaunch::App(5)   => open_tis_console(w, h, wins.len()),
-                            MenuLaunch::App(6)   => open_snake(w, h, wins.len()),
-                            MenuLaunch::App(7)   => open_minesweeper(w, h, wins.len()),
-                            MenuLaunch::App(8)   => open_doom_raycaster(w, h, wins.len()),
-                            MenuLaunch::App(9)   => open_browser(w, h, wins.len()),
-                            MenuLaunch::App(10)  => open_kernel_manager(w, h, wins.len()),
-                            MenuLaunch::App(11)  => open_sound(w, h, wins.len()),
-                            MenuLaunch::App(12)  => open_media_player(w, h, wins.len()),
-                            MenuLaunch::App(13)  => open_screenshot(w, h, wins.len()),
-                            MenuLaunch::App(14)  => open_image_viewer(w, h, wins.len()),
-                            MenuLaunch::App(15)  => open_system_clock(w, h, wins.len()),
-                            MenuLaunch::App(16)  => open_process_monitor(w, h, wins.len()),
-                            MenuLaunch::App(17)  => open_notes(w, h, wins.len()),
-                            MenuLaunch::App(18)  => open_rusty_phone(w, h, wins.len()),
-                            MenuLaunch::App(_)   => None,
-                        };
+                        let opened = launch_menu_item(&MENU_ITEMS[mi].kind, w, h, wins.len());
                         if let Some(mut tw) = opened {
                             tw.win.desktop = current_desktop;
                             wins.push(tw);
@@ -3221,6 +3336,7 @@ pub extern "C" fn _start() -> ! {
                     tw.term.dirty = false;
                 }
                 if start_menu_open { draw_start_menu(&mut fb); }
+        if let Some((ami, ax, ay)) = app_ctx { draw_app_ctx_menu(&mut fb, ami, ax, ay); }
                 if let Some((cmx, cmy)) = ctx_menu { draw_ctx_menu(&mut fb, cmx, cmy); }
                 if unsafe { QS_OPEN } { draw_quick_settings(&mut fb); }
             }
