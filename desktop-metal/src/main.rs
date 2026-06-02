@@ -1821,7 +1821,9 @@ fn draw_start_menu(fb: &mut Framebuffer) {
     fb.fill_rounded_rect(x + 3, y + 5, w + 2, h, 16, 0x0A0D10);
     fb.fill_rounded_rect(x + 1, y + 3, w,     h, 14, 0x0C1114);
     fb.fill_rounded_rect_glass(x, y, w, h, 14, bg, 236);
-    fb.fill_rect_s(x + 12, y, w - 24, 2, TEAL);
+    // Soft inset accent — 1px, dimmed, nudged down so it sits *inside* the
+    // rounded top edge instead of poking past the corners as a glossy strip.
+    fb.fill_rect_s(x + 16, y + 3, w - 32, 1, 0x265E55);
     fb.fill_rect_s(x + 12, y + h - 2, w - 24, 1, 0x151A1F);
 
     // Header: dingir avatar + title
@@ -1832,8 +1834,8 @@ fn draw_start_menu(fb: &mut Framebuffer) {
         fb.draw_star8(av_x + 18, av_y + 18, 10, TEAL);
     }
     fb.draw_aa(av_x + 40, av_y + 1,  "Rusty Penguin", WHITE,    crate::fb::AA_S);
-    fb.draw_aa(av_x + 40, av_y + 21, "OS v2.0.0  .  Ternary", 0x6FE18B, crate::fb::AA_T);
-    fb.fill_rect_s(x + 8, y + MENU_HDR_H - 1, w - 16, 1, 0x46525A);
+    fb.draw_aa(av_x + 40, av_y + 21, "OS v3.3.0  .  Ternary", 0x6FE18B, crate::fb::AA_T);
+    fb.fill_rect_s(x + 8, y + MENU_HDR_H - 1, w - 16, 1, 0x2C3A38);
 
     // Flat category list — each row opens a right-side flyout on click
     let sel = menu_cat_sel();
@@ -1862,7 +1864,7 @@ fn draw_start_menu(fb: &mut Framebuffer) {
 
     // Footer: Settings · Shut Down
     let foot_y = y + h - MENU_FOOT_H;
-    fb.fill_rect_s(x + 8, foot_y, w - 16, 1, 0x46525A);
+    fb.fill_rect_s(x + 8, foot_y, w - 16, 1, 0x2C3A38);
     let bw = (w / 2) - 14; let bh = 28; let by = foot_y + 5;
     let sbx = x + 10;
     fb.fill_rounded_rect(sbx, by, bw, bh, 9, 0x3A4850);
@@ -1902,14 +1904,14 @@ fn draw_cat_flyout(fb: &mut Framebuffer) {
     fb.fill_rounded_rect(fx + 3, fy + 5, fw + 2, fh_panel, 14, 0x0A0D10);
     fb.fill_rounded_rect(fx + 1, fy + 3, fw,     fh_panel, 12, 0x0C1114);
     fb.fill_rounded_rect_glass(fx, fy, fw, fh_panel, 12, 0x1B2126, 236);
-    // Left teal connector line
-    fb.fill_rect(fx as u32, fy as u32, 2, fh_panel as u32, TEAL);
-    fb.fill_rect_s(fx, fy, fw, 2, TEAL);
+    // Subtle left connector line — inset below the rounded top corner so it
+    // doesn't poke out as a bright stub; dimmed teal, not full-bright.
+    fb.fill_rect(fx as u32, (fy + 12) as u32, 2, (fh_panel - 24) as u32, 0x265E55);
 
-    // Category header
-    fb.fill_rounded_rect(fx, fy, fw, FLYOUT_HDR_H, 12, 0x1A3040);
+    // Category header — soft band, no glossy top strip.
+    fb.fill_rounded_rect(fx, fy, fw, FLYOUT_HDR_H, 12, 0x18222B);
     fb.draw_aa(fx + 12, fy + 8, cat_name, TEAL, crate::fb::AA_S);
-    fb.fill_rect_s(fx + 4, fy + FLYOUT_HDR_H - 1, fw - 8, 1, 0x46525A);
+    fb.fill_rect_s(fx + 8, fy + FLYOUT_HDR_H - 1, fw - 16, 1, 0x2C3A38);
 
     // Items
     let mut iy = fy + FLYOUT_HDR_H + 4;

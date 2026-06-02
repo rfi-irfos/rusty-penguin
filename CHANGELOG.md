@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented here.
 
+## [3.3.1] — 2026-06-02 — Card highlight cleanup + in-OS version sync
+
+### Fixed
+- **Glass-highlight on menu/flyout cards:** the bright 2px teal strips were drawn
+  on the very top scanline, where the panel corners are rounded, so they poked
+  past the corners as squared-off glossy pixels. Replaced with soft, dimmed,
+  inset accent lines that sit inside the rounded edge; softened the header/footer
+  hairlines (0x46525A → 0x2C3A38) and the flyout header band.
+- **In-OS version string:** start-menu header showed "OS v2.0.0" while the OS is
+  3.x — now reads "OS v3.3.0".
+
 ## [3.3.0] — 2026-06-02 — Smooth dingir, upward flyouts, mint context menu
 
 ### Changed — Dingir start button (anti-aliased)
