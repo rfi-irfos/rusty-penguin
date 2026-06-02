@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented here.
 
+## [3.2.0] — 2026-06-02 — Flyout start menu, real dingir button, hover navigation
+
+### Changed — Start menu redesign (flyout sub-panels)
+- **Flyout category navigation:** the start menu is now a clean flat list of five
+  categories — Productivity, Internet & Media, System, Communications, Games.
+  Selecting a category opens a second glass panel to its right showing that
+  category's apps, with icon + name + description per row. Replaces the earlier
+  cramped flat list and the short-lived accordion.
+- **Hover-to-expand:** gliding the cursor over a category row opens its flyout
+  immediately — no click required. Clicking still works; clicking an app in the
+  flyout launches it and closes the menu.
+- **Right-click in the flyout:** right-clicking an app opens the context popup
+  (Run / Pin to dock / Pin to desktop / Run as admin) to the right of the flyout.
+
+### Changed — Real dingir on the start button
+- The start button now renders the **actual dingir PPM glyph** (the hand-built
+  96×96 asset, same one in the menu avatar) on a dark teal-glass tile, instead of
+  a synthetic 8-point star. Teal dingir on dark body reads cleanly; the active
+  state lights the tile brighter with a teal underline.
+
+### Fixed
+- **Flyout / context popup never drew:** `draw_cat_flyout` and the app context
+  popup were only wired into the partial-term render path, but clicks trigger a
+  full `recomposite()`. Both are now drawn in both render paths, so categories
+  actually expand and Pin-to-dock is reachable.
+
 ## [3.1.0] — 2026-06-02 — RustyPhone, Deep Azure theme, scientific calc, Notes, psh pipes
 
 ### Added — RustyPhone (Zabih's vision: Rusty Penguin on any device)

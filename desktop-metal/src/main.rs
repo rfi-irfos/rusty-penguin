@@ -1087,16 +1087,18 @@ fn draw_scene_static_v(fb: &mut Framebuffer, variant: u8) {
     fb.fill_rect_s(px + PANEL_R, ptop + 1, pw - 2 * PANEL_R, 1, 0x7A878E);
     fb.fill_rect_s(px + PANEL_R + 4, ptop + PANEL_H - 2, pw - 2 * PANEL_R - 8, 1, 0x151A1E);
 
-    // Menu button — clean layout: large dingir left, "Menu" right, no permanent underline.
-    // The green active-indicator underline is drawn per-frame only when start_menu_open=true.
+    // Menu button — the real dingir glyph on a dark teal-glass tile (matches the
+    // menu avatar + dock tiles). Teal dingir reads cleanly on the dark body.
     let (mbx, mby, mbw, _mbh) = menu_btn_rect(h);
-    // Subtle button body — shadow inset by 2px so it doesn't bleed past the border.
-    // Teal-filled pill button with a white unfilled star — clean, iconic.
-    fb.fill_rounded_rect(mbx, mby, mbw, PANEL_H - 14, 12, TEAL);
-    draw_round_border(fb, mbx, mby, mbw, PANEL_H - 14, 12, 0x8FF0E0);
-    fb.fill_rect_s(mbx + 6, mby + 1, mbw - 12, 1, 0xB0FFF0); // top light catch
-    let star_cy = mby + (PANEL_H - 14) / 2;
-    fb.draw_star8(mbx + mbw / 2, star_cy, 15, 0x06100E); // near-black dingir on teal
+    let bh = PANEL_H - 14;
+    fb.fill_rounded_rect(mbx, mby, mbw, bh, 12, tint(TEAL, 46));
+    draw_round_border(fb, mbx, mby, mbw, bh, 12, 0x2E6E64);
+    fb.fill_rect_s(mbx + 6, mby + 1, mbw - 12, 1, 0x3A8478); // top light catch
+    let dcx = mbx + mbw / 2; let dcy = mby + bh / 2;
+    let dsz = (bh - 8).min(mbw - 8) as u32;
+    if !draw_ppm_icon_centered(fb, "bin/dingir.ppm", dcx, dcy, dsz) {
+        fb.draw_star8(dcx, dcy, 15, TEAL);
+    }
     // separator
     fb.fill_rect_s(mbx + mbw + 8, ptop + 14, 1, PANEL_H - 28, 0x435059);
 
@@ -2632,14 +2634,18 @@ fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, 
     // Menu button active indicator: green underline + brightened bg when open.
     // Drawn per-frame (not in the cached bg) so it only appears on state change.
     if start_menu {
-        // Active: slightly brighter teal, white star, teal underline.
+        // Active: brighter teal-glass tile, dingir lit up, teal underline.
         let (mbx, mby, mbw, _) = menu_btn_rect(fb.height);
         let bh = PANEL_H - 14;
-        fb.fill_rounded_rect(mbx, mby, mbw, bh, 12, 0x5EEAD4); // brighter teal
-        draw_round_border(fb, mbx, mby, mbw, bh, 12, WHITE);
-        let star_cy = mby + bh / 2;
-        fb.draw_star8(mbx + mbw / 2, star_cy, 15, 0x06100E); // near-black dingir on teal
-        fb.fill_rect_s(mbx + 8, mby + bh - 3, mbw - 16, 3, 0x06100E);
+        fb.fill_rounded_rect(mbx, mby, mbw, bh, 12, tint(TEAL, 96));
+        draw_round_border(fb, mbx, mby, mbw, bh, 12, TEAL);
+        fb.fill_rect_s(mbx + 6, mby + 1, mbw - 12, 1, 0x6BE0CE);
+        let dcx = mbx + mbw / 2; let dcy = mby + bh / 2;
+        let dsz = (bh - 8).min(mbw - 8) as u32;
+        if !draw_ppm_icon_centered(fb, "bin/dingir.ppm", dcx, dcy, dsz) {
+            fb.draw_star8(dcx, dcy, 15, TEAL);
+        }
+        fb.fill_rect_s(mbx + 8, mby + bh - 3, mbw - 16, 3, TEAL);
     }
     let up = rtc_str();
     // Find the focused index on the current desktop (last non-minimized window there).
@@ -2994,6 +3000,18 @@ pub extern "C" fn _start() -> ! {
             scene_dirty = true;
         }
 
+        // Start-menu hover-to-expand: gliding over a category row opens its
+        // flyout immediately — no click needed. Hovering an item in the open
+        // flyout keeps it; leaving both for the header area collapses nothing.
+        if start_menu_open && app_ctx.is_none() {
+            if let Some(mi) = start_menu_hit(fb.height, cx, cy) {
+                if mi >= 1000 {
+                    let ci = (mi - 1000) as i32;
+                    if menu_cat_sel() != ci { menu_cat_set(ci); scene_dirty = true; }
+                }
+            }
+        }
+
         let left_down  = (btn & 0x01) != 0;
         let left_edge  = (mouse.btn_pressed & 0x01) != 0;
         let right_edge = (mouse.btn_pressed & 0x02) != 0;
@@ -3154,9 +3172,8 @@ pub extern "C" fn _start() -> ! {
                     start_menu_open = false; menu_cat_set(-1);
                 } else if let Some(mi) = start_menu_hit(fb.height, cx, cy) {
                     if mi >= 1000 {
-                        // Category row click — open/close its flyout
-                        let ci = (mi - 1000) as i32;
-                        if menu_cat_sel() == ci { menu_cat_set(-1); } else { menu_cat_set(ci); }
+                        // Category row click — open its flyout (hover already does this)
+                        menu_cat_set((mi - 1000) as i32);
                     } else if mi == 99 {
                         unsafe { core::arch::asm!("syscall", in("rax") 37u64, out("rcx") _, out("r11") _, options(nostack)); }
                         loop { unsafe { core::arch::asm!("hlt", options(nostack)); } }
