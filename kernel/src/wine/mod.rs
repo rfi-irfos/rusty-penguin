@@ -199,6 +199,38 @@ pub fn syscall_handler(nr: u64, _a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64
             serial::write_str("\n");
             0 // STATUS_SUCCESS
         }
+        // NtCreateThreadEx
+        0x4b => {
+            let thread_proc = w_a3; // r8
+            let parameter = w_a4; // r9
+            serial::write_str("  [wine] NtCreateThreadEx proc=0x");
+            serial::write_hex_u32(thread_proc as u32);
+            serial::write_str("\n");
+            
+            // Allocate new stack and TEB for the thread
+            let teb_phys = pmm::alloc_frame().expect("teb alloc failed");
+            let teb_va = 0x0000_7FF0_0000_0000 + (crate::sched::current_pid() * 0x2000); // crude unique va
+            let pfw = vmm::PTE_PRESENT | vmm::PTE_WRITABLE | vmm::PTE_USER;
+            unsafe {
+                vmm::map_page_in(vmm::current_cr3(), teb_va, teb_phys, pfw);
+                let teb = vmm::phys_to_virt(teb_phys) as *mut WinTeb;
+                core::ptr::write_bytes(teb as *mut u8, 0, 4096);
+                (*teb).peb_ptr = 0x0000_7FF0_0000_1000; // shared PEB
+            }
+            
+            let stack_phys = pmm::alloc_frame().expect("stack alloc failed");
+            let stack_va = teb_va - 0x1000;
+            unsafe { vmm::map_page_in(vmm::current_cr3(), stack_va, stack_phys, pfw); }
+            
+            let tid = crate::sched::spawn_wine_thread(
+                vmm::current_cr3(),
+                thread_proc,
+                stack_va + 4096 - 8,
+                teb_va
+            );
+            
+            alloc_handle(WinObject::Thread)
+        }
         // NtClose
         0x0f => {
             let handle = w_a1;

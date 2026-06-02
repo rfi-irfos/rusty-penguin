@@ -111,14 +111,15 @@ const KSTACK_SIZE: usize = 32 * 1024; // 32 KiB kernel stack per task
 
 #[derive(Clone, Copy)]
 struct Task {
-    rsp:   u64,  // saved kernel stack pointer (valid when this task is suspended)
-    used:  bool,
-    alive: bool,
-    cr3:   u64,  // address space (PML4 phys). 0 = don't switch (shared kernel AS).
+    rsp:     u64,  // saved kernel stack pointer
+    used:    bool,
+    alive:   bool,
+    cr3:     u64,  // address space (PML4 phys)
+    gs_base: u64,  // Windows TEB (Brick 14)
 }
 
 static mut TASKS: [Task; MAX_TASKS] =
-    [Task { rsp: 0, used: false, alive: false, cr3: 0 }; MAX_TASKS];
+    [Task { rsp: 0, used: false, alive: false, cr3: 0, gs_base: 0 }; MAX_TASKS];
 static mut KSTACKS: [[u8; KSTACK_SIZE]; MAX_TASKS] = [[0; KSTACK_SIZE]; MAX_TASKS];
 static mut CUR_TASK: usize = 0;
 // Per-task ABI mode: true = this task is a Linux-ABI process (routes syscalls to
@@ -128,11 +129,16 @@ static mut CUR_TASK: usize = 0;
 // desktop can be scheduled at once and each routes correctly. Set false on every
 // spawn (slots are reused); the caller marks a Linux task true after spawning.
 static mut TASK_LINUX: [bool; MAX_TASKS] = [false; MAX_TASKS];
+static mut TASK_WINE:  [bool; MAX_TASKS] = [false; MAX_TASKS];
 
-/// Mark task `i` as a Linux-ABI process (its syscalls route to the Linux table
-/// while it is the running task). Call right after spawning it.
+/// Mark task `i` as a Linux-ABI process.
 pub fn mark_task_linux(i: usize) {
     unsafe { TASK_LINUX[i] = true; }
+}
+
+/// Mark task `i` as a Wine-ABI process.
+pub fn mark_task_wine(i: usize) {
+    unsafe { TASK_WINE[i] = true; }
 }
 
 // True once a Linux process is running UNDER the preemptive scheduler (vs the
@@ -222,7 +228,29 @@ fn spawn(entry: extern "C" fn() -> !) -> usize {
     }
 }
 
-/// Pick the next alive task after `from` (round-robin). Task 0 (the boot thread)
+/// Spawn a new Wine-subsystem ring-3 thread.
+pub fn spawn_wine_thread(cr3: u64, rip: u64, rsp: u64, gs_base: u64) -> usize {
+    unsafe {
+        for i in 1..MAX_TASKS {
+            if !TASKS[i].used {
+                let base = core::ptr::addr_of_mut!(KSTACKS[i]) as *mut u8;
+                let ktop = ((base.add(KSTACK_SIZE) as u64) & !0xF) as u64;
+                let mut sp = ktop;
+                let push = |sp: &mut u64, v: u64| { *sp -= 8; *(*sp as *mut u64) = v; };
+                push(&mut sp, 0x1b);    // ss
+                push(&mut sp, rsp);     // user rsp
+                push(&mut sp, 0x202);   // rflags
+                push(&mut sp, 0x23);    // cs
+                push(&mut sp, rip);     // rip
+                for _ in 0..15 { push(&mut sp, 0); }
+                TASKS[i] = Task { rsp: sp, used: true, alive: true, cr3, gs_base };
+                TASK_WINE[i] = true;
+                return i;
+            }
+        }
+        0
+    }
+}
 /// is always considered alive so we can always fall back to it.
 fn next_alive(from: usize) -> usize {
     unsafe {
@@ -330,14 +358,21 @@ fn spawn_preempt(entry: extern "C" fn() -> !) -> usize {
 /// normal per-tick bookkeeping (ticks/EOI/USB).
 extern "C" fn preempt_tick(cur_rsp: u64) -> u64 {
     crate::idt::timer_bookkeeping();
+    const IA32_GS_BASE: u32 = 0xC000_0101;
     unsafe {
+        // Save current GS_BASE
+        let mut lo: u32; let mut hi: u32;
+        core::arch::asm!("rdmsr", in("ecx") IA32_GS_BASE, out("eax") lo, out("edx") hi, options(nostack));
+        TASKS[CUR_TASK].gs_base = (hi as u64) << 32 | lo as u64;
+
         TASKS[CUR_TASK].rsp = cur_rsp;
         let nxt = next_alive(CUR_TASK);
         CUR_TASK = nxt;
-        // Switch to the next task's address space. Every per-process AS shares
-        // the kernel's low half (PML4[0]), so the kernel stacks we're standing
-        // on stay mapped across the switch. cr3 == 0 means "shared kernel AS,
-        // no switch" (Increment 2 kernel tasks).
+
+        // Restore next GS_BASE
+        let g = TASKS[nxt].gs_base;
+        core::arch::asm!("wrmsr", in("ecx") IA32_GS_BASE, in("eax") g as u32, in("edx") (g >> 32) as u32, options(nostack));
+
         if TASKS[nxt].cr3 != 0 {
             crate::vmm::switch_address_space(TASKS[nxt].cr3);
         }
@@ -356,8 +391,9 @@ extern "C" fn preempt_tick(cur_rsp: u64) -> u64 {
             "mov qword ptr [rip + _cur_syscall_stack], {0}",
             in(reg) kt, options(nostack, preserves_flags),
         );
-        // Route the next task's syscalls to the right ABI table (native vs Linux).
+        // Route the next task's syscalls to the right ABI table (native vs Linux vs Wine).
         crate::linux::set_linux(TASK_LINUX[nxt]);
+        crate::wine::set_wine(TASK_WINE[nxt]);
         TASKS[nxt].rsp
     }
 }
