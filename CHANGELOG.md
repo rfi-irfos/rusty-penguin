@@ -19,6 +19,17 @@ All notable changes to this project will be documented here.
   128×128 surface px, 0 faults; normal-boot regression 0 faults / clean desktop.
   Proof: docs/multiproc-windowed-app-on-desktop.png.
 
+### Added — GPU: virgl 3D control-path probe (negotiate F_VIRGL, capset, CTX_CREATE) (2026-06-02)
+
+- The next virgl brick past detection: prove the 3D command channel round-trips
+  through the host virglrenderer (the transport every later virgl brick rides on).
+  Behind a `virgltest` boot flag: negotiate `VIRTIO_GPU_F_VIRGL`, `GET_CAPSET_INFO`
+  (→ capset id 1 / max-version 1 / max-size 308), `CTX_CREATE` a 3D context, then
+  `CTX_DESTROY`. Verified with `-device virtio-gpu-gl -display egl-headless`; the
+  2D scanout self-test still passes. Fully flag-gated — a default boot does NOT
+  negotiate VIRGL and the 2D path is unchanged. Remaining (multi-year):
+  `RESOURCE_CREATE_3D` + `SUBMIT_3D` with a real GL/TGSI command stream.
+
 ### Added — GPU: detect virtio-gpu VIRGL 3D capability (item-6 foundation) (2026-06-01)
 
 - The first real brick toward 3D acceleration: the kernel reads the GPU's full
