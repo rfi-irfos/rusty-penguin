@@ -8,6 +8,7 @@ mod ansi;
 mod app;
 mod clipboard;
 mod css;
+mod tcss;
 mod editor;
 mod fb;
 mod font;
