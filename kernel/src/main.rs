@@ -26,7 +26,11 @@ mod ps2mouse;
 mod ramfs;
 mod vfs;
 mod linux;
-mod wine;
+mod wine {
+    pub mod pe;
+    pub mod registry;
+    pub mod mod_impl;
+}
 mod pci;
 mod hda;
 mod rtl8139;
