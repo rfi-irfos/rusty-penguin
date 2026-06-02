@@ -1,7 +1,6 @@
 <p align="center">
   <img src="https://github.com/user-attachments/assets/f76c2b10-e7f0-478f-8f70-af13580032f8" width="200" alt="Rusty Penguin Logo">
 </p>
-
 <h1 align="center">Rusty Penguin</h1>
 
 <p align="center"><em>A pure-Rust, from-scratch x86_64 operating system — kernel, drivers, GUI, all our own.</em></p>
