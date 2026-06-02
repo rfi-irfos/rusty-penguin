@@ -1570,26 +1570,20 @@ fn start_menu_bounds(fh: u32) -> (i32, i32, i32, i32) {
 }
 
 fn draw_menu_item(fb: &mut Framebuffer, x: i32, y: i32, w: i32, item: &MenuItem, hovered: bool) {
-    let bg = if hovered { 0x29343Au32 } else { 0x1C2328u32 };
-    fb.fill_rounded_rect(x + 5, y + 1, w - 10, MENU_ITEM_H, 10, 0x0A0D10);
-    fb.fill_rounded_rect_glass(x + 4, y, w - 8, MENU_ITEM_H, 10, bg, if hovered { 204 } else { 0 });
-    // Subtle glass icon tile (28×28, radius 7) — dark base with a faint accent tint,
-    // matching the dock-tile aesthetic rather than a garish colored block.
+    // Row highlight on hover — no shadow/underline clutter when idle.
+    if hovered {
+        fb.fill_rounded_rect(x + 4, y, w - 8, MENU_ITEM_H, 8, 0x29343A);
+    }
+    // Icon tile: accent-tinted dark glass (tint=60 ≈ 24% color, like dock tiles).
+    // No border, no sheen — at 28×28 those details read as noise.
     let icon_x = x + 10; let icon_y = y + (MENU_ITEM_H - 28) / 2;
-    let ic_bg = tint(item.color, 32);
-    fb.fill_rounded_rect(icon_x + 1, icon_y + 1, 28, 28, 7, 0x06080A);  // shadow
-    fb.fill_rounded_rect(icon_x, icon_y, 28, 28, 7, ic_bg);
-    fb.fill_rect_s(icon_x + 5, icon_y + 1, 18, 1, 0x52606A);  // top sheen
-    draw_round_border(fb, icon_x, icon_y, 28, 28, 7,
-        if hovered { item.color } else { 0x394048 });
-    // HD icon, tinted with the app accent, centered in the 28px square.
+    fb.fill_rounded_rect(icon_x, icon_y, 28, 28, 7, tint(item.color, 60));
     let isz = icons::ICON_PX as i32;
     fb.draw_icon(icon_x + (28 - isz) / 2, icon_y + (28 - isz) / 2, item.icon, item.color);
-    // Name (smooth AA) + description (smaller, dimmer)
+    // Label + description
     let tx = x + 46;
     fb.draw_aa(tx, y + 2, item.label, WHITE, crate::fb::AA_S);
     fb.draw_aa(tx, y + 20, item.desc, 0x7E8C85, crate::fb::AA_T);
-    let _ = bg;
 }
 
 fn draw_start_menu(fb: &mut Framebuffer) {
@@ -1640,19 +1634,15 @@ fn draw_start_menu(fb: &mut Framebuffer) {
     let bw = (w / 2) - 14;
     let bh = 28;
     let by = foot_y + 5;
-    // Settings button — neutral glass
+    // Settings button — visible neutral tile
     let sbx = x + 10;
-    fb.fill_rounded_rect(sbx + 1, by + 1, bw, bh, 10, 0x06080A);
-    fb.fill_rounded_rect_glass(sbx, by, bw, bh, 10, 0x202A30, 230);
-    fb.fill_rect_s(sbx + 8, by + 1, bw - 16, 1, 0x5E6E77);
-    draw_round_border(fb, sbx, by, bw, bh, 10, 0x49565E);
-    fb.draw_aa(sbx + 14, by + 8, "Settings", 0xCDD5D0, crate::fb::AA_S);
-    // Shut Down button — red-tinted glass
+    fb.fill_rounded_rect(sbx, by, bw, bh, 9, 0x3A4850);
+    draw_round_border(fb, sbx, by, bw, bh, 9, 0x68787F);
+    fb.draw_aa(sbx + 14, by + 8, "Settings", WHITE, crate::fb::AA_S);
+    // Shut Down button — visible red tile
     let dbx = x + w / 2 + 4;
-    fb.fill_rounded_rect(dbx + 1, by + 1, bw, bh, 10, 0x06080A);
-    fb.fill_rounded_rect_glass(dbx, by, bw, bh, 10, 0x271A1A, 230);
-    fb.fill_rect_s(dbx + 8, by + 1, bw - 16, 1, 0x6B4A4A);
-    draw_round_border(fb, dbx, by, bw, bh, 10, 0x5A3535);
+    fb.fill_rounded_rect(dbx, by, bw, bh, 9, 0x4A2020);
+    draw_round_border(fb, dbx, by, bw, bh, 9, 0x8A4040);
     fb.draw_aa(dbx + 10, by + 8, "Shut Down", TRIT_NEG, crate::fb::AA_S);
 }
 
