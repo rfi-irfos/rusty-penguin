@@ -2087,6 +2087,33 @@ fn html_attr<'a>(tag: &'a [u8], attr: &[u8]) -> &'a [u8] {
     &[]
 }
 
+/// Concatenate the text of every <style>…</style> block in an HTML body
+/// (case-insensitive) so the CSS engine can parse the page's rules.
+fn extract_style(html: &[u8]) -> String {
+    let lower: Vec<u8> = html.iter().map(|b| b.to_ascii_lowercase()).collect();
+    let mut out = String::new();
+    let mut i = 0usize;
+    while i < lower.len() {
+        let rel = match lower[i..].windows(6).position(|w| w == b"<style") { Some(p) => p, None => break };
+        let open = i + rel;
+        let gt = match lower[open..].iter().position(|&b| b == b'>') { Some(g) => open + g + 1, None => break };
+        if gt >= lower.len() { break; }
+        let close = match lower[gt..].windows(7).position(|w| w == b"</style") { Some(c) => gt + c, None => break };
+        if let Ok(s) = core::str::from_utf8(&html[gt..close]) { out.push_str(s); out.push('\n'); }
+        i = close + 7;
+    }
+    out
+}
+
+/// Resolve a page's CSS for one element `tag` over PinguBrowser's reader default
+/// (base_color, base_size). Any property the page's CSS doesn't set keeps the
+/// reader value, so unstyled pages still look clean.
+fn style_tag(sheet: &crate::tcss::Stylesheet, tag: &str, color: u32, size: u8) -> crate::tcss::ComputedStyle {
+    let mut base = crate::tcss::ComputedStyle::default();
+    base.color = color; base.font_size = size;
+    sheet.resolve_with_base(&crate::tcss::Element::new(tag), "", base)
+}
+
 /// Pull the text of the first <title>…</title> out of an HTML body (case-insensitive).
 fn extract_title(html: &[u8]) -> String {
     let lower: Vec<u8> = html.iter().map(|b| b.to_ascii_lowercase()).collect();
@@ -2316,6 +2343,7 @@ pub struct Browser {
     mode:         BrMode,
     resp_buf:     Vec<u8>,
     nodes:        Vec<HNode>,
+    sheet:        crate::tcss::Stylesheet,  // parsed <style> rules for the live page
     scroll_px:    i32,
     // Link hit-test regions populated by the last render call: (y_abs, height, href)
     link_hits:    Vec<(i32, i32, String)>,
@@ -2360,6 +2388,7 @@ impl Browser {
             mode: BrMode::Static,
             resp_buf: Vec::new(),
             nodes: Vec::new(),
+            sheet: crate::tcss::Stylesheet::parse(""),
             scroll_px: 0,
             link_hits: Vec::new(),
             auto_nav: true,
@@ -2457,6 +2486,8 @@ impl Browser {
             .unwrap_or(0);
         let body = &data[body_start..];
         self.title = extract_title(body);
+        // Parse the page's <style> blocks through the from-scratch CSS engine.
+        self.sheet = crate::tcss::Stylesheet::parse(&extract_style(body));
         self.nodes = parse_html(body);
     }
 }
@@ -2560,6 +2591,8 @@ impl App for Browser {
                 // Lay out all nodes, clipping to viewport
                 let mut doc_y = 0i32;  // y in document space
                 let line_h_body: i32 = 20;
+                // The page's parsed CSS (tag-level cascade over reader defaults).
+                let sheet = &self.sheet;
 
                 for node in self.nodes.iter() {
                     let node_h = match node {
@@ -2580,38 +2613,44 @@ impl App for Browser {
                         let sy = screen_y;
                         match node {
                             HNode::H1(s) => {
-                                fb.draw_aa(lx, sy + 4, s, 0x1A2040, crate::fb::AA_L);
+                                let st = style_tag(sheet, "h1", 0x1A2040, crate::fb::AA_L);
+                                fb.draw_aa(lx, sy + 4, s, st.color, st.font_size);
                                 fb.fill_rect(lx as u32, (sy + node_h - 3) as u32, rw as u32, 1, 0xCCCCC4);
                             }
                             HNode::H2(s) => {
-                                fb.draw_aa(lx, sy + 4, s, 0x1A3A70, crate::fb::AA_S);
+                                let st = style_tag(sheet, "h2", 0x1A3A70, crate::fb::AA_S);
+                                fb.draw_aa(lx, sy + 4, s, st.color, st.font_size);
                             }
                             HNode::H3(s) => {
-                                fb.draw_aa(lx, sy + 4, s, 0x2A4A80, crate::fb::AA_S);
+                                let st = style_tag(sheet, "h3", 0x2A4A80, crate::fb::AA_S);
+                                fb.draw_aa(lx, sy + 4, s, st.color, st.font_size);
                             }
                             HNode::Para(s) => {
+                                let st = style_tag(sheet, "p", 0x2A2A24, crate::fb::AA_S);
                                 let mut ly = sy + 2;
                                 for line in wrap_text(s, rw) {
-                                    fb.draw_aa(lx, ly, &line, 0x2A2A24, crate::fb::AA_S);
+                                    fb.draw_aa(lx, ly, &line, st.color, st.font_size);
                                     ly += line_h_body;
                                 }
                             }
                             HNode::Li(s) => {
+                                let st = style_tag(sheet, "li", 0x2A2A24, crate::fb::AA_S);
                                 fb.draw_aa(lx, sy + 2, "\u{2022}", 0x1A5FBE, crate::fb::AA_S);
                                 let mut ly = sy + 2;
                                 for line in wrap_text(s, rw - 18) {
-                                    fb.draw_aa(lx + 18, ly, &line, 0x2A2A24, crate::fb::AA_S);
+                                    fb.draw_aa(lx + 18, ly, &line, st.color, st.font_size);
                                     ly += line_h_body;
                                 }
                             }
                             HNode::Link { text, href } => {
+                                let st = style_tag(sheet, "a", 0x1A5FBE, crate::fb::AA_S);
                                 let mut ly = sy + 2;
                                 let lines = wrap_text(text, rw);
                                 let total_h = lines.len() as i32 * line_h_body;
                                 for line in &lines {
                                     let lw = Framebuffer::aa_w(line, crate::fb::AA_S);
-                                    fb.draw_aa(lx, ly, line, 0x1A5FBE, crate::fb::AA_S);
-                                    fb.fill_rect(lx as u32, (ly + 17) as u32, lw as u32, 1, 0x1A5FBE);
+                                    fb.draw_aa(lx, ly, line, st.color, crate::fb::AA_S);
+                                    fb.fill_rect(lx as u32, (ly + 17) as u32, lw as u32, 1, st.color);
                                     ly += line_h_body;
                                 }
                                 // Resolve relative hrefs: prepend current host if path-only

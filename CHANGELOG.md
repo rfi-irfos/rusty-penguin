@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented here.
 
+## [3.8.0] — 2026-06-02 — PinguBrowser uses the from-scratch CSS engine
+
+### Changed — tcss wired into the renderer
+- PinguBrowser now parses each live page's `<style>` blocks through the
+  from-scratch `tcss` engine and applies the cascade to headings, paragraphs,
+  links and list items. `resolve_with_base()` starts the cascade from
+  PinguBrowser's reader defaults, so any property the page doesn't set keeps the
+  clean reader look — pages that *do* style their tags (e.g. `a { color: ... }`,
+  `h1 { font-size: ... }`) now render in those colors/sizes.
+
+Honest scope (brick 1 of CSS integration): **tag-level selectors only** — the
+HTML parser doesn't yet attach per-node class/id/inline-style to nodes, so
+`.class`/`#id`/inline rules parse but don't target individual elements yet. No
+box layout. That's the next brick.
+
 ## [3.7.0] — 2026-06-02 — PinguBrowser (rebrand + type-to-Google + full-HD)
 
 ### Changed — the native browser is now PinguBrowser

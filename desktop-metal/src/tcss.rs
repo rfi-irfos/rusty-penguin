@@ -221,6 +221,14 @@ impl Stylesheet {
 
     /// Cascade: resolve the computed style for `el` + inline `style=""`.
     pub fn resolve(&self, el: &Element, inline: &str) -> ComputedStyle {
+        self.resolve_with_base(el, inline, ComputedStyle::default())
+    }
+
+    /// Like `resolve`, but starts the cascade from a caller-supplied `base`
+    /// instead of the engine default — so any property the page's CSS does NOT
+    /// set keeps the caller's value. This is what lets PinguBrowser pass its
+    /// reader defaults and only have the page override what it explicitly styles.
+    pub fn resolve_with_base(&self, el: &Element, inline: &str, base: ComputedStyle) -> ComputedStyle {
         // Gather every (specificity, source_order, &decls) that matches.
         // We apply in cascade order: lower specificity first, ties by source
         // order, then inline last (always wins).
@@ -258,7 +266,7 @@ impl Stylesheet {
             }
         }
 
-        let mut cs = ComputedStyle::default();
+        let mut cs = base;
         for (_, _, decls) in &matched {
             for (k, v) in decls.iter() {
                 apply_decl(&mut cs, k, v);
