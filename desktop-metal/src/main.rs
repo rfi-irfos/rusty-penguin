@@ -220,7 +220,7 @@ fn sys_initrd_read(path: &[u8], out: &mut [u8]) -> usize {
 fn load_cpio_file(path: &str) -> Option<alloc::vec::Vec<u8>> {
     // First pass: measure size (read into a 1-byte probe returns 0, not ideal).
     // Instead allocate a generous cap and shrink.
-    let mut buf = alloc::vec![0u8; 256 * 1024]; // 256 KiB — enough for any icon/logo
+    let mut buf = alloc::vec![0u8; 512 * 1024]; // 512 KiB — covers all icons + the 320×304 watermark
     let n = sys_initrd_read(path.as_bytes(), &mut buf);
     if n == 0 { return None; }
     buf.truncate(n);
@@ -619,12 +619,12 @@ fn parse_ppm_dims(data: &[u8]) -> Option<(usize, usize, usize)> {
     Some((nums[0], nums[1], i))
 }
 
-/// Render a PPM image from the kernel CPIO centered at (cx, cy), scaled to `size`×`size`.
-/// Pixels near the OS bg color (#0B0F19) are treated as transparent.
-/// Returns true if the image was found and rendered.
-fn draw_ppm_icon_centered(fb: &mut Framebuffer, path: &str, cx: i32, cy: i32, size: u32) -> bool {
-    let owned = match load_cpio_file(path) { Some(v) => v, None => return false };
-    let data: &[u8] = &owned;
+/// Dingir logo — baked into the binary at compile time.
+static DINGIR_PPM: &[u8] = include_bytes!("../../iso/data/dingir.ppm");
+
+/// Render the baked-in dingir (or any path — path is now ignored, always uses baked data).
+fn draw_ppm_icon_centered(fb: &mut Framebuffer, _path: &str, cx: i32, cy: i32, size: u32) -> bool {
+    let data: &[u8] = DINGIR_PPM;
     let (iw, ih, off) = match parse_ppm_dims(data) { Some(v) => v, None => return false };
     if iw == 0 || ih == 0 || off + iw * ih * 3 > data.len() { return false; }
     let sx = cx - size as i32 / 2;
@@ -644,12 +644,14 @@ fn draw_ppm_icon_centered(fb: &mut Framebuffer, path: &str, cx: i32, cy: i32, si
     true
 }
 
-/// Render a PPM from the kernel CPIO as a ghost watermark at `(x, y)`.
-/// Dark pixels in the source (the logo's bg) are skipped — only the
-/// lit areas (gear teeth, penguin body, beak) show through at ~28% blend.
-fn draw_ppm_watermark(fb: &mut Framebuffer, path: &str, x: u32, y: u32, size: u32) {
-    let owned = match load_cpio_file(path) { Some(v) => v, None => return };
-    let data: &[u8] = &owned;
+/// Rusty Penguin logo — baked into the binary at compile time.
+/// No CPIO loading, no heap, always renders on every background.
+static RP_LOGO_PPM: &[u8] = include_bytes!("../../iso/data/rp_watermark.ppm");
+
+/// Render the baked-in RP logo as a ghost watermark at `(x, y)`.
+/// Dark pixels (logo background) are skipped so only the gear+penguin shows.
+fn draw_ppm_watermark(fb: &mut Framebuffer, _path: &str, x: u32, y: u32, size: u32) {
+    let data: &[u8] = RP_LOGO_PPM;
     let (iw, ih, off) = match parse_ppm_dims(data) { Some(v) => v, None => return };
     if iw == 0 || ih == 0 || off + iw * ih * 3 > data.len() { return; }
     let fw = fb.width; let fh = fb.height;
