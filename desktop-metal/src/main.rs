@@ -1613,6 +1613,7 @@ const MENU_ITEMS: &[MenuItem] = &[
     MenuItem { label: "Image Viewer",   desc: "View PPM images & screenshots",  color: 0x8CC6E5, icon: icons::IC_IMAGE, kind: MenuLaunch::App(14) },
     MenuItem { label: "Clock",          desc: "Time, stopwatch, timer, world",  color: 0x6FE18B, icon: icons::IC_CLOCK, kind: MenuLaunch::App(15) },
     MenuItem { label: "Task Manager",   desc: "Processes, CPU & memory",        color: 0x8CC6E5, icon: icons::IC_TASKS, kind: MenuLaunch::App(16) },
+    MenuItem { label: "Notes",          desc: "Quick notes — Ctrl+S to save",   color: 0xF5C451, icon: icons::IC_EDIT,  kind: MenuLaunch::App(17) },
     // games start at index 14
     MenuItem { label: "Snake",        desc: "Classic arcade",             color: 0x4ADE80, icon: icons::IC_SNAKE,    kind: MenuLaunch::App(6) },
     MenuItem { label: "Minesweeper",  desc: "Find the mines",             color: 0xFCD34D, icon: icons::IC_MINES,    kind: MenuLaunch::App(7) },
@@ -2114,6 +2115,25 @@ fn open_process_monitor(w: i32, h: i32, n: usize) -> Option<TermWin> {
                 win_dirty: true,
                 initial_cmd: None,
             })
+        }
+        Err(_) => None,
+    }
+}
+
+fn open_notes(w: i32, h: i32, n: usize) -> Option<TermWin> {
+    match term::Terminal::spawn() {
+        Ok(t) => {
+            let notes = alloc::boxed::Box::new(app::Notes::new());
+            let off = n as i32 * 20;
+            let left_margin = 75;
+            let nw = 480.min(w - 90);
+            let nh = 360.min(h - 28 - TOPBAR_H as i32);
+            let wx = ((w - left_margin - nw) / 2 + left_margin + off).max(left_margin).min(w - nw);
+            let wy = ((h - nh - 28) / 2 + off).max(TOPBAR_H as i32).min(h - nh - 28);
+            let mut win = wm::Window::new(wx, wy, "Notes");
+            win.w = nw; win.h = nh; win.restore_w = nw; win.restore_h = nh;
+            win.x = win.x.min(w - nw - 8).max(75);
+            Some(TermWin { win, term: t, editor: None, app: Some(notes), win_dirty: true, initial_cmd: None })
         }
         Err(_) => None,
     }
@@ -2827,6 +2847,7 @@ pub extern "C" fn _start() -> ! {
                             MenuLaunch::App(14)  => open_image_viewer(w, h, wins.len()),
                             MenuLaunch::App(15)  => open_system_clock(w, h, wins.len()),
                             MenuLaunch::App(16)  => open_process_monitor(w, h, wins.len()),
+                            MenuLaunch::App(17)  => open_notes(w, h, wins.len()),
                             MenuLaunch::App(_)   => None,
                         };
                         if let Some(mut tw) = opened {

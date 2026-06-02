@@ -6,6 +6,8 @@ use crate::vfs;
 use alloc::string::String;
 use alloc::vec::Vec;
 
+extern crate libm;
+
 /// sys_ticks (#4) — 100 Hz tick counter since boot.
 fn sys_ticks() -> u64 {
     let n: u64;
@@ -1202,163 +1204,284 @@ impl App for SystemInfo {
     }
 }
 
-/// Simple Calculator application
+/// Scientific calculator with balanced-ternary result panel.
+/// Uses f64 arithmetic + libm for transcendentals. No heap beyond String display.
 pub struct Calculator {
     display: String,
-    accumulator: i64,
-    current_op: Option<char>,
+    accumulator: f64,
+    current_op: u8,   // 0=none, b'+'/b'-'/b'*'/b'/' etc.
     new_number: bool,
+    mem: f64,
+    deg_mode: bool,   // true = degrees, false = radians
+    error: bool,
     pub dirty: bool,
     pub wants_close: bool,
+}
+
+// Button layout — each entry: (label, key_byte, bg_accent)
+// key_byte 0 = handled by label name (unary ops)
+const CALC_BTNS: &[(&str, u8, u32)] = &[
+    ("sin", 0, 0x2A3A4A), ("cos", 0, 0x2A3A4A), ("tan", 0, 0x2A3A4A), ("sqrt", 0, 0x2A3A4A), ("x^y", 0, 0x2A3A4A),
+    ("7",   b'7', 0x22282E), ("8", b'8', 0x22282E), ("9", b'9', 0x22282E), ("/", b'/', 0x1E3040), ("pi",  0, 0x2A3A4A),
+    ("4",   b'4', 0x22282E), ("5", b'5', 0x22282E), ("6", b'6', 0x22282E), ("*", b'*', 0x1E3040), ("ln",  0, 0x2A3A4A),
+    ("1",   b'1', 0x22282E), ("2", b'2', 0x22282E), ("3", b'3', 0x22282E), ("-", b'-', 0x1E3040), ("log", 0, 0x2A3A4A),
+    ("0",   b'0', 0x22282E), (".", b'.', 0x22282E), ("=", b'=', 0x14503A), ("+", b'+', 0x1E3040), ("exp", 0, 0x2A3A4A),
+    ("+/-", 0, 0x2A2A3A), ("1/x", 0, 0x2A2A3A), ("C", b'c', 0x3A2A2A), ("M+", 0, 0x2A3A2A), ("MR",  0, 0x2A3A2A),
+];
+const CALC_COLS: u32 = 5;
+const CALC_ROWS: u32 = 6;
+
+fn fmt_f64(v: f64) -> String {
+    if v.is_nan()      { return String::from("Error"); }
+    if v.is_infinite() { return if v > 0.0 { String::from("Inf") } else { String::from("-Inf") }; }
+    // Prefer integer display when the value is whole.
+    let i = v as i64;
+    if (v - i as f64).abs() < 1e-10 && v.abs() < 1e15 {
+        return alloc::format!("{}", i);
+    }
+    // Up to 10 significant digits, strip trailing zeros.
+    let s = alloc::format!("{:.10}", v);
+    let s = s.trim_end_matches('0');
+    let s = s.trim_end_matches('.');
+    String::from(s)
+}
+
+fn to_balanced_ternary(mut n: i64) -> String {
+    if n == 0 { return String::from("0"); }
+    let neg = n < 0;
+    if neg { n = -n; }
+    let mut digits: [i8; 42] = [0; 42];
+    let mut len = 0;
+    while n != 0 {
+        let rem = (n % 3) as i8;
+        n /= 3;
+        if rem == 2 { digits[len] = -1; n += 1; }
+        else { digits[len] = rem; }
+        len += 1;
+    }
+    let mut out = String::new();
+    if neg { out.push('-'); }
+    for k in 0..len { let d = digits[len - 1 - k]; out.push(match d { 1 => '+', -1 => '-', _ => '0' }); }
+    out
 }
 
 impl Calculator {
     pub fn new() -> Self {
         Calculator {
             display: String::from("0"),
-            accumulator: 0,
-            current_op: None,
+            accumulator: 0.0,
+            current_op: 0,
             new_number: true,
+            mem: 0.0,
+            deg_mode: true,
+            error: false,
             dirty: true,
             wants_close: false,
         }
     }
 
-    fn handle_digit(&mut self, digit: char) {
-        if self.new_number {
-            self.display.clear();
-            self.new_number = false;
-        }
-        if self.display.len() < 16 {
-            self.display.push(digit);
-        }
+    fn display_val(&self) -> f64 {
+        self.display.parse::<f64>().unwrap_or(0.0)
+    }
+
+    fn set_result(&mut self, v: f64) {
+        self.error = v.is_nan();
+        self.display = fmt_f64(v);
+        self.accumulator = v;
+        self.new_number = true;
         self.dirty = true;
     }
 
-    fn execute_operation(&mut self) {
-        if let Ok(num) = self.display.parse::<i64>() {
-            if let Some(op) = self.current_op {
-                let result = match op {
-                    '+' => self.accumulator + num,
-                    '-' => self.accumulator - num,
-                    '*' => self.accumulator * num,
-                    '/' => if num != 0 { self.accumulator / num } else { 0 },
-                    _ => num,
-                };
-                self.display = alloc::format!("{}", result);
-                self.accumulator = result;
-            } else {
-                self.accumulator = num;
+    fn commit_op(&mut self) {
+        if self.current_op == 0 { self.accumulator = self.display_val(); return; }
+        let cur = self.display_val();
+        let result = match self.current_op {
+            b'+' => self.accumulator + cur,
+            b'-' => self.accumulator - cur,
+            b'*' => self.accumulator * cur,
+            b'/' => if cur.abs() < 1e-300 { f64::NAN } else { self.accumulator / cur },
+            b'^' => libm::pow(self.accumulator, cur),
+            _    => cur,
+        };
+        self.display = fmt_f64(result);
+        self.error = result.is_nan();
+        self.accumulator = result;
+        self.new_number = true;
+    }
+
+    fn to_rad(&self, v: f64) -> f64 {
+        if self.deg_mode { v * core::f64::consts::PI / 180.0 } else { v }
+    }
+
+    fn press(&mut self, label: &str, key: u8) {
+        if key != 0 {
+            match key {
+                b'0'..=b'9' | b'.' => {
+                    if self.new_number || self.error { self.display.clear(); self.new_number = false; self.error = false; }
+                    if key == b'.' && self.display.contains('.') { return; }
+                    if self.display.len() < 18 { self.display.push(key as char); }
+                    self.dirty = true;
+                }
+                b'+' | b'-' | b'*' | b'/' => {
+                    self.commit_op();
+                    self.accumulator = self.display_val();
+                    self.current_op = key;
+                    self.new_number = true;
+                    self.dirty = true;
+                }
+                b'=' | b'\r' => {
+                    self.commit_op();
+                    self.current_op = 0;
+                    self.dirty = true;
+                }
+                b'c' | b'C' => {
+                    self.display = String::from("0");
+                    self.accumulator = 0.0;
+                    self.current_op = 0;
+                    self.new_number = true;
+                    self.error = false;
+                    self.dirty = true;
+                }
+                8 => { // Backspace
+                    if !self.new_number && !self.error {
+                        self.display.pop();
+                        if self.display.is_empty() || self.display == "-" { self.display = String::from("0"); }
+                        self.dirty = true;
+                    }
+                }
+                _ => {}
             }
-            self.new_number = true;
+            return;
+        }
+        // Named ops.
+        let v = self.display_val();
+        match label {
+            "sin"  => { let r = libm::sin(self.to_rad(v)); self.set_result(r); }
+            "cos"  => { let r = libm::cos(self.to_rad(v)); self.set_result(r); }
+            "tan"  => {
+                let rad = self.to_rad(v);
+                let r = if (libm::cos(rad)).abs() < 1e-12 { f64::NAN } else { libm::tan(rad) };
+                self.set_result(r);
+            }
+            "sqrt" => { let r = if v < 0.0 { f64::NAN } else { libm::sqrt(v) }; self.set_result(r); }
+            "ln"   => { let r = if v <= 0.0 { f64::NAN } else { libm::log(v) }; self.set_result(r); }
+            "log"  => { let r = if v <= 0.0 { f64::NAN } else { libm::log10(v) }; self.set_result(r); }
+            "exp"  => { self.set_result(libm::exp(v)); }
+            "pi"   => { self.display = String::from("3.14159265358979"); self.new_number = false; self.dirty = true; }
+            "x^y"  => { self.commit_op(); self.accumulator = self.display_val(); self.current_op = b'^'; self.new_number = true; self.dirty = true; }
+            "1/x"  => { let r = if v.abs() < 1e-300 { f64::NAN } else { 1.0 / v }; self.set_result(r); }
+            "+/-"  => {
+                if self.display.starts_with('-') { self.display.remove(0); }
+                else if self.display != "0" { self.display.insert(0, '-'); }
+                self.dirty = true;
+            }
+            "M+"   => { self.mem += v; self.dirty = true; }
+            "MC"   => { self.mem = 0.0; self.dirty = true; }
+            "MR"   => { self.display = fmt_f64(self.mem); self.new_number = true; self.dirty = true; }
+            "DEG"  => { self.deg_mode = true; self.dirty = true; }
+            "RAD"  => { self.deg_mode = false; self.dirty = true; }
+            _ => {}
         }
     }
 }
 
 impl App for Calculator {
     fn render(&mut self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, h: u32) {
-        // Header
-        fb.fill_rect(x, y, w, 24, 0x2C2C38);
-        fb.draw_str(x + 8, y + 7, "Calculator", 0xF5F5F7, 0x2C2C38);
-        fb.fill_rect(x, y + 24, w, 1, 0x3C3C48);
+        let bg = 0x141720u32;
+        fb.fill_rect(x, y, w, h, bg);
 
-        // Display
-        fb.fill_rect(x + 8, y + 32, w - 16, 32, 0x1A1A24);
-        fb.draw_str(x + 12, y + 42, &self.display, 0x4ADE80, 0x1A1A24);
+        // ── Display panel ────────────────────────────────────────────────────
+        let dp_h = 52u32;
+        let dp_y = y + 4;
+        fb.fill_rect(x + 6, dp_y, w - 12, dp_h, 0x0D1117);
+        fb.fill_rect(x + 6, dp_y, w - 12, 1, 0x30364A);
+        fb.fill_rect(x + 6, dp_y + dp_h - 1, w - 12, 1, 0x30364A);
 
-        // Buttons grid (4x4)
-        let buttons = [
-            ["7", "8", "9", "/"],
-            ["4", "5", "6", "*"],
-            ["1", "2", "3", "-"],
-            ["0", ".", "=", "+"],
-        ];
+        // Decimal result (right-aligned).
+        let disp = if self.error { "Error" } else { &self.display };
+        let dw = (disp.len() as u32) * 8;
+        let dx = x + w.saturating_sub(dw + 10);
+        let disp_col = if self.error { 0xEF4444u32 } else { 0xF0F0F0 };
+        fb.draw_str(dx, dp_y + 8, disp, disp_col, 0x0D1117);
 
-        let btn_w = (w - 32) / 4;
-        let btn_h = 24u32;
-        let start_y = y + 72;
-
-        for (row, buttons_row) in buttons.iter().enumerate() {
-            for (col, label) in buttons_row.iter().enumerate() {
-                let bx = x + 8 + (col as u32 * (btn_w + 4));
-                let by = start_y + (row as u32 * (btn_h + 4));
-
-                let bg = if *label == "=" { 0x4ADE80 } else { 0x3C3C48 };
-                fb.fill_rect(bx, by, btn_w, btn_h, bg);
-
-                let text_color = if *label == "=" { 0x0F172A } else { 0xF5F5F7 };
-                fb.draw_str(bx + (btn_w / 2) - 3, by + 8, label, text_color, bg);
+        // Balanced ternary of the integer part (right-aligned, smaller).
+        if !self.error {
+            if let Ok(v) = self.display.parse::<f64>() {
+                let trit = to_balanced_ternary(v as i64);
+                let tw = (trit.len() as u32) * 7;
+                let tx = x + w.saturating_sub(tw + 10);
+                fb.draw_str(tx, dp_y + 26, &trit, 0x4A9EFF, 0x0D1117);
+                // mode indicator
+                let mode = if self.deg_mode { "DEG" } else { "RAD" };
+                fb.draw_str(x + 10, dp_y + 26, mode, 0x6B7280, 0x0D1117);
+                // mem indicator
+                if self.mem != 0.0 { fb.draw_str(x + 32, dp_y + 26, "M", 0x6FE18B, 0x0D1117); }
             }
+        }
+
+        // ── Button grid (6 rows × 5 cols) ───────────────────────────────────
+        let pad = 4u32;
+        let btn_w = (w.saturating_sub(pad * (CALC_COLS + 1))) / CALC_COLS;
+        let btn_h = (h.saturating_sub(dp_h + 12 + pad * (CALC_ROWS + 1))) / CALC_ROWS;
+        let grid_y = y + dp_h + 12;
+
+        for (i, (label, _key, accent)) in CALC_BTNS.iter().enumerate() {
+            let row = (i as u32) / CALC_COLS;
+            let col = (i as u32) % CALC_COLS;
+            let bx = x + pad + col * (btn_w + pad);
+            let by = grid_y + pad + row * (btn_h + pad);
+            let is_eq = *label == "=";
+            let btn_bg = if is_eq { 0x1A5C42u32 } else { *accent };
+            fb.fill_rect(bx, by, btn_w, btn_h, btn_bg);
+            fb.fill_rect(bx, by, btn_w, 1, btn_bg.saturating_add(0x181818));
+            let lw = (label.len() as u32) * 7;
+            let lx = bx + btn_w.saturating_sub(lw) / 2;
+            let ly = by + btn_h.saturating_sub(8) / 2;
+            let lc = if is_eq { 0x6FE18Bu32 } else { 0xCDD6E0 };
+            fb.draw_str(lx, ly, label, lc, btn_bg);
         }
 
         self.dirty = false;
     }
 
     fn on_key(&mut self, key: u8) {
-        match key {
-            b'0'..=b'9' => self.handle_digit(key as char),
-            b'+' | b'-' | b'*' | b'/' => {
-                self.execute_operation();
-                if let Ok(num) = self.display.parse::<i64>() {
-                    self.accumulator = num;
-                }
-                self.current_op = Some(key as char);
-                self.new_number = true;
-                self.dirty = true;
-            }
-            b'=' | b'\r' => {
-                self.execute_operation();
-                self.current_op = None;
-                self.dirty = true;
-            }
-            8 => { // Backspace
-                if !self.display.is_empty() && !self.new_number {
-                    self.display.pop();
-                    if self.display.is_empty() {
-                        self.display.push('0');
-                    }
-                    self.dirty = true;
-                }
-            }
-            b'c' | b'C' => { // Clear
-                self.display = String::from("0");
-                self.accumulator = 0;
-                self.current_op = None;
-                self.new_number = true;
-                self.dirty = true;
-            }
-            _ => {}
+        // Map readable chars to their button.
+        let (label, k): (&str, u8) = match key {
+            b'0'..=b'9' | b'.' | b'+' | b'-' | b'*' | b'/' | b'=' | b'\r' | b'c' | b'C' | 8 => ("", key),
+            b's' => ("sin",  0), b'o' => ("cos", 0), b't' => ("tan", 0),
+            b'q' => ("sqrt", 0), b'l' => ("ln",  0), b'g' => ("log", 0),
+            b'e' => ("exp",  0), b'p' => ("pi",  0), b'^' => ("x^y", 0),
+            b'i' => ("1/x",  0), b'n' => ("+/-", 0),
+            b'm' => ("M+",   0), b'r' => ("MR",  0),
+            b'd' => { self.deg_mode = !self.deg_mode; self.dirty = true; return; }
+            _ => return,
+        };
+        self.press(label, k);
+    }
+
+    fn on_mouse(&mut self, x: i32, y: i32, w: u32, h: u32, buttons: u8) {
+        if buttons & 0x01 == 0 { return; }
+        let dp_h = 52i32;
+        let pad = 4i32;
+        let btn_w = (w as i32 - pad * (CALC_COLS as i32 + 1)) / CALC_COLS as i32;
+        let btn_h = (h as i32 - dp_h - 12 - pad * (CALC_ROWS as i32 + 1)) / CALC_ROWS as i32;
+        let grid_y = dp_h + 12;
+        let lx = x - pad;
+        let ly = y - grid_y - pad;
+        if lx < 0 || ly < 0 { return; }
+        let col = lx / (btn_w + pad);
+        let row = ly / (btn_h + pad);
+        if col >= CALC_COLS as i32 || row >= CALC_ROWS as i32 { return; }
+        if lx % (btn_w + pad) >= btn_w || ly % (btn_h + pad) >= btn_h { return; }
+        let idx = (row * CALC_COLS as i32 + col) as usize;
+        if idx < CALC_BTNS.len() {
+            let (label, key, _) = CALC_BTNS[idx];
+            self.press(label, key);
         }
     }
 
-    fn on_mouse(&mut self, x: i32, y: i32, w: u32, _h: u32, buttons: u8) {
-        // Left button only, on the press edge (caller sends raw mask).
-        if buttons & 0x01 == 0 { return; }
-        // Mirror the render layout exactly: buttons start at y+72, btn_h=24,
-        // btn_w = (w-32)/4, 4-px gaps.
-        let btn_w = ((w as i32) - 32) / 4;
-        let btn_h = 24i32;
-        let local_y = y - 72;
-        let local_x = x - 8;
-        if local_x < 0 || local_y < 0 { return; }
-        let row = local_y / (btn_h + 4);
-        let col = local_x / (btn_w + 4);
-        if row >= 4 || col >= 4 { return; }
-        // Reject clicks in the inter-button gap.
-        if local_y % (btn_h + 4) >= btn_h { return; }
-        if local_x % (btn_w + 4) >= btn_w { return; }
-        let grid: [[u8; 4]; 4] = [
-            [b'7', b'8', b'9', b'/'],
-            [b'4', b'5', b'6', b'*'],
-            [b'1', b'2', b'3', b'-'],
-            [b'0', b'.', b'=', b'+'],
-        ];
-        self.on_key(grid[row as usize][col as usize]);
-    }
-
-    fn title(&self) -> &str {
-        "Calculator"
-    }
+    fn title(&self) -> &str { "Calculator" }
+    fn wants_close(&self) -> bool { self.wants_close }
 }
 
 /// System Clock and Status Display
@@ -4443,4 +4566,224 @@ impl App for WadDoom {
 
     fn wants_close(&self) -> bool { self.wants_close }
     fn title(&self) -> &str { "DOOM" }
+}
+
+// ── Notes ────────────────────────────────────────────────────────────────────
+// Sticky-note app: keyboard text input, VFS save (Ctrl+S), VFS load on open.
+
+const NOTES_CAP: usize = 4096;
+const NOTES_FILE: &str = "notes.txt";
+
+pub struct Notes {
+    buf: [u8; NOTES_CAP],
+    len: usize,
+    cursor: usize,
+    scroll: usize,       // first visible line index
+    modified: bool,
+    pub dirty: bool,
+    pub wants_close: bool,
+    ansi: crate::ansi::AnsiParser,
+}
+
+impl Notes {
+    pub fn new() -> Self {
+        let mut n = Notes {
+            buf: [0u8; NOTES_CAP],
+            len: 0,
+            cursor: 0,
+            scroll: 0,
+            modified: false,
+            dirty: true,
+            wants_close: false,
+            ansi: crate::ansi::AnsiParser::new(),
+        };
+        // Try to load existing notes from VFS.
+        if let Some(data) = vfs::vfs().read(NOTES_FILE) {
+            let copy = data.len().min(NOTES_CAP - 1);
+            n.buf[..copy].copy_from_slice(&data[..copy]);
+            n.len = copy;
+            n.cursor = copy;
+        }
+        n
+    }
+
+    fn save(&mut self) {
+        vfs::vfs().write(NOTES_FILE, &self.buf[..self.len]);
+        self.modified = false;
+        self.dirty = true;
+    }
+
+    fn current_line(&self) -> usize {
+        self.buf[..self.cursor].iter().filter(|&&b| b == b'\n').count()
+    }
+
+    fn line_count(&self) -> usize {
+        self.buf[..self.len].iter().filter(|&&b| b == b'\n').count() + 1
+    }
+
+    // Returns (start, end) byte range of line `idx` in buf.
+    fn line_range(&self, idx: usize) -> (usize, usize) {
+        let mut line = 0;
+        let mut start = 0;
+        for (i, &b) in self.buf[..self.len].iter().enumerate() {
+            if line == idx { start = i; break; }
+            if b == b'\n' { line += 1; }
+        }
+        if line < idx { return (self.len, self.len); } // past end
+        let end = self.buf[start..self.len].iter().position(|&b| b == b'\n')
+            .map(|p| start + p).unwrap_or(self.len);
+        (start, end)
+    }
+}
+
+impl App for Notes {
+    fn tick(&mut self, _ticks: u64) -> bool { false }
+
+    fn render(&mut self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, h: u32) {
+        let bg = 0x1A1E26u32;
+        fb.fill_rect(x, y, w, h, bg);
+
+        // Status bar at top.
+        let sb_h = 18u32;
+        fb.fill_rect(x, y, w, sb_h, 0x252A35);
+        let lines = self.line_count();
+        let cur_line = self.current_line() + 1;
+        let mut lbuf = [0u8; 24];
+        let s = fmt_u64_into(&mut lbuf, cur_line as u64);
+        fb.draw_str(x + 8, y + 5, s, 0x8A9AB0, 0x252A35);
+        fb.draw_str(x + 8 + s.len() as u32 * 8 + 2, y + 5, "/", 0x4A5568, 0x252A35);
+        let mut l2 = [0u8; 24];
+        let s2 = fmt_u64_into(&mut l2, lines as u64);
+        fb.draw_str(x + 8 + s.len() as u32 * 8 + 10, y + 5, s2, 0x8A9AB0, 0x252A35);
+        let mod_label = if self.modified { " [+]" } else { "    " };
+        fb.draw_str(x + 8 + 80, y + 5, mod_label, 0xF5C451, 0x252A35);
+        fb.draw_str(x + w - 88, y + 5, "Ctrl+S save", 0x4A5568, 0x252A35);
+
+        // Text area.
+        let text_y = y + sb_h + 4;
+        let line_h = 10u32;
+        let visible_lines = ((h - sb_h - 8) / line_h) as usize;
+
+        // Clamp scroll so cursor line is visible.
+        let cur_line0 = self.current_line();
+        if cur_line0 < self.scroll { self.scroll = cur_line0; }
+        if cur_line0 >= self.scroll + visible_lines { self.scroll = cur_line0 + 1 - visible_lines; }
+
+        // Render each visible line.
+        let mut line_idx = 0usize;
+        let mut byte_pos = 0usize;
+        while byte_pos <= self.len && line_idx < self.scroll + visible_lines {
+            let line_end = self.buf[byte_pos..self.len].iter().position(|&b| b == b'\n')
+                .map(|p| byte_pos + p).unwrap_or(self.len);
+            if line_idx >= self.scroll {
+                let vis_row = (line_idx - self.scroll) as u32;
+                let ly = text_y + vis_row * line_h;
+                let line_bytes = &self.buf[byte_pos..line_end];
+                let safe_len = line_bytes.len().min(128);
+                // Render character by character; cursor is a block.
+                for (ci, &ch) in line_bytes[..safe_len].iter().enumerate() {
+                    let cx = x + 6 + ci as u32 * 7;
+                    if cx + 7 > x + w { break; }
+                    let is_cursor = byte_pos + ci == self.cursor;
+                    let char_bg = if is_cursor { 0x4A9EFF } else { bg };
+                    let char_fg = if is_cursor { 0x000000 } else { 0xCDD6E0 };
+                    if is_cursor { fb.fill_rect(cx, ly, 7, 9, 0x4A9EFF); }
+                    if ch >= 0x20 { fb.draw_char(cx, ly, ch as char, char_fg, char_bg); }
+                }
+                // Cursor at end of line.
+                if self.cursor == line_end && cur_line0 == line_idx {
+                    let cx = x + 6 + safe_len as u32 * 7;
+                    fb.fill_rect(cx, ly, 3, 9, 0x4A9EFF);
+                }
+            }
+            if byte_pos == self.len { break; }
+            byte_pos = line_end + 1;
+            line_idx += 1;
+        }
+
+        self.dirty = false;
+    }
+
+    fn on_key(&mut self, key: u8) {
+        use crate::ansi::Key as AK;
+        match self.ansi.feed(key) {
+            AK::Char(0x13) => { self.save(); return; }        // Ctrl+S
+            AK::Char(0x1B) => { self.wants_close = true; return; }
+            AK::Char(0x08) => {               // Backspace
+                if self.cursor > 0 {
+                    self.buf.copy_within(self.cursor..self.len, self.cursor - 1);
+                    self.len -= 1;
+                    self.cursor -= 1;
+                    self.modified = true;
+                    self.dirty = true;
+                }
+            }
+            AK::Char(0x7F) => {                               // Delete
+                if self.cursor < self.len {
+                    self.buf.copy_within(self.cursor + 1..self.len, self.cursor);
+                    self.len -= 1;
+                    self.modified = true;
+                    self.dirty = true;
+                }
+            }
+            AK::Left => {
+                if self.cursor > 0 { self.cursor -= 1; self.dirty = true; }
+            }
+            AK::Right => {
+                if self.cursor < self.len { self.cursor += 1; self.dirty = true; }
+            }
+            AK::Up => {
+                let cl = self.current_line();
+                if cl > 0 {
+                    let (ls, _) = self.line_range(cl);
+                    let col = self.cursor - ls;
+                    let (ps, pe) = self.line_range(cl - 1);
+                    self.cursor = (ps + col).min(pe);
+                    self.dirty = true;
+                }
+            }
+            AK::Down => {
+                let cl = self.current_line();
+                let (ls, _) = self.line_range(cl);
+                let col = self.cursor - ls;
+                let (ns, ne) = self.line_range(cl + 1);
+                if ns < self.len || ns == ne {
+                    self.cursor = (ns + col).min(ne);
+                    self.dirty = true;
+                }
+            }
+            AK::Char(b'\r') | AK::Char(b'\n') => {
+                if self.len < NOTES_CAP - 1 {
+                    self.buf.copy_within(self.cursor..self.len, self.cursor + 1);
+                    self.buf[self.cursor] = b'\n';
+                    self.len += 1;
+                    self.cursor += 1;
+                    self.modified = true;
+                    self.dirty = true;
+                }
+            }
+            AK::Char(ch) if ch >= 0x20 && ch < 0x7F => {
+                if self.len < NOTES_CAP - 1 {
+                    self.buf.copy_within(self.cursor..self.len, self.cursor + 1);
+                    self.buf[self.cursor] = ch;
+                    self.len += 1;
+                    self.cursor += 1;
+                    self.modified = true;
+                    self.dirty = true;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn wants_close(&self) -> bool { self.wants_close }
+    fn title(&self) -> &str { "Notes" }
+}
+
+fn fmt_u64_into<'a>(buf: &'a mut [u8; 24], mut n: u64) -> &'a str {
+    if n == 0 { buf[0] = b'0'; return core::str::from_utf8(&buf[..1]).unwrap_or("0"); }
+    let mut i = 0;
+    while n > 0 { buf[i] = b'0' + (n % 10) as u8; n /= 10; i += 1; }
+    buf[..i].reverse();
+    core::str::from_utf8(&buf[..i]).unwrap_or("0")
 }

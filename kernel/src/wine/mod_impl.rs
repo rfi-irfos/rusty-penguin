@@ -284,8 +284,19 @@ pub fn syscall_handler(nr: u64, _a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64
         0x1e => 0, // NtFreeVirtualMemory
         0x04 => 0, // NtWaitForSingleObject
         0x0f => { if free_handle(w_a1) { 0 } else { 0xC0000008 } } // NtClose
-        0x06 => 0, // NtReadFile
-        0x08 => 0, // NtWriteFile
+        0x06 => 0, // NtReadFile — return 0 bytes (EOF)
+        0x08 => unsafe { // NtWriteFile — route buf to serial so PE output is visible
+            // args: handle, event, apc, apc_ctx, io_status, buffer, length, offset, key
+            let buf_ptr = w_a2 as *const u8;  // w_a2 = a3 = buffer
+            let length  = w_a3 as usize;       // w_a3 = a5 = length
+            if !buf_ptr.is_null() && length > 0 && length < 4096 {
+                let data = core::slice::from_raw_parts(buf_ptr, length);
+                for &b in data {
+                    let s = [b]; let _ = core::str::from_utf8(&s).map(|c| serial::write_str(c));
+                }
+            }
+            0
+        }
         0x33 => alloc_handle(WinObject::File), // NtOpenFile
         0x55 => alloc_handle(WinObject::File), // NtCreateFile
         0x22 => 0, // NtQueryInformationFile

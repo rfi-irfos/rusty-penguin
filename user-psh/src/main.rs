@@ -193,6 +193,55 @@ fn sys_delete(path: &[u8]) -> u64 {
     n
 }
 
+fn sys_fork() -> i64 {
+    let n: i64;
+    unsafe {
+        core::arch::asm!("syscall", inout("rax") 57i64 => n, in("rdi") 0u64,
+            out("rcx") _, out("r11") _, options(nostack));
+    }
+    n
+}
+
+// Creates a pipe. Returns (read_fd, write_fd) or (u64::MAX, u64::MAX) on error.
+fn sys_pipe() -> (u64, u64) {
+    let mut fds = [0u64; 2];
+    unsafe {
+        core::arch::asm!("syscall", in("rax") 22u64, in("rdi") fds.as_mut_ptr(),
+            out("rcx") _, out("r11") _, options(nostack));
+    }
+    (fds[0], fds[1])
+}
+
+fn sys_dup2(old: u64, new: u64) {
+    unsafe {
+        core::arch::asm!("syscall", in("rax") 33u64, in("rdi") old, in("rsi") new,
+            out("rcx") _, out("r11") _, options(nostack));
+    }
+}
+
+fn sys_waitpid(pid: u64) -> u64 {
+    let n: u64;
+    unsafe {
+        core::arch::asm!("syscall", inout("rax") 61u64 => n, in("rdi") pid,
+            out("rcx") _, out("r11") _, options(nostack));
+    }
+    n
+}
+
+fn sys_exec_wine(path: &[u8]) {
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            in("rax") 43u64,
+            in("rdi") path.as_ptr(),
+            in("rsi") path.len(),
+            out("rcx") _,
+            out("r11") _,
+            options(nostack),
+        );
+    }
+}
+
 fn sys_ls(buf: &mut [u8]) -> usize {
     let n: u64;
     unsafe {
@@ -295,6 +344,78 @@ fn split_args(line: &[u8]) -> ([&[u8]; 4], usize) {
         }
     }
     (parts, count)
+}
+
+// ── pipe helpers ─────────────────────────────────────────────────────────────
+
+fn find_pipe(line: &[u8]) -> Option<usize> {
+    line.iter().position(|&b| b == b'|')
+}
+
+// Execute `right` command with `data` as its virtual stdin.
+// Supports: grep <pat> (searches data), wc (counts data), cat (prints data).
+fn pipe_exec_right(right: &[u8], data: &[u8]) {
+    let right = trim(right);
+    if right.starts_with(b"grep ") {
+        let pattern = trim(&right[5..]);
+        let mut line_start = 0;
+        let mut matched = 0u64;
+        while line_start <= data.len() {
+            let end = data[line_start..].iter().position(|&b| b == b'\n')
+                .map(|p| line_start + p).unwrap_or(data.len());
+            let l = &data[line_start..end];
+            if contains(l, pattern) { write(l); write(b"\n"); matched += 1; }
+            if end >= data.len() { break; }
+            line_start = end + 1;
+        }
+        if matched == 0 { write(b"(no matches)\n"); }
+    } else if right == b"wc" || right.starts_with(b"wc ") {
+        let lines = data.iter().filter(|&&b| b == b'\n').count();
+        let words = { let mut w = 0u64; let mut iw = false; for &b in data { let sp = b==b' '||b==b'\t'||b==b'\n'; if !sp && !iw { w+=1; iw=true; } else if sp { iw=false; } } w };
+        write_u64(lines as u64); write(b" lines  ");
+        write_u64(words);        write(b" words  ");
+        write_u64(data.len() as u64); write(b" bytes\n");
+    } else if right.starts_with(b"head") {
+        let n = 10usize;
+        let mut ls = 0; let mut printed = 0;
+        while ls <= data.len() && printed < n {
+            let e = data[ls..].iter().position(|&b|b==b'\n').map(|p|ls+p).unwrap_or(data.len());
+            write(&data[ls..e]); write(b"\n"); printed += 1;
+            if e >= data.len() { break; } ls = e + 1;
+        }
+    } else {
+        // Fallback: just print the piped data.
+        write(data);
+    }
+}
+
+// ── pipe execution ────────────────────────────────────────────────────────────
+// Runs `left_cmd | right_cmd` by forking: child runs left, writing stdout to
+// the pipe write end; parent waits, reads pipe into a buf, then runs right
+// command with the pipe output as its stdin (via an in-memory buffer read).
+
+fn run_command(line: &[u8]) {
+    // Trim leading/trailing whitespace.
+    let line = trim(line);
+    if line.is_empty() { return; }
+
+    if line.starts_with(b"ls")    { cmd_ls(); return; }
+    if line.starts_with(b"grep ") { cmd_grep(&line[5..]); return; }
+    if line.starts_with(b"wc ")   { cmd_wc(&line[3..]); return; }
+    if line.starts_with(b"wc")    { write(b"usage: wc <path>\n"); return; }
+    if line.starts_with(b"head ") { cmd_head(&line[5..]); return; }
+    if line.starts_with(b"cat ")  { cmd_cat(&line[4..]); return; }
+    if line.starts_with(b"echo ") { write(&line[5..]); write(b"\n"); return; }
+    if line == b"echo"             { write(b"\n"); return; }
+    if line.starts_with(b"ps")    { cmd_ps(); return; }
+    if line == b"mem"              { let (f,t) = sys_meminfo(); let u = t.saturating_sub(f); write(b"total: "); write_u64(t as u64); write(b" MiB  used: "); write_u64(u as u64); write(b" MiB  free: "); write_u64(f as u64); write(b" MiB\n"); return; }
+    write(b"psh: unknown: "); write(line); write(b"\n");
+}
+
+fn trim(s: &[u8]) -> &[u8] {
+    let start = s.iter().position(|&b| b != b' ' && b != b'\t').unwrap_or(s.len());
+    let end = s.iter().rposition(|&b| b != b' ' && b != b'\t').map(|i| i+1).unwrap_or(0);
+    if start >= end { b"" } else { &s[start..end] }
 }
 
 // ── ls command ───────────────────────────────────────────────────────────────
@@ -534,6 +655,7 @@ pub extern "C" fn _start() -> ! {
             write(b"  rm <path>           delete VFS entry\n");
             write(b"  wc <path>           line/word/byte count\n");
             write(b"  head [-n N] <path>  print first N lines (default 10)\n");
+            write(b"  wine <path>         run Windows PE via native Wine engine\n");
             write(b"  clear               clear screen\n");
             write(b"  reboot              reboot machine\n");
             write(b"  uptime              seconds since boot\n");
@@ -574,8 +696,44 @@ pub extern "C" fn _start() -> ! {
         } else if line == b"reboot" {
             write(b"rebooting...\n");
             sys_reboot();
+        } else if let Some(pipe_pos) = find_pipe(line) {
+            // Pipe: run left side in a child, capture output, feed to right side.
+            let left  = trim(&line[..pipe_pos]);
+            let right = trim(&line[pipe_pos + 1..]);
+            let (r_fd, w_fd) = sys_pipe();
+            if r_fd == u64::MAX { write(b"pipe: failed\n"); }
+            else {
+                let pid = sys_fork();
+                if pid == 0 {
+                    // Child: redirect stdout to pipe write end, run left.
+                    sys_dup2(w_fd, 1);
+                    sys_close(r_fd); sys_close(w_fd);
+                    run_command(left);
+                    sys_exit(0);
+                } else {
+                    // Parent: close write end, read output, run right.
+                    sys_close(w_fd);
+                    let mut pipe_buf = [0u8; 4096];
+                    let mut total = 0usize;
+                    loop {
+                        let n = sys_read_fd(r_fd, &mut pipe_buf[total..]);
+                        if n == 0 { break; }
+                        total += n;
+                        if total >= pipe_buf.len() { break; }
+                    }
+                    sys_close(r_fd);
+                    sys_waitpid(pid as u64);
+                    // Execute right command with pipe output as context.
+                    // For grep/wc we pass the data directly via a virtual-stdin approach.
+                    pipe_exec_right(right, &pipe_buf[..total]);
+                }
+            }
         } else if line == b"ls" || line == b"ls /" {
             cmd_ls();
+        } else if line.starts_with(b"wine ") {
+            sys_exec_wine(&line[5..]);
+        } else if line == b"wine" {
+            write(b"usage: wine <path>\n");
         } else if line.starts_with(b"rm ") {
             cmd_rm(&line[3..]);
         } else if line == b"rm" {
