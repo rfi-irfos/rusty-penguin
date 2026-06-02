@@ -292,6 +292,21 @@ pub fn syscall_handler(nr: u64, _a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64
             serial::write_str("  [wine] NtCreateNamedPipeFile stub\n");
             alloc_handle(WinObject::Pipe)
         }
+        // NtOpenKey
+        0x12 => {
+            serial::write_str("  [wine] NtOpenKey stub\n");
+            alloc_handle(WinObject::Key)
+        }
+        // NtCreateKey
+        0x1d => {
+            serial::write_str("  [wine] NtCreateKey stub\n");
+            alloc_handle(WinObject::Key)
+        }
+        // NtQueryValueKey
+        0x15 => {
+            serial::write_str("  [wine] NtQueryValueKey stub\n");
+            0 
+        }
         0x2c => {
             serial::write_str("  [wine] NtTerminateProcess\n");
             loop { unsafe { core::arch::asm!("hlt"); } }
@@ -388,6 +403,7 @@ pub enum WinObject {
     Event,
     File,
     Pipe,
+    Key,
 }
 
 const MAX_HANDLES: usize = 256;
