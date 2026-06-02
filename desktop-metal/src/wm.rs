@@ -6,27 +6,26 @@ pub const TITLEBAR_H: i32 = 34;
 pub const WINDOW_W:   i32 = term::TERM_PIX_W as i32 + 2;
 pub const WINDOW_H:   i32 = term::TERM_PIX_H as i32 + 2 + TITLEBAR_H;
 
-// Window styling — "Rusty Penguin v2" warm-stone-green palette, adopted from
-// Simeon's HTML design mockup (rusty-penguin-os.html): warm dark stone (not cool
-// graphite), spring-green accent, gold/cream highlights, ternary neg/zero/pos.
-const SHADOW:      u32 = 0x080B09;  // Deep shadow (warm black)
-const BORDER_DIM:  u32 = 0x2A332F;  // Inactive window border (warm hairline)
-const BORDER_ACT:  u32 = 0x5A6A5E;  // Active window border (warm light edge)
-const TITLE_DIM:   u32 = 0x252E2A;  // Inactive titlebar (warm stone)
-const TITLE_ACT:   u32 = 0x323C37;  // Active titlebar (panel-soft)
-const TITLE_LINE:  u32 = 0x3C4641;  // Separator hairline
-const CONTENT_BG:  u32 = 0x222B27;  // Content background (warm stone glass-over-wall)
-const TXT_DIM:     u32 = 0xA8B0A6;  // Secondary label (warm grey-green)
-const TXT_ACT:     u32 = 0xECEDE5;  // Primary text (warm off-white)
-const BTN_CLOSE:   u32 = 0xEF7575;  // Red (--neg)
-const BTN_MIN:     u32 = 0xF5C451;  // Amber
-const BTN_MAX:     u32 = 0x6FE18B;  // Spring green (--pos)
+// Window styling — darker graphite, brushed-metal panels, and restrained teal /
+// amber accents so the desktop reads more like a premium automotive UI.
+const SHADOW:      u32 = 0x050708;  // Deep shadow
+const BORDER_DIM:  u32 = 0x242A2D;  // Inactive window border
+const BORDER_ACT:  u32 = 0x5C6B6B;  // Active window border
+const TITLE_DIM:   u32 = 0x1F252A;  // Inactive titlebar
+const TITLE_ACT:   u32 = 0x2B333A;  // Active titlebar
+const TITLE_LINE:  u32 = 0x3A444A;  // Separator hairline
+const CONTENT_BG:  u32 = 0x171C20;  // Content background
+const TXT_DIM:     u32 = 0xA4ADB2;  // Secondary label
+const TXT_ACT:     u32 = 0xF0F3F5;  // Primary text
+const BTN_CLOSE:   u32 = 0xE66D73;  // Red (--neg)
+const BTN_MIN:     u32 = 0xD8B05F;  // Amber
+const BTN_MAX:     u32 = 0x63C7AD;  // Teal (--pos)
 // Shared accent + ternary triad (mockup tokens) for the rest of the desktop.
-pub const ACCENT_GREEN: u32 = 0x6FE18B;  // --green / --pos
-pub const ACCENT_CREAM: u32 = 0xECDAA7;  // --cream (dingir gold)
-pub const TRIT_NEG:     u32 = 0xEF7575;  // --neg
-pub const TRIT_ZERO:    u32 = 0x909A92;  // --zero
-pub const TRIT_POS:     u32 = 0x6FE18B;  // --pos
+pub const ACCENT_GREEN: u32 = 0x63C7AD;  // --green / --pos
+pub const ACCENT_CREAM: u32 = 0xE8D39B;  // --cream / warm gold
+pub const TRIT_NEG:     u32 = 0xE66D73;  // --neg
+pub const TRIT_ZERO:    u32 = 0x909AA0;  // --zero
+pub const TRIT_POS:     u32 = 0x63C7AD;  // --pos
 
 // Ubuntu/Mint-style flat rectangular window buttons on the RIGHT side.
 // Standard theme. Toggle via Settings → Window buttons → Classic (macOS-style).
@@ -127,19 +126,19 @@ pub fn content_origin(win: &Window) -> (i32, i32) {
 // Ubuntu/Mint-style flat window button.
 // kind: 0=close (×), 1=min (−), 2=max (□)
 fn draw_btn_ubuntu(fb: &mut Framebuffer, bx: i32, by: i32, kind: u8, focused: bool) {
-    // Background: close gets a subtle red tint; min/max neutral stone.
+    // Background: close gets a subtle red tint; min/max stay neutral and metallic.
     let bg = match (kind, focused) {
         (0, true)  => 0x4A2828,  // close focused: dark crimson
         (0, false) => 0x2A1A1A,  // close unfocused: near-invisible dark red
-        (_, true)  => 0x333D38,  // min/max focused: dark stone
-        _          => 0x272F2A,  // min/max unfocused: very dim
+        (_, true)  => 0x343D43,  // min/max focused: dark metal
+        _          => 0x262C31,  // min/max unfocused: very dim
     };
     fb.fill_rounded_rect(bx, by, BTN_W, BTN_H, 4, bg);
     // 1-px inner top-edge sheen for depth.
-    let sheen = if focused { 0x5A6860 } else { 0x303838 };
+    let sheen = if focused { 0x66737A } else { 0x323840 };
     fb.fill_rect_s(bx + 4, by + 1, BTN_W - 8, 1, sheen);
 
-    let icon_col = if focused { 0xCDD8D0 } else { 0x3A4540 };
+    let icon_col = if focused { 0xE9EEF0 } else { 0x3D454B };
     let cx = bx + BTN_W / 2;
     let cy = by + BTN_H / 2;
     match kind {
@@ -181,7 +180,7 @@ pub fn draw_window(fb: &mut Framebuffer, win: &Window, focused: bool) {
 
     let x = win.x; let y = win.y; let w = win.w; let h = win.h;
 
-    // ── Aero-style atmospheric shadow — large, soft, diffused, suspended look.
+    // ── Atmospheric shadow — large, soft, diffused, suspended look.
     // Outer bloom (wide, near-transparent): window appears to float above the desk.
     // Inner layers tighten into the classic drop shadow.
     fb.fill_rounded_rect(x + 12, y + 16, w - 4, h, 14, 0x07090A); // atmosphere bloom
@@ -189,21 +188,20 @@ pub fn draw_window(fb: &mut Framebuffer, win: &Window, focused: bool) {
     fb.fill_rounded_rect(x +  4, y +  6, w,     h, 10, 0x0A0F0D); // near shadow
     fb.fill_rounded_rect(x +  2, y +  3, w,     h,  9, SHADOW);   // crisp drop
 
-    // ── Outer border — focused gets a warm cream-tinted top edge (Aero "light catch").
+    // ── Outer border — focused gets a cool light catch along the top edge.
     let border = if focused { BORDER_ACT } else { BORDER_DIM };
     fb.fill_rounded_rect(x, y, w, h, 8, border);
     // Top-edge light catch: a 1-px highlight simulating overhead illumination.
     // Focused = cream-warm, background = barely visible.
-    let top_light = if focused { 0x7A8A7E } else { 0x3A4540 };
+    let top_light = if focused { 0x748287 } else { 0x3A4548 };
     fb.fill_rect_s(x + 8, y, w - 16, 1, top_light);
 
     // ── Titlebar — frosted glass with a top-to-bottom gradient so it reads as a
-    // lit physical surface, not a flat fill. Top rows are brightened, bottom
-    // rows darkened, blended over the wallpaper showing through.
+    // lit physical surface, not a flat fill.
     let glass_alpha = if focused { 232u32 } else { 188u32 };
     let tb_col      = if focused { TITLE_ACT } else { TITLE_DIM };
     fb.fill_rounded_rect_glass(x + 1, y + 1, w - 2, TITLEBAR_H, 7, tb_col, glass_alpha);
-    // gradient overlay: lighten the upper third, darken the lower third
+    // Gradient overlay: lighten the upper third, darken the lower third.
     let lighten = |c: u32, d: u32| {
         (((c >> 16 & 0xFF).saturating_add(d).min(0xFF)) << 16)
       | (((c >>  8 & 0xFF).saturating_add(d).min(0xFF)) << 8)
@@ -214,9 +212,9 @@ pub fn draw_window(fb: &mut Framebuffer, win: &Window, focused: bool) {
         if d > 0 { fb.fill_rect_s(x + 2, y + 1 + row, w - 4, 1, lighten(tb_col, d)); }
     }
 
-    // Aero "inner glow" — a faint warm-green luminance line just inside the top.
+    // Inner glow — a faint cool luminance line just inside the top.
     if focused {
-        fb.fill_rect_s(x + 8, y + 1, w - 16, 1, 0x4A5D50);
+        fb.fill_rect_s(x + 8, y + 1, w - 16, 1, 0x4D5B61);
     }
 
     // Bottom edge of titlebar (hairline separator)
@@ -260,7 +258,7 @@ pub fn draw_window(fb: &mut Framebuffer, win: &Window, focused: bool) {
 /// Called AFTER the terminal renders so the grip is drawn on top of any content.
 pub fn draw_resize_grip(fb: &mut Framebuffer, win: &Window, focused: bool) {
     if win.minimized || win.maximized || win.w < 20 || win.h < 20 { return; }
-    let col = if focused { 0x6B7280 } else { 0x2C2C38 };
+    let col = if focused { 0x7A848B } else { 0x313840 };
     // Diagonal striped grip in the bottom-right corner. Six 3-pixel ticks
     // along the anti-diagonal makes the affordance visible without
     // overpowering the window content.

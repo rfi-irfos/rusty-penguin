@@ -292,10 +292,10 @@ const PANEL_H:      i32 = 54;   // panel height
 const MENU_BTN_W:   i32 = 88;   // "Menu" button width
 const FAV_TILE:     i32 = 40;   // favourite icon tile
 const FAV_GAP:      i32 = 8;    // gap between favourites
-const PANEL_SOLID:  u32 = 0x333D38;  // dock body — warm stone, lighter than the wall so it floats
-const DOCK_ALPHA:   u32 = 140;       // dock translucency (0=clear..255=opaque) — wallpaper shows through
-const PANEL_EDGE:   u32 = 0x55615A;  // panel hairline / top sheen
-const PANEL_R:      i32 = 14;        // panel corner radius
+const PANEL_SOLID:  u32 = 0x262D33;  // dock body: graphite glass
+const DOCK_ALPHA:   u32 = 128;       // wallpaper shows through the dock
+const PANEL_EDGE:   u32 = 0x5E6B72;  // panel hairline / top sheen
+const PANEL_R:      i32 = 16;        // panel corner radius
 
 fn panel_top(h: u32) -> i32 { h as i32 - PANEL_BOTTOM - PANEL_H }
 fn menu_btn_rect(h: u32) -> (i32, i32, i32, i32) { (PANEL_MARGIN + 8, panel_top(h) + 7, MENU_BTN_W, 40) }
@@ -530,8 +530,6 @@ fn rtc_str() -> Strbuf {
 }
 
 // ---- Scene drawing ──────────────────────────────────────────────────────────
-
-fn draw_scene_static(fb: &mut Framebuffer) { draw_scene_static_v(fb, 0); }
 
 // ── Wallpaper gallery ─────────────────────────────────────────────────────────
 // Eight procedural "system backgrounds", each with real depth (gradients, glows,
@@ -929,17 +927,22 @@ fn draw_scene_static_v(fb: &mut Framebuffer, variant: u8) {
     // Ambient depth: a soft warm light pool lifts the hero off the wall, and a
     // cream halo makes the dingir luminous. (Also improves hero legibility over
     // any wallpaper, including the Bliss easter egg.)
-    fb.glow(cx, hero_cy - 18, w as i32 * 17 / 100, 0x283A2A, 60); // warm-green lift behind text
-    fb.glow(cx, hero_cy - 64, 76, 0x4A4226, 95);                 // gold pool under the dingir
-    fb.glow(cx, hero_cy - 64, 34, ACCENT_CREAM, 70);             // bright cream core (glow)
+    fb.glow(cx, hero_cy - 18, w as i32 * 18 / 100, 0x21333A, 54);
+    fb.glow(cx - w as i32 * 12 / 100, hero_cy + 8, w as i32 * 10 / 100, 0x1E3A36, 36);
+    fb.glow(cx + w as i32 * 13 / 100, hero_cy - 52, w as i32 * 9 / 100, 0x4A3B25, 34);
+    fb.glow(cx, hero_cy - 64, 72, 0x3E3826, 82);
+    fb.glow(cx, hero_cy - 64, 30, ACCENT_CREAM, 64);
     fb.draw_star8(cx, hero_cy - 64, 28, ACCENT_CREAM);
+    fb.fill_rect_s(cx - 92, hero_cy - 52, 184, 1, 0x736C54);
     // Title in the smooth AA display font. "Rusty " white + "Penguin" green.
     let w1 = Framebuffer::aa_w("Rusty ", crate::fb::AA_L);
     let w2 = Framebuffer::aa_w("Penguin", crate::fb::AA_L);
     let tx = cx - (w1 + w2) / 2;
     let ty = hero_cy - 24;
+    fb.draw_aa(tx + 1, ty + 1, "Rusty ", 0x080B0D, crate::fb::AA_L);
+    fb.draw_aa(tx + w1 + 1, ty + 1, "Penguin", 0x080B0D, crate::fb::AA_L);
     fb.draw_aa(tx, ty, "Rusty ", WHITE, crate::fb::AA_L);
-    fb.draw_aa(tx + w1, ty, "Penguin", GREEN, crate::fb::AA_L);
+    fb.draw_aa(tx + w1, ty, "Penguin", 0x63C7AD, crate::fb::AA_L);
     let tag1 = "Bare-metal Rust OS  .  Sparse ternary inference  .  Zero binary";
     let tag2 = "RFI-IRFOS  .  Ternary Intelligence Stack";
     fb.draw_aa_centered(0, w as i32, hero_cy + 26, tag1, DIM, crate::fb::AA_T);
@@ -953,25 +956,29 @@ fn draw_scene_static_v(fb: &mut Framebuffer, variant: u8) {
     // TRANSLUCENT GLASS BAR: the wallpaper shows through the dock itself, while the
     // buttons/icons drawn on top stay fully opaque. A subtle shadow sliver below
     // keeps the floating feel without darkening the glass (nothing opaque under it).
-    fb.fill_rect_s(px + PANEL_R, ptop + PANEL_H, pw - 2 * PANEL_R, 3, 0x070A08);
+    fb.fill_rect_s(px + PANEL_R, ptop + PANEL_H, pw - 2 * PANEL_R, 2, 0x0A0D10);
     fb.fill_rounded_rect_glass(px, ptop, pw, PANEL_H, PANEL_R, PANEL_SOLID, DOCK_ALPHA);
     // hairline border + top light-catch
     draw_round_border(fb, px, ptop, pw, PANEL_H, PANEL_R, PANEL_EDGE);
-    fb.fill_rect_s(px + PANEL_R, ptop + 1, pw - 2 * PANEL_R, 1, 0x66726A);
+    fb.fill_rect_s(px + PANEL_R, ptop + 1, pw - 2 * PANEL_R, 1, 0x7A878E);
+    fb.fill_rect_s(px + PANEL_R + 4, ptop + PANEL_H - 2, pw - 2 * PANEL_R - 8, 1, 0x151A1E);
 
     // Menu button — clean layout: large dingir left, "Menu" right, no permanent underline.
     // The green active-indicator underline is drawn per-frame only when start_menu_open=true.
     let (mbx, mby, mbw, _mbh) = menu_btn_rect(h);
     // Subtle button body (blends with dock, stands out slightly on hover/open)
-    fb.fill_rounded_rect(mbx, mby, mbw, PANEL_H - 14, 10, 0x3A4640);
+    fb.fill_rounded_rect(mbx + 1, mby + 1, mbw, PANEL_H - 14, 12, 0x0A0D10);
+    fb.fill_rounded_rect_glass(mbx, mby, mbw, PANEL_H - 14, 12, 0x303940, 202);
+    draw_round_border(fb, mbx, mby, mbw, PANEL_H - 14, 12, 0x58656C);
+    fb.fill_rect_s(mbx + 12, mby + 1, mbw - 24, 1, 0x7B878E);
     // Dingir star: larger radius so it reads cleanly at dock size
     let star_cy = mby + (PANEL_H - 14) / 2;
     fb.draw_star8(mbx + 19, star_cy, 13, ACCENT_CREAM);
     // "Menu" label: AA font, vertically centered, generous left pad
     let label_y = star_cy - 6;
-    fb.draw_aa(mbx + 38, label_y, "Menu", 0xD8E4DC, crate::fb::AA_S);
+    fb.draw_aa(mbx + 38, label_y, "Menu", 0xE3ECEE, crate::fb::AA_S);
     // separator
-    fb.fill_rect_s(mbx + mbw + 7, ptop + 14, 1, PANEL_H - 28, PANEL_EDGE);
+    fb.fill_rect_s(mbx + mbw + 8, ptop + 14, 1, PANEL_H - 28, 0x435059);
 
     // Favourites (horizontal app icons)
     draw_desktop_icons(fb, None);
@@ -1086,9 +1093,10 @@ fn draw_topbar(fb: &mut Framebuffer, time: &str, s: &SysStats, ticks: u64) {
     let kb_w = Framebuffer::aa_w(kbl, crate::fb::AA_T);
     let pill_w = kb_w + 16;
     let pill_x = (mem_x - GAP - pill_w).max(trx + 4);
-    fb.fill_rounded_rect(pill_x, cyy - 2, pill_w, 16, 5, 0x39443E);
-    fb.fill_rect_s(pill_x + 6, cyy - 1, pill_w - 12, 1, 0x5A6B5E);
-    fb.draw_aa(pill_x + 8, txt_top, kbl, 0xCFE6D6, crate::fb::AA_T);
+    fb.fill_rounded_rect(pill_x, cyy - 2, pill_w, 16, 6, 0x2B343A);
+    fb.fill_rect_s(pill_x + 6, cyy - 1, pill_w - 12, 1, 0x6B7A82);
+    fb.fill_rect_s(pill_x + 6, cyy + 13, pill_w - 12, 1, 0x171C21);
+    fb.draw_aa(pill_x + 8, txt_top, kbl, 0xDDE7EA, crate::fb::AA_T);
     unsafe { KBD_PILL = (pill_x, ptop, pill_w, PANEL_H); }
 
     let _ = ticks;
@@ -1140,9 +1148,14 @@ fn draw_desktop_icons(fb: &mut Framebuffer, hover_icon: Option<usize>) {
         let icon = &DESKTOP_ICONS[FAV_IDX[slot]];
         let (x, y, tw, th) = fav_rect(slot, h);
         let hovered = hover_icon == Some(FAV_IDX[slot]);
-        // accent-tinted tile background (~16% accent over the glass)
-        let tile = tint(icon.color, if hovered { 64 } else { 34 });
-        fb.fill_rounded_rect(x, y, tw, th, 10, tile);
+        // accent-tinted glass tile with a soft shadow and hairline border.
+        let tile = tint(icon.color, if hovered { 72 } else { 40 });
+        fb.fill_rounded_rect(x + 1, y + 1, tw, th, 13, 0x0A0D10);
+        fb.fill_rounded_rect(x + 2, y + 2, tw - 2, th - 2, 12, 0x06080A);
+        fb.fill_rounded_rect_glass(x, y, tw, th, 13, tile, if hovered { 212 } else { 188 });
+        draw_round_border(fb, x, y, tw, th, 13, if hovered { icon.color } else { PANEL_EDGE });
+        fb.fill_rect_s(x + 10, y + 1, tw - 20, 1, 0x74818A);
+        fb.fill_rect_s(x + 9, y + th - 2, tw - 18, 1, 0x181D22);
         if hovered { fb.fill_rect_s(x + 10, y + th - 3, tw - 20, 2, icon.color); }
         let isz = icons::ICON_PX as i32;
         fb.draw_icon(x + (tw - isz) / 2, y + (th - isz) / 2, icon.icon, icon.color);
@@ -1152,7 +1165,7 @@ fn draw_desktop_icons(fb: &mut Framebuffer, hover_icon: Option<usize>) {
 // tint: blend an accent color toward the dark glass body at the given alpha
 // (0..255 = how much accent), producing the mockup's color-mix(accent 16%) look.
 fn tint(accent: u32, alpha: u32) -> u32 {
-    let base = 0x39443Eu32;
+    let base = 0x2B3237u32;
     let a = alpha.min(255); let ia = 255 - a;
     let mix = |sh: u32| (((accent >> sh) & 0xFF) * a + ((base >> sh) & 0xFF) * ia) / 255;
     (mix(16) << 16) | (mix(8) << 8) | mix(0)
@@ -1195,10 +1208,13 @@ fn draw_taskbar_win_btns(fb: &mut Framebuffer, term_wins: &[TermWin]) {
         if x + w > tray_left { break; }  // out of room → stop
         let is_focused   = slot == n - 1;
         let is_minimized = tw.win.minimized;
-        let bg     = if is_minimized { 0x232C28u32 } else { 0x37423Cu32 }; // warm stone tile
-        let txt    = if is_minimized { 0xA8B0A6u32 } else { WHITE };
+        let bg     = if is_minimized { 0x262D32u32 } else { 0x343D44u32 };
+        let txt    = if is_minimized { 0xAAB3B8u32 } else { WHITE };
         let accent = if is_focused { GREEN } else { TRIT_ZERO };
-        fb.fill_rounded_rect(x, y, w, h, 9, bg);
+        fb.fill_rounded_rect(x + 1, y + 1, w, h, 12, 0x0A0D10);
+        fb.fill_rounded_rect(x, y, w, h, 12, bg);
+        fb.fill_rect_s(x + 10, y + 1, w - 20, 1, 0x72808A);
+        fb.fill_rect_s(x + 10, y + h - 2, w - 20, 1, 0x1A1F24);
         // running/focus dot
         fb.fill_circle(x + 11, y + h / 2, 3, accent);
         // window title (truncated)
@@ -1208,7 +1224,7 @@ fn draw_taskbar_win_btns(fb: &mut Framebuffer, term_wins: &[TermWin]) {
         let lbl = &short[..max_chars.min(short.len())];
         fb.draw_aa(x + 22, y + 12, lbl, txt, crate::fb::AA_T);
         // focus underline
-        if is_focused { fb.fill_rect_s(x + 9, y + h - 5, w - 18, 2, GREEN); }
+        if is_focused { fb.fill_rect_s(x + 9, y + h - 5, w - 18, 2, ACCENT_CREAM); }
     }
 }
 
@@ -1225,7 +1241,11 @@ fn draw_taskbar_clock(fb: &mut Framebuffer, time_str: &str) {
     let x = fw - tw - 10;
     // Clear the clock area and redraw
     fb.fill_rect(x - 3, tb_y + 5, tw + 6, 18, TASKBAR);
-    fb.draw_str(x, tb_y + 10, hhmm, WHITE, TASKBAR);
+    fb.fill_rounded_rect(x as i32 - 8, tb_y as i32 + 3, tw as i32 + 16, 24, 10, 0x0A0E12);
+    fb.fill_rounded_rect(x as i32 - 7, tb_y as i32 + 4, tw as i32 + 14, 22, 9, 0x293137);
+    fb.fill_rect_s(x as i32 - 2, tb_y as i32 + 4, tw as i32 + 4, 1, 0x6F7B83);
+    fb.fill_rect_s(x as i32 - 2, tb_y as i32 + 24, tw as i32 + 4, 1, 0x181D22);
+    fb.draw_str(x, tb_y + 10, hhmm, WHITE, 0x293137);
 }
 
 fn tbwin_hit(fw: u32, fh: u32, wins: &[TermWin], mx: i32, my: i32) -> Option<usize> {
@@ -1537,8 +1557,9 @@ fn start_menu_bounds(fh: u32) -> (i32, i32, i32, i32) {
 }
 
 fn draw_menu_item(fb: &mut Framebuffer, x: i32, y: i32, w: i32, item: &MenuItem, hovered: bool) {
-    let bg = if hovered { 0x2A3830u32 } else { 0x1E2620u32 };
-    fb.fill_rounded_rect_glass(x + 4, y, w - 8, MENU_ITEM_H, 8, bg, if hovered { 200 } else { 0 });
+    let bg = if hovered { 0x29343Au32 } else { 0x1C2328u32 };
+    fb.fill_rounded_rect(x + 5, y + 1, w - 10, MENU_ITEM_H, 10, 0x0A0D10);
+    fb.fill_rounded_rect_glass(x + 4, y, w - 8, MENU_ITEM_H, 10, bg, if hovered { 204 } else { 0 });
     // Colored icon square (28×28, radius 6)
     let icon_x = x + 10; let icon_y = y + (MENU_ITEM_H - 28) / 2;
     let ic_bg = {
@@ -1547,7 +1568,7 @@ fn draw_menu_item(fb: &mut Framebuffer, x: i32, y: i32, w: i32, item: &MenuItem,
         let b = (item.color         & 0xFF) / 3;
         (r << 16) | (g << 8) | b
     };
-    fb.fill_rounded_rect(icon_x, icon_y, 28, 28, 6, ic_bg);
+    fb.fill_rounded_rect(icon_x, icon_y, 28, 28, 8, ic_bg);
     // HD icon, tinted with the app accent, centered in the 28px square.
     let isz = icons::ICON_PX as i32;
     fb.draw_icon(icon_x + (28 - isz) / 2, icon_y + (28 - isz) / 2, item.icon, item.color);
@@ -1560,28 +1581,29 @@ fn draw_menu_item(fb: &mut Framebuffer, x: i32, y: i32, w: i32, item: &MenuItem,
 
 fn draw_start_menu(fb: &mut Framebuffer) {
     let (x, y, w, h) = start_menu_bounds(fb.height);
-    let bg = 0x1E2620u32;
+    let bg = 0x1B2126u32;
 
     // Shadow + glass panel
-    fb.fill_rounded_rect(x + 3, y + 6, w + 2, h, 14, 0x07090A);
-    fb.fill_rounded_rect(x + 1, y + 3, w,     h, 12, 0x0C110E);
-    fb.fill_rounded_rect_glass(x, y, w, h, 12, bg, 235);
-    fb.fill_rect_s(x + 12, y, w - 24, 2, GREEN);  // green top accent
+    fb.fill_rounded_rect(x + 3, y + 5, w + 2, h, 16, 0x0A0D10);
+    fb.fill_rounded_rect(x + 1, y + 3, w,     h, 14, 0x0C1114);
+    fb.fill_rounded_rect_glass(x, y, w, h, 14, bg, 236);
+    fb.fill_rect_s(x + 12, y, w - 24, 2, ACCENT_CREAM);  // warm accent top strip
+    fb.fill_rect_s(x + 12, y + h - 2, w - 24, 1, 0x151A1F);
 
     // ── Header: dingir avatar circle + "Rusty Penguin" + "OS v2.0.0" ────────
     let av_x = x + 14; let av_y = y + 10;
-    fb.fill_circle(av_x + 18, av_y + 18, 18, 0x3A4A3E);
-    fb.fill_circle(av_x + 18, av_y + 18, 16, 0x2A3830);
+    fb.fill_circle(av_x + 18, av_y + 18, 18, 0x34424A);
+    fb.fill_circle(av_x + 18, av_y + 18, 16, 0x232C31);
     fb.draw_star8(av_x + 18, av_y + 18, 10, ACCENT_CREAM);
     fb.draw_aa(av_x + 40, av_y + 1, "Rusty Penguin", WHITE, crate::fb::AA_S);
     fb.draw_aa(av_x + 40, av_y + 21, "OS v2.0.0  .  Ternary", 0x6FE18B, crate::fb::AA_T);
 
     // Hairline below header
-    fb.fill_rect_s(x + 8, y + MENU_HDR_H - 1, w - 16, 1, 0x3C4641);
+    fb.fill_rect_s(x + 8, y + MENU_HDR_H - 1, w - 16, 1, 0x46525A);
 
     // ── Applications section ─────────────────────────────────────────────────
     let apps_y = y + MENU_HDR_H;
-    fb.draw_aa(x + 14, apps_y + 3, "APPLICATIONS", 0x8A948C, crate::fb::AA_T);
+    fb.draw_aa(x + 14, apps_y + 3, "APPLICATIONS", 0x98A3AA, crate::fb::AA_T);
     for i in 0..MENU_APPS_END {
         let iy = apps_y + MENU_SECT_H + i as i32 * MENU_ITEM_H;
         draw_menu_item(fb, x, iy, w, &MENU_ITEMS[i], false);
@@ -1589,11 +1611,11 @@ fn draw_start_menu(fb: &mut Framebuffer) {
 
     // Separator
     let sep_y = apps_y + MENU_SECT_H + MENU_APPS_END as i32 * MENU_ITEM_H + MENU_SEP_H / 2;
-    fb.fill_rect_s(x + 12, sep_y, w - 24, 1, 0x3C4641);
+    fb.fill_rect_s(x + 12, sep_y, w - 24, 1, 0x46525A);
 
     // ── Games section ────────────────────────────────────────────────────────
     let games_y = apps_y + MENU_SECT_H + MENU_APPS_END as i32 * MENU_ITEM_H + MENU_SEP_H;
-    fb.draw_aa(x + 14, games_y + 3, "GAMES", 0x8A948C, crate::fb::AA_T);
+    fb.draw_aa(x + 14, games_y + 3, "GAMES", 0x98A3AA, crate::fb::AA_T);
     for i in MENU_APPS_END..MENU_ITEMS.len() {
         let iy = games_y + MENU_SECT_H + (i - MENU_APPS_END) as i32 * MENU_ITEM_H;
         draw_menu_item(fb, x, iy, w, &MENU_ITEMS[i], false);
@@ -1601,13 +1623,13 @@ fn draw_start_menu(fb: &mut Framebuffer) {
 
     // ── Footer: Settings · Shut Down ─────────────────────────────────────────
     let foot_y = y + h - MENU_FOOT_H;
-    fb.fill_rect_s(x + 8, foot_y, w - 16, 1, 0x3C4641);
-    let btn_bg = 0x252E2Au32;
+    fb.fill_rect_s(x + 8, foot_y, w - 16, 1, 0x46525A);
+    let btn_bg = 0x252D33u32;
     // Settings button (left)
-    fb.fill_rounded_rect(x + 10, foot_y + 6, (w / 2) - 14, 24, 8, btn_bg);
+    fb.fill_rounded_rect(x + 10, foot_y + 6, (w / 2) - 14, 24, 10, btn_bg);
     fb.draw_aa(x + 22, foot_y + 8, "Settings", 0xB8C0B6, crate::fb::AA_S);
     // Shut Down button (right)
-    fb.fill_rounded_rect(x + w / 2 + 4, foot_y + 6, (w / 2) - 14, 24, 8, btn_bg);
+    fb.fill_rounded_rect(x + w / 2 + 4, foot_y + 6, (w / 2) - 14, 24, 10, btn_bg);
     fb.draw_aa(x + w / 2 + 14, foot_y + 8, "Shut Down", TRIT_NEG, crate::fb::AA_S);
 }
 
@@ -1681,13 +1703,13 @@ fn draw_ctx_menu(fb: &mut Framebuffer, mx: i32, my: i32) {
 fn draw_ctx_menu_hover(fb: &mut Framebuffer, mx: i32, my: i32, hover: Option<usize>) {
     let (x, y, w, h) = ctx_menu_bounds(mx, my, fb.width, fb.height);
     // Aero-style shadow + frosted glass body
-    fb.fill_rounded_rect(x + 3, y + 6, w + 2, h, 12, 0x070A08);
-    fb.fill_rounded_rect(x + 1, y + 3, w,     h, 11, 0x0C110E);
-    fb.fill_rounded_rect_glass(x, y, w, h, 10, CTX_BG, 230);
-    // Top accent edge (spring green hairline)
-    fb.fill_rect_s(x + 10, y + 1, w - 20, 1, 0x3C5040);
-    // Green top accent strip
-    fb.fill_rect_s(x + 10, y, w - 20, 2, GREEN);
+    fb.fill_rounded_rect(x + 3, y + 5, w + 2, h, 13, 0x0A0D10);
+    fb.fill_rounded_rect(x + 1, y + 3, w,     h, 12, 0x0C1114);
+    fb.fill_rounded_rect_glass(x, y, w, h, 12, CTX_BG, 230);
+    // Top accent edge
+    fb.fill_rect_s(x + 10, y + 1, w - 20, 1, 0x5E6A72);
+    fb.fill_rect_s(x + 10, y, w - 20, 2, ACCENT_CREAM);
+    fb.fill_rect_s(x + 10, y + h - 2, w - 20, 1, 0x151A1F);
 
     let mut cy = y + CTX_PAD_Y;
     for (i, (label, color)) in CTX_ITEMS.iter().enumerate() {
@@ -1699,9 +1721,9 @@ fn draw_ctx_menu_hover(fb: &mut Framebuffer, mx: i32, my: i32, hover: Option<usi
         } else {
             // Item background — highlight on hover
             let hovered = hover == Some(i);
-            let bg = if hovered { 0x2E3C32u32 } else { CTX_BG };
+            let bg = if hovered { 0x2B343A } else { CTX_BG };
             if hovered {
-                fb.fill_rounded_rect_glass(x + 2, cy, w - 4, CTX_ITEM_H, 6, bg, 200);
+                fb.fill_rounded_rect_glass(x + 2, cy, w - 4, CTX_ITEM_H, 8, bg, 200);
                 // Left accent bar on hover
                 fb.fill_rect_s(x + 4, cy + 5, 3, CTX_ITEM_H - 10, *color);
             }
@@ -2198,9 +2220,9 @@ fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, 
         fb.restore_bg();
     } else {
         draw_scene_static_v(fb, wallpaper_v);
-        draw_desktop_icons(fb, hover_icon);
         fb.snapshot_bg();
     }
+    draw_desktop_icons(fb, hover_icon);
     draw_taskbar_win_btns(fb, wins);
     // Menu button active indicator: green underline + brightened bg when open.
     // Drawn per-frame (not in the cached bg) so it only appears on state change.
@@ -2290,7 +2312,7 @@ fn draw_dock_tooltip(fb: &mut Framebuffer, hi: usize) {
     let pad = 11; let bw = lw + pad * 2; let bh = 28;
     let bx = x + tw / 2 - bw / 2;
     let by = y - bh - 8;
-    fb.fill_rounded_rect(bx + 1, by + 2, bw, bh, 8, 0x0C100E);
+    fb.fill_rounded_rect(bx + 1, by + 1, bw, bh, 8, 0x0A0D10);
     fb.fill_rounded_rect(bx, by, bw, bh, 8, 0x2A332F);
     draw_round_border(fb, bx, by, bw, bh, 8, PANEL_EDGE);
     fb.draw_aa(bx + pad, by + 6, label, WHITE, crate::fb::AA_S);
@@ -2322,9 +2344,13 @@ pub extern "C" fn _start() -> ! {
     let w = fb.width as i32; let h = fb.height as i32;
     let mut mouse = MouseState { x: w / 2, y: h / 2, buttons: 0, btn_pressed: 0 };
 
+    let mut wallpaper_variant: u8 = {   // cycles on "Change Background"
+        let wp = sys_wallpaper();       // `wallpaper=N` boot override (test + feature)
+        if wp != u64::MAX { (wp as u8) % WALLPAPER_COUNT } else { 5 } // default = Nebula
+    };
+
     let mut stats = sample_stats();
-    draw_scene_static(&mut fb);
-    draw_desktop_icons(&mut fb, None);
+    draw_scene_static_v(&mut fb, wallpaper_variant);
     let up0 = rtc_str();
     draw_topbar(&mut fb, up0.as_str(), &stats, sys_ticks());
 
@@ -2341,20 +2367,14 @@ pub extern "C" fn _start() -> ! {
     let mut frames_since_stat: u32 = 0;
     let mut blink_on: bool = true;
     let mut wins: Vec<TermWin> = Vec::new();
-    let mut scene_dirty = false;
+    // Boot to a clean desktop — the welcome card + dock + gradient are the
+    // first impression, not a terminal covering them. Open apps from the dock
+    // or the Menu.
+    let mut scene_dirty = true;
     let mut start_menu_open = false;
     let mut ctx_menu: Option<(i32, i32)> = None;
     let mut hover_icon: Option<usize> = None;
-    let mut wallpaper_variant: u8 = {   // cycles on "Change Background"
-        let wp = sys_wallpaper();       // `wallpaper=N` boot override (test + feature)
-        if wp != u64::MAX { (wp as u8) % WALLPAPER_COUNT } else { 5 } // default = Nebula
-    };
     let mut pending_screenshot = false; // right-click "Take Screenshot" → capture next clean frame
-
-    // Boot to a clean desktop — the Apple-style welcome card + dock + gradient
-    // are the first impression, not a terminal covering them. Open apps from
-    // the dock or the Menu.
-    scene_dirty = true;
 
     // autostart=N on the kernel cmdline opens app N immediately (headless
     // screendump verification — no mouse needed).
@@ -2552,7 +2572,6 @@ pub extern "C" fn _start() -> ! {
         let new_hover = desktop_icon_hit(cx, cy, fb.height);
         if new_hover != hover_icon {
             hover_icon = new_hover;
-            fb.invalidate_bg();   // icon dock changes → rebuild the cached background
             scene_dirty = true;
         }
 
