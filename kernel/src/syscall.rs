@@ -212,6 +212,9 @@ pub extern "C" fn syscall_handler(nr: u64, arg1: u64, arg2: u64, arg3: u64) -> u
     if crate::linux::is_linux() {
         return crate::linux::syscall(nr, arg1, arg2, arg3);
     }
+    if crate::wine::is_wine() {
+        return crate::wine::syscall_handler(nr, arg1, arg2, arg3, 0, 0);
+    }
     match nr {
         // Scheduler Increment-3c proof: a ring-3 task running in its own address
         // space calls syscall(0x1337) so the kernel can log that it reached
@@ -688,6 +691,21 @@ pub extern "C" fn syscall_handler(nr: u64, arg1: u64, arg2: u64, arg3: u64) -> u
         42 => {
             // sys_app_surface_dims → (w<<16)|h of the app surface; 0 = legacy 32×32.
             crate::sched::app_surface_dims()
+        }
+        43 => {
+            // sys_exec_wine(path_ptr, path_len)
+            // Rebuild wine from scratch: native PE loader + Windows subsystem.
+            let path_ptr = arg1 as *const u8;
+            let path_len = (arg2 as usize).min(256);
+            if path_ptr.is_null() || path_len == 0 { return u64::MAX; }
+            let path = unsafe { core::slice::from_raw_parts(path_ptr, path_len) };
+            let p = if path.starts_with(b"/") { &path[1..] } else { path };
+            if let Some(pe_data) = crate::ramfs::find(p) {
+                if let Some((entry, image_base)) = crate::wine::load_pe(pe_data) {
+                    crate::wine::enter_wine(entry, image_base);
+                }
+            }
+            u64::MAX
         }
         60 => {
             // sys_exit(code)
