@@ -55,8 +55,11 @@ is present (as under QEMU).
     `brk` `a55670c`). `linuxdyn` self-test: brick4-dyn's glibc printf runs
     scheduled, clean reap, 0 faults; `enter()` path regression-passes. **This is
     the DOOM-loading path.**;
-  - brick 3 ▢ redirect that process's `/dev/fb0` to a private surface;
-  - brick 4 ▢ composite the surface into a desktop window (reuses `sys_app_surface`).
+  - brick 3 ✅ a scheduled process's `/dev/fb0` mmap gives it a private 640×400
+    surface it renders into; kernel reads it back fully orange (`linuxfb`, 0 faults,
+    `89e8ea3`). Added `pmm::alloc_frames` (contiguous);
+  - brick 4 ▢ composite the surface into a desktop window (reuses `sys_app_surface`),
+    then swap the synthetic fb-test for the real DOOM binary.
 - **5. Power management** — 🟡 ACPI S5 shutdown+reboot ✅; software brightness ✅;
   real battery ✅ wired. Remaining: hardware backlight control + S3 suspend/resume
   (large, and largely **hardware-bound** / not meaningfully verifiable under QEMU).

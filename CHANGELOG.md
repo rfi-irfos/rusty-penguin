@@ -4,6 +4,20 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+### Added — Windowed-DOOM brick 3: a scheduled process gets a private framebuffer surface (2026-06-02)
+
+- The virtual `/dev/fb0` windowed DOOM needs. A scheduled Linux process that mmaps
+  `/dev/fb0` gets a private, physically-contiguous 640×400 surface (not the real
+  hardware framebuffer, which it can't see in its AS and would draw over the whole
+  screen); the desktop composites that surface into a window (brick 4). The
+  `enter()` single-process path still gets the real FB.
+- `pmm::alloc_frames(n)`: contiguous multi-frame allocator (skips the low 1 MiB so
+  a base of phys 0 can't collide with a null sentinel). `set_fb_surface` lets the
+  kernel pre-allocate the surface (a value a process writes into a kernel global
+  isn't reliably visible back on the boot thread; a boot-written one is).
+- New `linuxfb` self-test (static `fbtest.c`): QEMU-verified, the process renders
+  into the private surface and the kernel reads it back fully orange, 0 faults.
+
 ### Added — Windowed-DOOM brick 2b: a DYNAMIC Linux ELF (ld.so + libc) as a scheduled process (2026-06-02)
 
 - The hard merge that was blocking windowed DOOM (DOOM is a dynamic PIE).
