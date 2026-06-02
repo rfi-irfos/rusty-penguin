@@ -48,7 +48,7 @@ Preinstalled: `albert` · `ternlang` · `albert-cli` · `ternlang-mcp`
 > truthful rather than aspirational. It's a research OS we're trying to grow into a
 > daily driver — not one yet.
 
-![Rusty Penguin desktop — System flyout menu open, native browser on rustypenguin://home, Nebula wallpaper](docs/screenshots/rusty-penguin-desktop.png)
+<img width="1920" height="1080" alt="Screenshot From 2026-06-02 19-17-53" src="https://github.com/user-attachments/assets/f588b587-be2e-4e93-9c5e-9592fd7749e9" />
 
 *The desktop with the start menu open — the dingir button, the flyout category
 menu (System expanded), and the native browser on `rustypenguin://home`, over the
