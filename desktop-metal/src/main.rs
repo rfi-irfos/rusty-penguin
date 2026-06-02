@@ -1708,10 +1708,10 @@ const MENU_CATS: &[(&str, &[usize])] = &[
     ("Communications",    &[15]),                   // RustyPhone
     ("Games",             &[16, 17, 18]),           // Snake, Minesweeper, Doom
 ];
-// Open state per category — mutable, toggled on click.
-static mut CAT_OPEN: [bool; 5] = [true, false, false, false, false];
-fn cat_open(i: usize) -> bool { unsafe { CAT_OPEN[i] } }
-fn cat_toggle(i: usize) { unsafe { CAT_OPEN[i] = !CAT_OPEN[i]; } }
+// Selected category for the right-side flyout (-1 = none open).
+static mut MENU_CAT_SEL: i32 = -1;
+fn menu_cat_sel() -> i32 { unsafe { MENU_CAT_SEL } }
+fn menu_cat_set(v: i32) { unsafe { MENU_CAT_SEL = v; } }
 #[derive(Copy, Clone)]
 enum MenuLaunch { App(u8), Term(usize) }
 
@@ -1755,15 +1755,12 @@ const MENU_ITEM_H:  i32 = 34;   // icon + name + description per row
 const MENU_SEP_H:   i32 = 9;    // separator between sections
 const MENU_FOOT_H:  i32 = 38;   // footer: Settings + Shut down
 
-const MENU_CAT_H: i32 = 26; // accordion category header height
+const MENU_CAT_H:   i32 = 36; // flat category row height
+const FLYOUT_W:     i32 = 248; // right-side flyout panel width
+const FLYOUT_HDR_H: i32 = 30; // flyout category header
 
 fn menu_total_h() -> i32 {
-    let mut h = MENU_HDR_H + MENU_FOOT_H + 4;
-    for (ci, (_, items)) in MENU_CATS.iter().enumerate() {
-        h += MENU_CAT_H + 2;
-        if cat_open(ci) { h += items.len() as i32 * MENU_ITEM_H; }
-    }
-    h
+    MENU_HDR_H + 4 + MENU_CATS.len() as i32 * (MENU_CAT_H + 2) + MENU_FOOT_H
 }
 
 fn start_menu_bounds(fh: u32) -> (i32, i32, i32, i32) {
@@ -1796,109 +1793,141 @@ fn draw_start_menu(fb: &mut Framebuffer) {
     fb.fill_rounded_rect(x + 3, y + 5, w + 2, h, 16, 0x0A0D10);
     fb.fill_rounded_rect(x + 1, y + 3, w,     h, 14, 0x0C1114);
     fb.fill_rounded_rect_glass(x, y, w, h, 14, bg, 236);
-    fb.fill_rect_s(x + 12, y, w - 24, 2, TEAL);  // azure accent top strip
+    fb.fill_rect_s(x + 12, y, w - 24, 2, TEAL);
     fb.fill_rect_s(x + 12, y + h - 2, w - 24, 1, 0x151A1F);
 
-    // ── Header: dingir avatar circle + "Rusty Penguin" + "OS v2.0.0" ────────
+    // Header: dingir avatar + title
     let av_x = x + 14; let av_y = y + 10;
     fb.fill_circle(av_x + 18, av_y + 18, 18, 0x34424A);
     fb.fill_circle(av_x + 18, av_y + 18, 16, 0x232C31);
-    // Real dingir logo in the menu avatar circle.
     if !draw_ppm_icon_centered(fb, "bin/dingir.ppm", av_x + 18, av_y + 18, 30) {
         fb.draw_star8(av_x + 18, av_y + 18, 10, TEAL);
     }
-    fb.draw_aa(av_x + 40, av_y + 1, "Rusty Penguin", WHITE, crate::fb::AA_S);
+    fb.draw_aa(av_x + 40, av_y + 1,  "Rusty Penguin", WHITE,    crate::fb::AA_S);
     fb.draw_aa(av_x + 40, av_y + 21, "OS v2.0.0  .  Ternary", 0x6FE18B, crate::fb::AA_T);
-
-    // Hairline below header
     fb.fill_rect_s(x + 8, y + MENU_HDR_H - 1, w - 16, 1, 0x46525A);
 
-    // ── Accordion categories ──────────────────────────────────────────────────
+    // Flat category list — each row opens a right-side flyout on click
+    let sel = menu_cat_sel();
     let mut cur_y = y + MENU_HDR_H + 4;
     for (ci, (cat_name, items)) in MENU_CATS.iter().enumerate() {
-        let open = cat_open(ci);
-        // Category header row — clickable
-        let ch_bg = if open { 0x1A2A38u32 } else { 0x151C24 };
-        fb.fill_rect(x as u32, cur_y as u32, w as u32, MENU_CAT_H as u32, ch_bg);
-        // Arrow indicator
-        let arrow = if open { "v" } else { ">" };
-        fb.draw_str((x + 10) as u32, (cur_y + 8) as u32, arrow, TEAL, ch_bg);
-        fb.draw_aa(x + 24, cur_y + 6, cat_name, 0xB0BCC8, crate::fb::AA_T);
-        // Item count badge (when collapsed)
-        if !open {
-            let mut cnt_buf = [0u8; 8];
-            let cnt = items.len();
-            cnt_buf[0] = b'0' + (cnt / 10) as u8; cnt_buf[1] = b'0' + (cnt % 10) as u8;
-            let cs = if cnt < 10 { &cnt_buf[1..2] } else { &cnt_buf[0..2] };
-            let cstr = core::str::from_utf8(cs).unwrap_or("?");
-            fb.draw_aa(x + w - 24, cur_y + 6, cstr, 0x4A5568, crate::fb::AA_T);
+        let is_sel = sel == ci as i32;
+        let row_bg = if is_sel { 0x1E3042u32 } else { bg };
+        fb.fill_rect(x as u32, cur_y as u32, w as u32, MENU_CAT_H as u32, row_bg);
+        if is_sel {
+            fb.fill_rect(x as u32, cur_y as u32, 3, MENU_CAT_H as u32, TEAL);
         }
+        let ty = cur_y + (MENU_CAT_H - 14) / 2;
+        let arrow_col = if is_sel { TEAL } else { 0x4A6070 };
+        fb.draw_str((x + 10) as u32, ty as u32, ">", arrow_col, row_bg);
+        let name_col = if is_sel { WHITE } else { 0xB0BCC8 };
+        fb.draw_aa(x + 26, ty, cat_name, name_col, crate::fb::AA_S);
+        // Item count on the right
+        let cnt = items.len();
+        let cnt_char = b'0' + cnt as u8;
+        let cnt_str = core::str::from_utf8(core::slice::from_ref(&cnt_char)).unwrap_or("?");
+        fb.draw_str((x + w - 20) as u32, ty as u32, cnt_str, if is_sel { 0x38BDF8 } else { 0x4A5568 }, row_bg);
         cur_y += MENU_CAT_H;
-        // Expanded items
-        if open {
-            for &mi in *items {
-                if mi < MENU_ITEMS.len() {
-                    draw_menu_item(fb, x, cur_y, w, &MENU_ITEMS[mi], false);
-                    cur_y += MENU_ITEM_H;
-                }
-            }
-        }
         fb.fill_rect_s(x + 8, cur_y, w - 16, 1, 0x1E2A38);
         cur_y += 2;
     }
 
-    // ── Footer: Settings · Shut Down ─────────────────────────────────────────
+    // Footer: Settings · Shut Down
     let foot_y = y + h - MENU_FOOT_H;
     fb.fill_rect_s(x + 8, foot_y, w - 16, 1, 0x46525A);
-    let bw = (w / 2) - 14;
-    let bh = 28;
-    let by = foot_y + 5;
-    // Settings button — visible neutral tile
+    let bw = (w / 2) - 14; let bh = 28; let by = foot_y + 5;
     let sbx = x + 10;
     fb.fill_rounded_rect(sbx, by, bw, bh, 9, 0x3A4850);
     draw_round_border(fb, sbx, by, bw, bh, 9, 0x68787F);
     fb.draw_aa(sbx + 14, by + 8, "Settings", WHITE, crate::fb::AA_S);
-    // Shut Down button — visible red tile
     let dbx = x + w / 2 + 4;
     fb.fill_rounded_rect(dbx, by, bw, bh, 9, 0x4A2020);
     draw_round_border(fb, dbx, by, bw, bh, 9, 0x8A4040);
     fb.draw_aa(dbx + 10, by + 8, "Shut Down", TRIT_NEG, crate::fb::AA_S);
 }
 
-// Returns: 0..MENU_ITEMS.len() = launch that item; 1000+ci = toggle category ci;
-//          5 = Settings footer shortcut; 99 = Shut Down.
+// ── Right-side category flyout panel ─────────────────────────────────────────
+
+fn cat_flyout_bounds(fh: u32) -> Option<(i32, i32, i32, i32)> {
+    let sel = menu_cat_sel();
+    if sel < 0 || sel as usize >= MENU_CATS.len() { return None; }
+    let ci = sel as usize;
+    let (_, items) = MENU_CATS[ci];
+    let (sx, sy, sw, _) = start_menu_bounds(fh);
+    let fw = FLYOUT_W;
+    let fh_panel = FLYOUT_HDR_H + items.len() as i32 * MENU_ITEM_H + 10;
+    // Align flyout top with the selected category row
+    let cat_row_y = sy + MENU_HDR_H + 4 + ci as i32 * (MENU_CAT_H + 2);
+    let max_y = fh as i32 - fh_panel - 8;
+    let fy = cat_row_y.min(max_y).max(8);
+    Some((sx + sw + 8, fy, fw, fh_panel))
+}
+
+fn draw_cat_flyout(fb: &mut Framebuffer) {
+    let (fx, fy, fw, fh_panel) = match cat_flyout_bounds(fb.height) { Some(b) => b, None => return };
+    let ci = menu_cat_sel() as usize;
+    let (cat_name, items) = MENU_CATS[ci];
+
+    // Shadow + glass panel
+    fb.fill_rounded_rect(fx + 3, fy + 5, fw + 2, fh_panel, 14, 0x0A0D10);
+    fb.fill_rounded_rect(fx + 1, fy + 3, fw,     fh_panel, 12, 0x0C1114);
+    fb.fill_rounded_rect_glass(fx, fy, fw, fh_panel, 12, 0x1B2126, 236);
+    // Left teal connector line
+    fb.fill_rect(fx as u32, fy as u32, 2, fh_panel as u32, TEAL);
+    fb.fill_rect_s(fx, fy, fw, 2, TEAL);
+
+    // Category header
+    fb.fill_rounded_rect(fx, fy, fw, FLYOUT_HDR_H, 12, 0x1A3040);
+    fb.draw_aa(fx + 12, fy + 8, cat_name, TEAL, crate::fb::AA_S);
+    fb.fill_rect_s(fx + 4, fy + FLYOUT_HDR_H - 1, fw - 8, 1, 0x46525A);
+
+    // Items
+    let mut iy = fy + FLYOUT_HDR_H + 4;
+    for &mi in items {
+        if mi < MENU_ITEMS.len() {
+            draw_menu_item(fb, fx, iy, fw, &MENU_ITEMS[mi], false);
+            iy += MENU_ITEM_H;
+        }
+    }
+}
+
+fn cat_flyout_hit(fh: u32, mx: i32, my: i32) -> Option<usize> {
+    let (fx, fy, fw, fh_panel) = cat_flyout_bounds(fh)?;
+    if mx < fx || mx >= fx + fw { return None; }
+    if my < fy || my >= fy + fh_panel { return None; }
+    let ci = menu_cat_sel() as usize;
+    let (_, items) = MENU_CATS[ci];
+    let mut iy = fy + FLYOUT_HDR_H + 4;
+    for &mi in items {
+        if my >= iy && my < iy + MENU_ITEM_H { return Some(mi); }
+        iy += MENU_ITEM_H;
+    }
+    None
+}
+
+// Returns: 1000+ci = select category ci; 5 = Settings footer; 99 = Shut Down.
 fn start_menu_hit(fh: u32, mx: i32, my: i32) -> Option<usize> {
     let (x, y, w, h) = start_menu_bounds(fh);
     if mx < x || mx >= x + w { return None; }
     if my < y || my >= y + h  { return None; }
-    // Footer row
+    // Footer
     let foot_y = y + h - MENU_FOOT_H;
     if my >= foot_y {
         let by = foot_y + 5;
         if my >= by && my < by + 28 {
-            if mx < x + w / 2 { return Some(5); }   // Settings (MENU_ITEMS[5])
-            return Some(99);                          // Shut Down
+            if mx < x + w / 2 { return Some(5); }
+            return Some(99);
         }
         return None;
     }
-    // Header — not clickable
     if my < y + MENU_HDR_H { return None; }
-    // Walk the same accordion layout as draw_start_menu
+    // Flat category rows
     let mut cur_y = y + MENU_HDR_H + 4;
-    for (ci, (_, items)) in MENU_CATS.iter().enumerate() {
+    for ci in 0..MENU_CATS.len() {
         if my >= cur_y && my < cur_y + MENU_CAT_H {
-            return Some(1000 + ci);  // toggle this category
+            return Some(1000 + ci);
         }
-        cur_y += MENU_CAT_H;
-        if cat_open(ci) {
-            for &mi in *items {
-                if my >= cur_y && my < cur_y + MENU_ITEM_H {
-                    return Some(mi);
-                }
-                cur_y += MENU_ITEM_H;
-            }
-        }
-        cur_y += 2; // separator line
+        cur_y += MENU_CAT_H + 2;
     }
     None
 }
@@ -2609,7 +2638,7 @@ fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, 
         fb.fill_rounded_rect(mbx, mby, mbw, bh, 12, 0x5EEAD4); // brighter teal
         draw_round_border(fb, mbx, mby, mbw, bh, 12, WHITE);
         let star_cy = mby + bh / 2;
-        fb.draw_star8(mbx + mbw / 2, star_cy, 15, 0x0D3330); // dark star on bright
+        fb.draw_star8(mbx + mbw / 2, star_cy, 15, WHITE);
         fb.fill_rect_s(mbx + 8, mby + bh - 3, mbw - 16, 3, WHITE);
     }
     let up = rtc_str();
@@ -2973,19 +3002,18 @@ pub extern "C" fn _start() -> ! {
         if right_edge {
             // If an app context menu is open, just close it.
             if app_ctx.is_some() { app_ctx = None; scene_dirty = true; }
-            // If start menu is open and cursor is on a menu item, show app ctx menu.
+            // If start menu is open, right-click on a flyout item = app context menu.
             else if start_menu_open {
-                if let Some(mi) = start_menu_hit(fb.height, cx, cy) {
-                    if mi < MENU_ITEMS.len() {
-                        // Place popup to the RIGHT of the start menu panel (never overlaps it).
-                        let (mx, _, mw, _) = start_menu_bounds(fb.height);
-                        let popup_x = mx + mw + 6;
-                        let popup_y = cy - 10; // vertically near the click
-                        app_ctx = Some((mi, popup_x, popup_y));
-                        scene_dirty = true;
+                if let Some(mi) = cat_flyout_hit(fb.height, cx, cy) {
+                    // Popup to the right of the flyout
+                    if let Some((fx, _, fw, _)) = cat_flyout_bounds(fb.height) {
+                        app_ctx = Some((mi, fx + fw + 6, cy - 10));
                     }
+                    scene_dirty = true;
+                } else if start_menu_hit(fb.height, cx, cy).is_some() {
+                    // Right-click on a category row — do nothing, keep menu open
                 } else {
-                    start_menu_open = false; scene_dirty = true;
+                    start_menu_open = false; menu_cat_set(-1); scene_dirty = true;
                 }
             } else {
                 let prev_open = ctx_menu.is_some();
@@ -3018,7 +3046,7 @@ pub extern "C" fn _start() -> ! {
             } else if tray_hit(w as u32, h as u32, cx, cy) {
                 // Toggle the quick-settings panel from the tray.
                 unsafe { QS_OPEN = !qs_open; }
-                ctx_menu = None; start_menu_open = false;
+                ctx_menu = None; start_menu_open = false; menu_cat_set(-1);
                 scene_dirty = true;
             } else if qs_open {
                 let (px, py, pw0, ph0) = qs_rect(h as u32, w as u32);
@@ -3119,27 +3147,26 @@ pub extern "C" fn _start() -> ! {
                 }
                 scene_dirty = true;
             } else if start_menu_open {
-                if let Some(mi) = start_menu_hit(fb.height, cx, cy) {
+                // Flyout item click → launch app
+                if let Some(mi) = cat_flyout_hit(fb.height, cx, cy) {
+                    let opened = launch_menu_item(&MENU_ITEMS[mi].kind, w, h, wins.len());
+                    if let Some(mut tw) = opened { tw.win.desktop = current_desktop; wins.push(tw); }
+                    start_menu_open = false; menu_cat_set(-1);
+                } else if let Some(mi) = start_menu_hit(fb.height, cx, cy) {
                     if mi >= 1000 {
-                        // Category header — toggle expand/collapse, keep menu open.
-                        cat_toggle(mi - 1000);
-                    } else {
-                        if mi == 99 {
-                            // Shut Down: real ACPI S5 soft-off (syscall 37).
-                            unsafe { core::arch::asm!("syscall", in("rax") 37u64, out("rcx") _, out("r11") _, options(nostack)); }
-                            loop { unsafe { core::arch::asm!("hlt", options(nostack)); } }
-                        }
-                        if mi < MENU_ITEMS.len() {
-                            let opened = launch_menu_item(&MENU_ITEMS[mi].kind, w, h, wins.len());
-                            if let Some(mut tw) = opened {
-                                tw.win.desktop = current_desktop;
-                                wins.push(tw);
-                            }
-                        }
-                        start_menu_open = false;
+                        // Category row click — open/close its flyout
+                        let ci = (mi - 1000) as i32;
+                        if menu_cat_sel() == ci { menu_cat_set(-1); } else { menu_cat_set(ci); }
+                    } else if mi == 99 {
+                        unsafe { core::arch::asm!("syscall", in("rax") 37u64, out("rcx") _, out("r11") _, options(nostack)); }
+                        loop { unsafe { core::arch::asm!("hlt", options(nostack)); } }
+                    } else if mi < MENU_ITEMS.len() {
+                        let opened = launch_menu_item(&MENU_ITEMS[mi].kind, w, h, wins.len());
+                        if let Some(mut tw) = opened { tw.win.desktop = current_desktop; wins.push(tw); }
+                        start_menu_open = false; menu_cat_set(-1);
                     }
                 } else {
-                    start_menu_open = false;
+                    start_menu_open = false; menu_cat_set(-1);
                 }
                 scene_dirty = true;
             } else if dingir_hit(fb.height, cx, cy) {
@@ -3384,7 +3411,7 @@ pub extern "C" fn _start() -> ! {
                     tw.term.render(&mut fb, ox as u32, oy as u32, cw, ch, focused && blink_on);
                     tw.term.dirty = false;
                 }
-                if start_menu_open { draw_start_menu(&mut fb); }
+                if start_menu_open { draw_start_menu(&mut fb); if menu_cat_sel() >= 0 { draw_cat_flyout(&mut fb); } }
         if let Some((ami, ax, ay)) = app_ctx { draw_app_ctx_menu(&mut fb, ami, ax, ay); }
                 if let Some((cmx, cmy)) = ctx_menu { draw_ctx_menu(&mut fb, cmx, cmy); }
                 if unsafe { QS_OPEN } { draw_quick_settings(&mut fb); }
