@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/f76c2b10-e7f0-478f-8f70-af13580032f8" width="100" alt="Header Icon">
+  <img src="https://github.com/user-attachments/assets/f76c2b10-e7f0-478f-8f70-af13580032f8" width="200" alt="Rusty Penguin Logo">
 </p>
 
 <h1 align="center">Rusty Penguin</h1>
