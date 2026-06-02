@@ -242,6 +242,15 @@ pub fn syscall_handler(nr: u64, _a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64
             crate::sched::yield_();
             0
         }
+        // NtDeviceIoControlFile (Brick 28)
+        0x03 => {
+            serial::write_str("  [wine] NtDeviceIoControlFile handle=0x");
+            serial::write_hex_u32(w_a1 as u32);
+            serial::write_str(" ioctl=0x");
+            serial::write_hex_u32(w_a3 as u32);
+            serial::write_str("\n");
+            0 // STATUS_SUCCESS
+        }
         // NtCreateMutant (Brick 18)
         0x1b => {
             serial::write_str("  [wine] NtCreateMutant stub\n");
@@ -497,6 +506,7 @@ pub enum WinObject {
     Semaphore,
     Section,
     Token,
+    Socket,
 }
 
 const MAX_HANDLES: usize = 256;
