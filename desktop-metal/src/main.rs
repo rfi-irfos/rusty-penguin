@@ -1059,10 +1059,6 @@ fn draw_scene_static_v(fb: &mut Framebuffer, variant: u8) {
     fb.draw_aa(tx + w1 + 1, text_y + 1, "Penguin", 0x080B0D, crate::fb::AA_L);
     fb.draw_aa(tx, text_y, "Rusty ", WHITE, crate::fb::AA_L);
     fb.draw_aa(tx + w1, text_y, "Penguin", 0x63C7AD, crate::fb::AA_L);
-    let tag1 = "Bare-metal Rust OS  .  Sparse ternary inference  .  Zero binary";
-    let tag2 = "RFI-IRFOS  .  Ternary Intelligence Stack";
-    fb.draw_aa_centered(0, w as i32, text_y + 26, tag1, DIM, crate::fb::AA_T);
-    fb.draw_aa_centered(0, w as i32, text_y + 44, tag2, TRIT_ZERO, crate::fb::AA_T);
 
     // ── Bottom panel — frosted-glass floating dock.
     // Drawn as translucent glass over the wallpaper (the warm glows show
@@ -1089,11 +1085,11 @@ fn draw_scene_static_v(fb: &mut Framebuffer, variant: u8) {
     fb.fill_rect_s(mbx + 12, mby + 1, mbw - 24, 1, 0x7B878E);
     // Dingir icon — full quality, 36px render of the 64x64 source.
     let star_cy = mby + (PANEL_H - 14) / 2;
-    let icon_drawn = draw_ppm_icon_centered(fb, "bin/dingir.ppm", mbx + 22, star_cy, 36);
-    if !icon_drawn { fb.draw_star8(mbx + 22, star_cy, 15, TEAL); }
+    let icon_drawn = draw_ppm_icon_centered(fb, "bin/dingir.ppm", mbx + 23, star_cy, 40);
+    if !icon_drawn { fb.draw_star8(mbx + 23, star_cy, 16, TEAL); }
     // "Menu" label
     let label_y = star_cy - 6;
-    fb.draw_aa(mbx + 44, label_y, "Menu", 0xE3ECEE, crate::fb::AA_S);
+    fb.draw_aa(mbx + 48, label_y, "Menu", 0xE3ECEE, crate::fb::AA_S);
     // separator
     fb.fill_rect_s(mbx + mbw + 8, ptop + 14, 1, PANEL_H - 28, 0x435059);
 
