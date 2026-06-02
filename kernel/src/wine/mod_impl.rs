@@ -405,13 +405,22 @@ pub fn syscall_handler(nr: u64, _a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64
             serial::write_str("  [wine] NtQueryValueKey stub\n");
             0 
         }
-        0x2c => {
-            serial::write_str("  [wine] NtTerminateProcess\n");
-            loop { unsafe { core::arch::asm!("hlt"); } }
+        // NtUserRegisterClassExW (Brick 30)
+        0x1001 => {
+            serial::write_str("  [wine] NtUserRegisterClassExW stub\n");
+            alloc_handle(WinObject::Window)
         }
-        _ => 0xC0000002 
-    }
-}
+        // NtUserPostMessage (Brick 30)
+        0x1002 => {
+            serial::write_str("  [wine] NtUserPostMessage stub\n");
+            0 // STATUS_SUCCESS
+        }
+        // NtGdiFlush (Brick 30)
+        0x1003 => {
+            serial::write_str("  [wine] NtGdiFlush stub\n");
+            0 // STATUS_SUCCESS
+        }
+        0x2c => {
 
 fn is_dormant_syscall(nr: u64) -> bool {
     if nr >= 0x100 && nr <= 0x1FF { return true; }
@@ -507,6 +516,7 @@ pub enum WinObject {
     Section,
     Token,
     Socket,
+    Window,
 }
 
 const MAX_HANDLES: usize = 256;
