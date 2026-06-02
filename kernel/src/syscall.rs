@@ -672,8 +672,12 @@ pub extern "C" fn syscall_handler(nr: u64, arg1: u64, arg2: u64, arg3: u64) -> u
         }
         41 => {
             // sys_app_surface → VA at which the desktop can read a 2nd app's live
-            // 32×32 surface (schedesktop2 windowed-app mode), or 0 if none.
+            // surface (windowed-app mode), or 0 if none.
             crate::sched::app_surface_va()
+        }
+        42 => {
+            // sys_app_surface_dims → (w<<16)|h of the app surface; 0 = legacy 32×32.
+            crate::sched::app_surface_dims()
         }
         60 => {
             // sys_exit(code)

@@ -806,11 +806,20 @@ const APP_SURF_VA: u64 = 0x0300_0000;
 // Set by selftest_schedesktop2 once the app surface is mapped into the desktop;
 // the desktop reads it via sys_app_surface (#41). 0 = no app surface (normal boot).
 static mut APP_SURFACE_VA: u64 = 0;
+// Dimensions of that surface (0 = the legacy 32x32 synthetic app). Backs #42.
+static mut APP_SURFACE_W: u32 = 0;
+static mut APP_SURFACE_H: u32 = 0;
 
 /// The VA at which the current desktop process can read the second app's live
 /// surface, or 0 if none. Backs sys_app_surface (#41).
 pub fn app_surface_va() -> u64 {
     unsafe { APP_SURFACE_VA }
+}
+
+/// (width, height) of the app surface, packed as (w<<16)|h. 0 = legacy 32x32.
+/// Backs sys_app_surface_dims (#42).
+pub fn app_surface_dims() -> u64 {
+    unsafe { ((APP_SURFACE_W as u64) << 16) | (APP_SURFACE_H as u64) }
 }
 
 // A ring-3 program that writes a marker (0xDEADBEEF) to the offscreen buffer at
@@ -1789,6 +1798,71 @@ pub fn selftest_linuxfb() -> ! {
         }
         if n % 200 == 0 { write_str("[lfb] boot thread alive (scheduler healthy)\n"); }
     }
+}
+
+/// `linuxwin` brick (windowed-DOOM brick 4) — the REAL desktop AND a scheduled
+/// LINUX process, with the desktop compositing the Linux app's private framebuffer
+/// surface into an on-screen window. This is the whole windowed-Linux-app pipeline
+/// end to end (a real glibc-class process's output, in a desktop window), with a
+/// synthetic fb-test standing in for DOOM. Maps the 640x400 surface into the
+/// desktop's AS and hands it the dims via sys_app_surface (#41) + dims (#42).
+pub fn selftest_linuxwin() -> ! {
+    use crate::serial::write_str;
+    write_str("\n[lwn] === linuxwin: desktop composites a scheduled LINUX app's fb surface into a window ===\n");
+    let desk = match crate::ramfs::find(b"bin/desktop") {
+        Some(e) => e, None => { write_str("[lwn] no bin/desktop\n"); halt(); }
+    };
+    let app = match crate::ramfs::find(b"bin/linuxtest") {
+        Some(e) => e, None => { write_str("[lwn] no bin/linuxtest (the fb app)\n"); halt(); }
+    };
+    unsafe {
+        core::arch::asm!("cli");
+        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3() };
+        CUR_TASK = 0;
+        TASK_LINUX[0] = false;
+    }
+    // Real desktop as a scheduled native process.
+    let d = spawn_ring3_elf_cfg(desk, crate::vmm::USER_STACK_TOP, crate::vmm::USER_STACK_PAGES as u32, 0);
+    if d == 0 { write_str("[lwn] desktop spawn failed\n"); halt(); }
+    // Pre-allocate the Linux app's fb surface (kernel owns it).
+    let (sphys, sw, sh) = {
+        let pages = crate::linux::fb_surface_pages();
+        match crate::pmm::alloc_frames(pages) {
+            Some(base) => {
+                unsafe { core::ptr::write_bytes(crate::vmm::phys_to_virt(base) as *mut u8, 0, pages * 4096); }
+                crate::linux::set_fb_surface(base);
+                let (_, w, h) = crate::linux::fb_surface();
+                (base, w, h)
+            }
+            None => { write_str("[lwn] surface alloc failed\n"); halt(); }
+        }
+    };
+    // The Linux fb app as a scheduled process (renders orange into the surface).
+    let a = spawn_linux_static_elf(app);
+    if a == 0 { write_str("[lwn] linux app spawn failed\n"); halt(); }
+    // Map the SAME surface (read-only) into the desktop's AS at APP_SURF_VA, and
+    // publish VA + dims so the desktop composites it.
+    unsafe {
+        let ro = crate::vmm::PTE_PRESENT | crate::vmm::PTE_USER;
+        let pages = crate::linux::fb_surface_pages() as u64;
+        let mut ok = true;
+        for p in 0..pages {
+            if !crate::vmm::map_page_in(TASKS[d].cr3, APP_SURF_VA + p * 4096, sphys + p * 4096, ro) { ok = false; break; }
+        }
+        if ok {
+            APP_SURFACE_VA = APP_SURF_VA;
+            APP_SURFACE_W = sw;
+            APP_SURFACE_H = sh;
+            write_str("[lwn] surface mapped into desktop AS @ 0x3000000 (640x400)\n");
+        } else {
+            write_str("[lwn] WARN: surface map into desktop failed\n");
+        }
+    }
+    write_str("[lwn] desktop + linux fb app scheduled; enabling preemption\n");
+    if crate::fb::is_live() { crate::fb::fill(0, 0, crate::fb::width(), crate::fb::height(), 0x000000); }
+    crate::idt::set_timer_vector(irq_timer_preempt as *const () as u64);
+    unsafe { core::arch::asm!("sti"); }
+    loop { busy_spin(); }
 }
 
 /// `composite` brick — the full pipeline made VISIBLE: a scheduled, isolated ELF

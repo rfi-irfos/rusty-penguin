@@ -175,6 +175,22 @@ fn sys_app_surface() -> u64 {
     n
 }
 
+/// sys_app_surface_dims (#42): (w<<16)|h of the app surface, or 0 for the legacy
+/// 32x32 synthetic app.
+fn sys_app_surface_dims() -> u64 {
+    let n: u64;
+    unsafe {
+        core::arch::asm!(
+            "syscall",
+            inout("rax") 42u64 => n,
+            in("rdi") 0u64,
+            out("rcx") _, out("r11") _,
+            options(nostack),
+        );
+    }
+    n
+}
+
 /// sys_wallpaper (#23): system-background index from `wallpaper=N`, or u64::MAX.
 fn sys_wallpaper() -> u64 {
     let n: u64;
@@ -2234,24 +2250,33 @@ fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, 
 // scaled 4× so it's clearly visible. This is the desktop — itself a scheduled,
 // isolated process — hosting another isolated process's output in a window.
 fn draw_mp_app_window(fb: &mut Framebuffer, surf_va: u64) {
-    const WX: u32 = 880;
-    const WY: u32 = 150;
-    const SD: u32 = 32;          // source surface is 32×32
-    const SCALE: u32 = 4;
-    const CW: u32 = SD * SCALE;  // 128×128 content
-    const TBH: u32 = 22;         // titlebar height
+    const TBH: u32 = 22; // titlebar height
+    // Surface dimensions: a real WxH (e.g. a Linux app's 640x400 framebuffer) or
+    // 0 = the legacy 32x32 synthetic app (drawn scaled 4x).
+    let dims = sys_app_surface_dims();
+    let (sw, sh, scale): (u32, u32, u32) = if dims == 0 {
+        (32, 32, 4)
+    } else {
+        (((dims >> 16) & 0xFFFF) as u32, (dims & 0xFFFF) as u32, 1)
+    };
+    let cw = sw * scale; // on-screen content width
+    let ch = sh * scale;
+    // Centre the window in the upper-middle of the screen, clamped on-screen.
+    let wx = ((fb.width.saturating_sub(cw)) / 2).min(fb.width.saturating_sub(cw + 4)).max(4);
+    let wy: u32 = 90;
     // Soft shadow + frame + titlebar (matches the desktop's window chrome palette).
-    fb.fill_rounded_rect(WX as i32 - 3, WY as i32 - 1, (CW + 6) as i32, (CW + TBH + 6) as i32, 9, 0x0C100E);
-    fb.fill_rect(WX - 1, WY - 1, CW + 2, CW + TBH + 2, 0x2A332F);
-    fb.fill_rect(WX, WY, CW, TBH, 0x333D38);
-    fb.fill_rect_s(WX as i32 + 8, WY as i32 + 1, (CW - 16) as i32, 1, 0x4C5A50); // top light-catch
-    fb.draw_aa(WX as i32 + 8, WY as i32 + 6, "App (process 2)", WHITE, crate::fb::AA_T);
-    // Content: read the app's surface and scale it 4× into the window body.
+    fb.fill_rounded_rect(wx as i32 - 3, wy as i32 - 1, (cw + 6) as i32, (ch + TBH + 6) as i32, 9, 0x0C100E);
+    fb.fill_rect(wx - 1, wy - 1, cw + 2, ch + TBH + 2, 0x2A332F);
+    fb.fill_rect(wx, wy, cw, TBH, 0x333D38);
+    fb.fill_rect_s(wx as i32 + 8, wy as i32 + 1, (cw as i32 - 16).max(1), 1, 0x4C5A50); // top light-catch
+    let title = if dims == 0 { "App (process 2)" } else { "Linux app (scheduled)" };
+    fb.draw_aa(wx as i32 + 8, wy as i32 + 6, title, WHITE, crate::fb::AA_T);
+    // Blit the app's surface into the window body (1:1, or 4x for the synthetic app).
     let src = surf_va as *const u32;
-    for cy in 0..CW {
-        for cx in 0..CW {
-            let sp = unsafe { core::ptr::read_volatile(src.add(((cy / SCALE) * SD + (cx / SCALE)) as usize)) };
-            fb.set_pixel(WX + cx, WY + TBH + cy, sp & 0x00FF_FFFF);
+    for cy in 0..ch {
+        for cx in 0..cw {
+            let sp = unsafe { core::ptr::read_volatile(src.add((((cy / scale) * sw) + (cx / scale)) as usize)) };
+            fb.set_pixel(wx + cx, wy + TBH + cy, sp & 0x00FF_FFFF);
         }
     }
 }
