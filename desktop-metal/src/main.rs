@@ -326,7 +326,7 @@ const TRIT_POS:  u32 = 0x38BDF8;  // ternary +1 (azure)
 const PANEL_MARGIN: i32 = 14;   // inset from screen left/right
 const PANEL_BOTTOM: i32 = 12;   // gap below the panel
 const PANEL_H:      i32 = 54;   // panel height
-const MENU_BTN_W:   i32 = 100;  // "Menu" button width (wider to fit 36px dingir + label)
+const MENU_BTN_W:   i32 = 54;   // Icon-only button — just the dingir, no text
 const FAV_TILE:     i32 = 40;   // favourite icon tile
 const FAV_GAP:      i32 = 8;    // gap between favourites
 const PANEL_SOLID:  u32 = 0x0E1828;  // dock body: deep navy glass
@@ -668,14 +668,14 @@ fn draw_ppm_watermark(fb: &mut Framebuffer, _path: &str, x: u32, y: u32, size: u
             // Threshold 50 cuts the ~luma-38 brownish bg while keeping gear teeth.
             let luma = (r * 77 + g * 150 + b * 29) >> 8;
             if luma < 50 { continue; }
-            // Blend: 28% source, 72% background.
+            // Blend: 18% source, 82% background — subtle grey ghost.
             let bg = fb.get_pixel(tx, ty);
             let br = (bg >> 16) & 0xFF;
             let bg_ = (bg >> 8) & 0xFF;
             let bb = bg & 0xFF;
-            let nr = (r * 28 + br * 72) / 100;
-            let ng = (g * 28 + bg_ * 72) / 100;
-            let nb = (b * 28 + bb * 72) / 100;
+            let nr = (r * 18 + br * 82) / 100;
+            let ng = (g * 18 + bg_ * 82) / 100;
+            let nb = (b * 18 + bb * 82) / 100;
             fb.set_pixel(tx, ty, (nr << 16) | (ng << 8) | nb);
         }
     }
@@ -1042,23 +1042,12 @@ fn draw_scene_static_v(fb: &mut Framebuffer, variant: u8) {
     // Ambient depth: a soft warm light pool lifts the hero off the wall, and a
     // cream halo makes the dingir luminous. (Also improves hero legibility over
     // any wallpaper, including the Bliss easter egg.)
-    // Rusty Penguin gear+penguin logo — centered in the upper portion of the hero.
-    // Text goes BELOW the logo, not overlapping it.
+    // Rusty Penguin gear+penguin logo — subtle ghost, centered with slight left bias.
     let logo_size = ((w.min(h) * 36 / 100) as u32).min(320);
     let logo_top = (hero_cy as u32).saturating_sub(logo_size / 2 + logo_size / 8);
-    let lx = (cx as u32).saturating_sub(logo_size / 2);
+    // The PPM is 320x304 (slightly wider than tall), so shift left half the width delta.
+    let lx = (cx as u32).saturating_sub(logo_size / 2 + 30);
     draw_ppm_watermark(fb, "bin/rp_watermark.ppm", lx, logo_top, logo_size);
-
-    // Text block sits below the logo with comfortable breathing room.
-    let text_y = (logo_top + logo_size) as i32 + 18;
-    fb.fill_rect_s(cx - 92, text_y - 4, 184, 1, 0x2A3548);
-    let w1 = Framebuffer::aa_w("Rusty ", crate::fb::AA_L);
-    let w2 = Framebuffer::aa_w("Penguin", crate::fb::AA_L);
-    let tx = cx - (w1 + w2) / 2;
-    fb.draw_aa(tx + 1, text_y + 1, "Rusty ", 0x080B0D, crate::fb::AA_L);
-    fb.draw_aa(tx + w1 + 1, text_y + 1, "Penguin", 0x080B0D, crate::fb::AA_L);
-    fb.draw_aa(tx, text_y, "Rusty ", WHITE, crate::fb::AA_L);
-    fb.draw_aa(tx + w1, text_y, "Penguin", 0x63C7AD, crate::fb::AA_L);
 
     // ── Bottom panel — frosted-glass floating dock.
     // Drawn as translucent glass over the wallpaper (the warm glows show
@@ -1085,11 +1074,9 @@ fn draw_scene_static_v(fb: &mut Framebuffer, variant: u8) {
     fb.fill_rect_s(mbx + 12, mby + 1, mbw - 24, 1, 0x7B878E);
     // Dingir icon — full quality, 36px render of the 64x64 source.
     let star_cy = mby + (PANEL_H - 14) / 2;
-    let icon_drawn = draw_ppm_icon_centered(fb, "bin/dingir.ppm", mbx + 23, star_cy, 40);
-    if !icon_drawn { fb.draw_star8(mbx + 23, star_cy, 16, TEAL); }
-    // "Menu" label
-    let label_y = star_cy - 6;
-    fb.draw_aa(mbx + 48, label_y, "Menu", 0xE3ECEE, crate::fb::AA_S);
+    // Icon only — no "Menu" text, clean minimal button.
+    let icon_drawn = draw_ppm_icon_centered(fb, "bin/dingir.ppm", mbx + mbw / 2, star_cy, 40);
+    if !icon_drawn { fb.draw_star8(mbx + mbw / 2, star_cy, 16, TEAL); }
     // separator
     fb.fill_rect_s(mbx + mbw + 8, ptop + 14, 1, PANEL_H - 28, 0x435059);
 
@@ -2845,15 +2832,18 @@ pub extern "C" fn _start() -> ! {
         let left_edge  = (mouse.btn_pressed & 0x01) != 0;
         let right_edge = (mouse.btn_pressed & 0x02) != 0;
 
-        // Right-click: open context menu on empty desktop area
+        // Right-click: close any open overlay first; only open ctx menu if nothing was open.
         if right_edge {
             let prev_open = ctx_menu.is_some() || start_menu_open;
             ctx_menu = None;
             start_menu_open = false;
-            let on_win = wins.iter().any(|tw|
-                tw.win.desktop == current_desktop && wm::window_hit(&tw.win, cx, cy));
-            if !on_win && cy >= TOPBAR_H as i32 && cy < h - 28 {
-                ctx_menu = Some((cx, cy));
+            if !prev_open {
+                // Nothing was open — open the desktop context menu.
+                let on_win = wins.iter().any(|tw|
+                    tw.win.desktop == current_desktop && wm::window_hit(&tw.win, cx, cy));
+                if !on_win && cy >= TOPBAR_H as i32 && cy < h - 28 {
+                    ctx_menu = Some((cx, cy));
+                }
             }
             if ctx_menu.is_some() || prev_open { scene_dirty = true; }
         }
