@@ -2,7 +2,14 @@
 
 All notable changes to this project will be documented here.
 
-## [2.8.0] — 2026-06-02 — Native Wine Engine + @sparseskip Optimization
+## [2.9.0] — 2026-06-03 — Universal Driver Framework (UDI)
+
+### Added
+- **Universal Driver Interface (UDI)**: Implemented a hardware-agnostic bus architecture in `kernel/src/drivers/udi/`.
+  - **Unified Driver Trait**: Created `UniversalDriver` trait for abstraction of Native, WDM, and LinuxShim drivers.
+  - **Central Bus Bus Architecture**: Implemented `UdiBus` registry to handle automatic driver probing and initialization at boot.
+  - **Native Driver Mapping**: Mapped `e1000` NIC and `virtio-gpu` drivers into the UDI bus, standardizing control and interrupt handling.
+  - **Ternary-Native Integration**: Full support for ternary-state (dormancy) in the UDI bus to ensure resource-efficient operation across all registered devices.
 
 ### Added — Native Wine Engine: from-scratch Windows subsystem (2026-06-02)
 

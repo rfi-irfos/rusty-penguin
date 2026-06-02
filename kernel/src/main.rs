@@ -32,6 +32,7 @@ mod wine {
     pub mod mod_impl;
 }
 mod pci;
+mod drivers;
 mod hda;
 mod rtl8139;
 mod e1000;
