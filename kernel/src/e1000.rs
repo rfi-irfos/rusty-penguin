@@ -28,6 +28,24 @@
 //   0x0350_0400  TX packet buffers   (32 × 2 KiB = 64 KiB)
 // (Same 34 MiB arena as RTL8139 for consistency; we never use both at once.)
 
+use crate::drivers::udi::{UniversalDriver, register_driver};
+
+pub struct E1000Driver;
+
+impl UniversalDriver for E1000Driver {
+    fn init(&self) -> bool {
+        crate::serial::write_str("  [udi] Initializing E1000 NIC...\n");
+        // Logic to trigger hardware init
+        true
+    }
+    fn handle_interrupt(&self, _irq: u8) {}
+    fn control(&self, _code: u32, _input: &[u8], _output: &mut [u8]) -> u32 { 0 }
+}
+
+pub fn udi_init() {
+    register_driver(&E1000Driver);
+}
+
 // ── MMIO helpers ─────────────────────────────────────────────────────────────
 unsafe fn r32(base: u64, off: usize) -> u32 { ((base + off as u64) as *const u32).read_volatile() }
 unsafe fn w32(base: u64, off: usize, v: u32) { ((base + off as u64) as *mut u32).write_volatile(v) }

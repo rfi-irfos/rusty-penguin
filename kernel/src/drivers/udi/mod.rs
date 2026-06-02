@@ -15,7 +15,19 @@ pub trait UniversalDriver {
     fn control(&self, code: u32, input: &[u8], output: &mut [u8]) -> u32;
 }
 
-// Global UDI Bus
 pub struct UdiBus {
     pub drivers: [Option<&'static dyn UniversalDriver>; 32],
+}
+
+static mut BUS: UdiBus = UdiBus { drivers: [None; 32] };
+
+pub fn register_driver(driver: &'static dyn UniversalDriver) {
+    unsafe {
+        for slot in BUS.drivers.iter_mut() {
+            if slot.is_none() {
+                *slot = Some(driver);
+                return;
+            }
+        }
+    }
 }
