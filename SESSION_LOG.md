@@ -23,6 +23,7 @@ already closed earlier; this session worked items 3–6.
 | VIRGL 3D detection | 6 — GPU accel | Kernel reads `VIRTIO_GPU_F_VIRGL` + `num_capsets` (device cfg); `has_3d()`. Read-only — 2D path untouched. | Two-sided: `-device virtio-gpu-gl -display egl-headless` → "VIRGL 3D offered, host capsets 2"; plain virtio-gpu → "no VIRGL, 2D only". Both still pass the 2D scanout self-test. | `1014f4e` |
 | Windowed app | 4 — multi-app | The desktop (a scheduled process) composites a SECOND real app process's live surface into a titled on-screen window: kernel maps the surface read-only into the desktop AS (0x3000000), desktop reads it via `sys_app_surface` (#41) and blits it 4× scaled. The full windowed multi-app model, the path to windowed DOOM. | `schedesktop2`: orange app window on the live desktop, 128×128 (16384) px, 0 faults; normal-boot regression 0 faults/clean. `docs/multiproc-windowed-app-on-desktop.png` | `66cbf45` |
 | virgl 3D control path | 6 — GPU accel | Past detection: negotiate `F_VIRGL`, `GET_CAPSET_INFO`, `CTX_CREATE`/`CTX_DESTROY` — the 3D command channel round-tripping through the host virglrenderer. Flag-gated (`virgltest`); 2D path untouched. | `virgltest` + `-device virtio-gpu-gl -display egl-headless`: capset id 1 / ver 1 / size 308, CTX_CREATE OK; 2D self-test still passes; default boot does NOT negotiate. Serial log. | `e9f9849` |
+| Per-task ABI mode (windowed-DOOM brick 1) | 4 — multi-app | A Linux-ABI process and the native desktop scheduled together, each routing syscalls to the right table (`TASK_LINUX[]` + `linux::set_linux` per switch). Also fixed a real GOT-indirect `_lx_a4/5/6` #PF that hit any Linux process in a private AS. | `linuxroute`: native routed 11× + Linux routed (`LINUXROUTE`), 0 faults; `enter()` Linux path regression-passes (hello write+exit). Serial log. | `9707242` |
 
 Also confirmed item 5's **real battery** readout is already wired: `sys_battery_pct`
 (#20) reads the ACPI EC, and Quick Settings shows "AC" gracefully when no battery
@@ -38,9 +39,16 @@ is present (as under QEMU).
   QEMU can't emulate.
 - **4. Preemptive multitasking + isolation maturity** — ✅ the concurrency #GP is
   fixed; the real desktop + a 2nd real app run isolated & preemptively at once,
-  and the desktop now composites that 2nd app's surface into an on-screen window.
-  The full windowed multi-app model is proven end to end (with a synthetic app);
-  remaining toward windowed DOOM = swap in the real DOOM binary + a full-size surface.
+  and the desktop composites that 2nd app's surface into an on-screen window.
+  Windowed multi-app is proven end to end with a *native* synthetic app.
+  **Windowed DOOM is a separate multi-brick build** (DOOM is a Linux-ABI process,
+  not a native one — an earlier note calling it a "mechanical swap" was wrong):
+  - brick 1 ✅ per-task ABI mode — a Linux process + the native desktop scheduled
+    together, each routing syscalls correctly (`linuxroute`, `9707242`);
+  - brick 2 ▢ load a dynamic Linux ELF (ld.so+libc) into a private AS as a
+    *scheduled* task (today DOOM runs only via the one-way `enter()` path);
+  - brick 3 ▢ redirect that process's `/dev/fb0` to a private surface;
+  - brick 4 ▢ composite the surface into a desktop window (reuses `sys_app_surface`).
 - **5. Power management** — 🟡 ACPI S5 shutdown+reboot ✅; software brightness ✅;
   real battery ✅ wired. Remaining: hardware backlight control + S3 suspend/resume
   (large, and largely **hardware-bound** / not meaningfully verifiable under QEMU).

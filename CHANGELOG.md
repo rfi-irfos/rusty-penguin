@@ -4,6 +4,24 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+### Added — Windowed-DOOM brick 1: per-task ABI mode (Linux process + native desktop scheduled together) (2026-06-02)
+
+- The architectural foundation for windowed DOOM. DOOM is a Linux-ABI process; the
+  desktop is native — to window DOOM they must run concurrently, each routing
+  syscalls to the right table. ABI mode was a global one-way switch (`enter()`
+  never returns); now it is per-task (`TASK_LINUX[]` + `linux::set_linux` pushed by
+  `preempt_tick` on every switch; `mark_task_linux()`).
+- Fixes a real latent bug: `extra_args()` took `&_lx_a4` → a GOT-indirect load, and
+  the kernel's GOT sits in low memory only mapped in the boot context — so any Linux
+  process running in a private address space #PF'd at syscall entry. Now read direct
+  rip-relative (no GOT).
+- New `linuxroute` self-test: a native task (0x1337) + a Linux task (`write` →
+  "LINUXROUTE") scheduled in separate private address spaces. QEMU-verified: native
+  routed 11×, Linux routed, 0 faults; the `enter()` Linux path still runs an
+  unmodified Linux ELF (regression). Remaining for windowed DOOM: load a dynamic
+  Linux ELF (ld.so+libc) into a private AS as a scheduled task, redirect its
+  `/dev/fb0` to a private surface, composite into a desktop window.
+
 ### Added — Multiproc brick 6: the desktop composites a 2nd real app into an on-screen window (2026-06-02)
 
 - Item 4's visible payoff — windowed multi-app, real and visible. The real desktop
