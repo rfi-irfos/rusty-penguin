@@ -143,6 +143,36 @@ pub fn syscall_handler(nr: u64, _a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64
     }
 }
 
+/// Windows Context structure for x64 (simplified for SEH).
+#[repr(C, align(16))]
+pub struct WinContext {
+    pub p1_home: u64, pub p2_home: u64, pub p3_home: u64, pub p4_home: u64,
+    pub p5_home: u64, pub p6_home: u64,
+    pub context_flags: u32,
+    pub mx_csr: u32,
+    pub seg_cs: u16, pub seg_ds: u16, pub seg_es: u16, pub seg_fs: u16,
+    pub seg_gs: u16, pub seg_ss: u16,
+    pub eflags: u32,
+    pub dr0: u64, pub dr1: u64, pub dr2: u64, pub dr3: u64,
+    pub dr6: u64, pub dr7: u64,
+    pub rax: u64, pub rcx: u64, pub rdx: u64, pub rbx: u64,
+    pub rsp: u64, pub rbp: u64, pub rsi: u64, pub rdi: u64,
+    pub r8:  u64, pub r9:  u64, pub r10: u64, pub r11: u64,
+    pub r12: u64, pub r13: u64, pub r14: u64, pub r15: u64,
+    pub rip: u64,
+    // Header + XMM omitted for brevity in this brick
+}
+
+/// Deliver a Windows exception (e.g. #GP, #PF) to the user-mode SEH handler.
+pub fn deliver_exception(code: u32, addr: u64) {
+    serial::write_str("  [wine] Delivering exception 0x");
+    serial::write_hex_u32(code);
+    serial::write_str(" at 0x0");
+    serial::write_hex_u32(addr as u32);
+    serial::write_str("\n");
+    // SEH unwinding and KiUserExceptionDispatcher call logic will follow
+}
+
 #[repr(C, align(4096))]
 struct WinTeb {
     _reserved1: [u8; 48],
