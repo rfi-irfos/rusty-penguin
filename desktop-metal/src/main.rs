@@ -586,6 +586,59 @@ fn parse_ppm_dims(data: &[u8]) -> Option<(usize, usize, usize)> {
     Some((nums[0], nums[1], i))
 }
 
+/// Render a PPM image from VFS centered at (cx, cy), scaled to fit in `size`×`size`.
+/// Pixels close to the OS background color are skipped (transparent).
+/// Returns true if the image was found and rendered.
+fn draw_ppm_icon_centered(fb: &mut Framebuffer, path: &str, cx: i32, cy: i32, size: u32) -> bool {
+    let data = match vfs::vfs().read(path) { Some(d) => d, None => return false };
+    let (iw, ih, off) = match parse_ppm_dims(data) { Some(v) => v, None => return false };
+    if iw == 0 || ih == 0 || off + iw * ih * 3 > data.len() { return false; }
+    let sx = cx - size as i32 / 2;
+    let sy = cy - size as i32 / 2;
+    for py in 0..size {
+        let src_y = (py as usize * ih / size as usize).min(ih - 1);
+        for px in 0..size {
+            let src_x = (px as usize * iw / size as usize).min(iw - 1);
+            let p = off + (src_y * iw + src_x) * 3;
+            let (r, g, b) = (data[p] as u32, data[p+1] as u32, data[p+2] as u32);
+            // Skip pixels that are near the bg color (transparent area from JPEG bg removal).
+            if r < 0x18 && g < 0x20 && b < 0x2C { continue; }
+            let col = (r << 16) | (g << 8) | b;
+            fb.set_pixel((sx + px as i32) as u32, (sy + py as i32) as u32, col);
+        }
+    }
+    true
+}
+
+/// Render a PPM image from VFS at (x, y) clipped to `size`×`size`, very lightly
+/// blended over whatever is already on the framebuffer (ghost/watermark effect).
+fn draw_ppm_watermark(fb: &mut Framebuffer, path: &str, x: u32, y: u32, size: u32) {
+    let data = match vfs::vfs().read(path) { Some(d) => d, None => return };
+    let (iw, ih, off) = match parse_ppm_dims(data) { Some(v) => v, None => return };
+    if iw == 0 || ih == 0 || off + iw * ih * 3 > data.len() { return; }
+    let fw = fb.width; let fh = fb.height;
+    for py in 0..size {
+        let ty = y + py; if ty >= fh { break; }
+        let src_y = (py as usize * ih / size as usize).min(ih - 1);
+        for px in 0..size {
+            let tx = x + px; if tx >= fw { break; }
+            let src_x = (px as usize * iw / size as usize).min(iw - 1);
+            let p = off + (src_y * iw + src_x) * 3;
+            let (r, g, b) = (data[p] as u32, data[p+1] as u32, data[p+2] as u32);
+            // Only draw non-bg pixels; blend at ~20% opacity over existing pixel.
+            if r < 0x14 && g < 0x18 && b < 0x22 { continue; }
+            let bg = fb.get_pixel(tx, ty);
+            let br = (bg >> 16) & 0xFF;
+            let bg_ = (bg >> 8) & 0xFF;
+            let bb = bg & 0xFF;
+            let nr = (r * 20 + br * 80) / 100;
+            let ng = (g * 20 + bg_ * 80) / 100;
+            let nb = (b * 20 + bb * 80) / 100;
+            fb.set_pixel(tx, ty, (nr << 16) | (ng << 8) | nb);
+        }
+    }
+}
+
 /// Custom wallpaper — decode VFS "wallpaper.ppm" (any P6) and scale it to FILL the
 /// screen (cover + centre-crop). Falls back to the default if absent/invalid.
 fn draw_bg_custom(fb: &mut Framebuffer) {
@@ -667,6 +720,8 @@ fn draw_bg_stone(fb: &mut Framebuffer) {
     // Corner vignette for depth.
     let vr = wi * 55 / 100;
     for (vx, vy) in [(0,0),(wi,0),(0,hi),(wi,hi)] { fb.glow(vx, vy, vr, 0x03050C, 65); }
+    // Rusty Penguin logo as a ghost watermark — very subtle, bottom-right.
+    draw_ppm_watermark(fb, "bin/rp_watermark.ppm", w.saturating_sub(140), h.saturating_sub(140), 120);
 }
 
 /// Scatter stars on a coarse grid using hash2 (used by several night scenes).
@@ -950,9 +1005,12 @@ fn draw_scene_static_v(fb: &mut Framebuffer, variant: u8) {
     fb.glow(cx, hero_cy - 18, w as i32 * 18 / 100, 0x21333A, 54);
     fb.glow(cx - w as i32 * 12 / 100, hero_cy + 8, w as i32 * 10 / 100, 0x1E3A36, 36);
     fb.glow(cx + w as i32 * 13 / 100, hero_cy - 52, w as i32 * 9 / 100, 0x4A3B25, 34);
-    fb.glow(cx, hero_cy - 64, 72, 0x3E3826, 82);
-    fb.glow(cx, hero_cy - 64, 30, ACCENT_CREAM, 64);
-    fb.draw_star8(cx, hero_cy - 64, 28, ACCENT_CREAM);
+    fb.glow(cx, hero_cy - 64, 72, 0x0A2A3A, 82);
+    fb.glow(cx, hero_cy - 64, 30, TEAL, 64);
+    // Try to render the real dingir logo; fall back to drawn star.
+    if !draw_ppm_icon_centered(fb, "bin/dingir.ppm", cx, hero_cy - 64, 48) {
+        fb.draw_star8(cx, hero_cy - 64, 28, TEAL);
+    }
     fb.fill_rect_s(cx - 92, hero_cy - 52, 184, 1, 0x736C54);
     // Title in the smooth AA display font. "Rusty " white + "Penguin" green.
     let w1 = Framebuffer::aa_w("Rusty ", crate::fb::AA_L);
@@ -991,9 +1049,10 @@ fn draw_scene_static_v(fb: &mut Framebuffer, variant: u8) {
     fb.fill_rounded_rect_glass(mbx, mby, mbw, PANEL_H - 14, 12, 0x303940, 202);
     draw_round_border(fb, mbx, mby, mbw, PANEL_H - 14, 12, 0x58656C);
     fb.fill_rect_s(mbx + 12, mby + 1, mbw - 24, 1, 0x7B878E);
-    // Dingir star: larger radius so it reads cleanly at dock size
+    // Dingir icon: real logo if available, drawn star fallback. Both in teal.
     let star_cy = mby + (PANEL_H - 14) / 2;
-    fb.draw_star8(mbx + 19, star_cy, 13, ACCENT_CREAM);
+    let icon_drawn = draw_ppm_icon_centered(fb, "bin/dingir.ppm", mbx + 19, star_cy, 24);
+    if !icon_drawn { fb.draw_star8(mbx + 19, star_cy, 13, TEAL); }
     // "Menu" label: AA font, vertically centered, generous left pad
     let label_y = star_cy - 6;
     fb.draw_aa(mbx + 38, label_y, "Menu", 0xE3ECEE, crate::fb::AA_S);
@@ -1192,11 +1251,13 @@ fn draw_topbar(fb: &mut Framebuffer, time: &str, s: &SysStats, ticks: u64, curre
 
 struct Launcher { label: &'static str, cmd: Option<&'static str>, title: &'static str, color: u32 }
 const LAUNCHERS: &[Launcher] = &[
-    Launcher { label: " psh ", cmd: None,               title: "psh - Terminal",   color: GREEN },
-    Launcher { label: "files", cmd: Some("ls -la\n"),   title: "Files",            color: BLUE  },
-    Launcher { label: "nano ", cmd: Some("nano\n"),     title: "Text Editor",      color: AMBER },
-    Launcher { label: " ps  ", cmd: Some("ps\n"),       title: "ps - Processes",   color: 0xA0D0FF },
-    Launcher { label: " ai  ", cmd: Some("ai 32\n"),    title: "ai - Inference",   color: 0xFFD700 },
+    Launcher { label: " psh ", cmd: None,                title: "Terminal",         color: GREEN },
+    Launcher { label: "files", cmd: Some("ls -la\n"),    title: "Files",            color: BLUE  },
+    Launcher { label: "edit ", cmd: Some("nano\n"),      title: "Text Editor",      color: AMBER },
+    Launcher { label: " mem ", cmd: Some("mem\n"),       title: "Memory",           color: TEAL  },
+    Launcher { label: " ps  ", cmd: Some("ps\n"),        title: "Processes",        color: 0xA0D0FF },
+    Launcher { label: " ai  ", cmd: Some("ai 32\n"),     title: "TIS Inference",    color: 0xFFD700 },
+    Launcher { label: "phone", cmd: Some("wine\n"),      title: "RustyPhone",       color: 0x22C55E },
 ];
 
 
@@ -1313,7 +1374,7 @@ fn draw_taskbar_win_btns(fb: &mut Framebuffer, term_wins: &[TermWin], current_de
         let lbl = &short[..max_chars.min(short.len())];
         fb.draw_aa(x + 22, y + 12, lbl, txt, crate::fb::AA_T);
         // focus underline
-        if is_focused { fb.fill_rect_s(x + 9, y + h - 5, w - 18, 2, ACCENT_CREAM); }
+        if is_focused { fb.fill_rect_s(x + 9, y + h - 5, w - 18, 2, TEAL); }
         slot += 1;
     }
 }
@@ -1676,14 +1737,14 @@ fn draw_start_menu(fb: &mut Framebuffer) {
     fb.fill_rounded_rect(x + 3, y + 5, w + 2, h, 16, 0x0A0D10);
     fb.fill_rounded_rect(x + 1, y + 3, w,     h, 14, 0x0C1114);
     fb.fill_rounded_rect_glass(x, y, w, h, 14, bg, 236);
-    fb.fill_rect_s(x + 12, y, w - 24, 2, ACCENT_CREAM);  // warm accent top strip
+    fb.fill_rect_s(x + 12, y, w - 24, 2, TEAL);  // azure accent top strip
     fb.fill_rect_s(x + 12, y + h - 2, w - 24, 1, 0x151A1F);
 
     // ── Header: dingir avatar circle + "Rusty Penguin" + "OS v2.0.0" ────────
     let av_x = x + 14; let av_y = y + 10;
     fb.fill_circle(av_x + 18, av_y + 18, 18, 0x34424A);
     fb.fill_circle(av_x + 18, av_y + 18, 16, 0x232C31);
-    fb.draw_star8(av_x + 18, av_y + 18, 10, ACCENT_CREAM);
+    fb.draw_star8(av_x + 18, av_y + 18, 10, TEAL);
     fb.draw_aa(av_x + 40, av_y + 1, "Rusty Penguin", WHITE, crate::fb::AA_S);
     fb.draw_aa(av_x + 40, av_y + 21, "OS v2.0.0  .  Ternary", 0x6FE18B, crate::fb::AA_T);
 
@@ -1803,7 +1864,7 @@ fn draw_ctx_menu_hover(fb: &mut Framebuffer, mx: i32, my: i32, hover: Option<usi
     fb.fill_rounded_rect_glass(x, y, w, h, 12, CTX_BG, 230);
     // Top accent edge
     fb.fill_rect_s(x + 10, y + 1, w - 20, 1, 0x5E6A72);
-    fb.fill_rect_s(x + 10, y, w - 20, 2, ACCENT_CREAM);
+    fb.fill_rect_s(x + 10, y, w - 20, 2, TEAL);
     fb.fill_rect_s(x + 10, y + h - 2, w - 20, 1, 0x151A1F);
 
     let mut cy = y + CTX_PAD_Y;
@@ -2389,7 +2450,7 @@ fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, 
         let bh = PANEL_H - 14;
         fb.fill_rounded_rect(mbx, mby, mbw, bh, 10, 0x4A5A50);
         let star_cy = mby + bh / 2;
-        fb.draw_star8(mbx + 19, star_cy, 13, ACCENT_CREAM);
+        fb.draw_star8(mbx + 19, star_cy, 13, TEAL);
         fb.draw_aa(mbx + 38, star_cy - 6, "Menu", GREEN, crate::fb::AA_S);
         // Active indicator: solid green line at very bottom of button
         fb.fill_rect_s(mbx + 14, mby + bh - 3, mbw - 28, 3, GREEN);

@@ -338,6 +338,12 @@ if [ -f "$DESKTOP_METAL_ELF" ]; then
     cp "$DESKTOP_METAL_ELF" "$BARE_INITRAMFS_DIR/bin/desktop"
     echo "[build]   + bin/desktop (desktop-metal)"
 fi
+# Bundle visual assets (PPM images used by the desktop compositor).
+if [ -f "$REPO_ROOT/iso/data/dingir.ppm" ]; then
+    cp "$REPO_ROOT/iso/data/dingir.ppm"      "$BARE_INITRAMFS_DIR/bin/dingir.ppm"
+    cp "$REPO_ROOT/iso/data/rp_watermark.ppm" "$BARE_INITRAMFS_DIR/bin/rp_watermark.ppm"
+    echo "[build]   + bin/dingir.ppm + bin/rp_watermark.ppm"
+fi
 # Bundle fbDOOM + shared libs so the bare-metal kernel can run real DOOM
 # from the desktop dock (Linux ABI exec path, no GRUB reboot required).
 DOOM_ASSETS="$ISO_DIR/doom-assets"

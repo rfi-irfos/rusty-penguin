@@ -5260,6 +5260,140 @@ impl App for RustyPhone {
         }
     }
 
+    fn on_mouse(&mut self, x: i32, y: i32, w: u32, h: u32, buttons: u8) {
+        if buttons & 0x01 == 0 { return; }
+        let tab_h = 28i32;
+
+        // Tab bar click.
+        if y < tab_h {
+            let tab_w = w as i32 / 3;
+            let col = (x / tab_w).clamp(0, 2);
+            self.tab = match col { 0 => PhoneTab::Dialer, 1 => PhoneTab::Recent, _ => PhoneTab::Account };
+            self.dirty = true;
+            return;
+        }
+
+        // Content-area click (y relative to content start).
+        let cy = y - tab_h - 2;
+        let content_h = (h as i32 - tab_h - 2).max(1) as u32;
+
+        match self.tab {
+            PhoneTab::Dialer => {
+                let portrait = w <= 340;
+                let pad = if portrait { 6i32 } else { 4i32 };
+                let disp_h = if portrait { 64i32 } else { 52i32 };
+                let key_rows = 4i32;
+                let key_cols = 3i32;
+                let avail_w = w as i32 - pad * (key_cols + 1);
+                let avail_h = content_h as i32 - disp_h - pad * (key_rows + 3) - 40;
+                let kw = avail_w / key_cols;
+                let kh = (avail_h / (key_rows + 1)).min(if portrait { 56 } else { 42 });
+                let grid_y = disp_h + pad;
+
+                // Key grid (rows 0-3)
+                let local_x = x - pad;
+                let local_y = cy - grid_y - pad;
+                if local_x >= 0 && local_y >= 0 {
+                    let col = local_x / (kw + pad);
+                    let row = local_y / (kh + pad);
+                    if col < key_cols && row < key_rows {
+                        if local_x % (kw + pad) < kw && local_y % (kh + pad) < kh {
+                            let keys: [u8; 12] = [b'1',b'2',b'3',b'4',b'5',b'6',b'7',b'8',b'9',b'*',b'0',b'#'];
+                            let idx = (row * key_cols + col) as usize;
+                            self.push_digit(keys[idx]);
+                            return;
+                        }
+                    }
+                }
+
+                // Action row
+                let action_y = grid_y + key_rows * (kh + pad) + pad;
+                if cy >= action_y && cy < action_y + kh {
+                    let lx = x - pad;
+                    let col = lx / (kw + pad);
+                    match col {
+                        0 => { if self.number_len > 0 { self.number_len -= 1; self.dirty = true; } }
+                        1 => {
+                            if self.call_state == CallState::Idle || self.call_state == CallState::Ended {
+                                self.dial(self.last_tick);
+                            } else {
+                                self.end_call();
+                            }
+                        }
+                        2 => { self.muted = !self.muted; self.dirty = true; }
+                        _ => {}
+                    }
+                }
+            }
+            PhoneTab::Recent => {
+                // Recall: click a recent-call row.
+                if self.recent_count > 0 {
+                    let row = (cy - 32) / 28;
+                    let count = self.recent_count.min(8) as i32;
+                    if row >= 0 && row < count {
+                        let slot = (self.recent_count - 1 - row as usize) % 8;
+                        let n = self.recent_len[slot];
+                        self.number[..n].copy_from_slice(&self.recent[slot][..n]);
+                        self.number_len = n;
+                        self.tab = PhoneTab::Dialer;
+                        self.dirty = true;
+                    }
+                }
+            }
+            PhoneTab::Account => {
+                // Verify flow buttons.
+                match self.verify_state {
+                    VerifyState::Idle | VerifyState::Failed => {
+                        // "Send Code" button area ~y=74..96
+                        if cy >= 42 && cy < 100 {
+                            self.verify_state = VerifyState::EnterNumber;
+                            self.verify_number_len = 0;
+                            self.dirty = true;
+                        }
+                    }
+                    VerifyState::EnterNumber => {
+                        if cy >= 74 && cy < 96 {
+                            if self.verify_number_len > 4 {
+                                let code = Self::gen_code(self.last_tick);
+                                self.verify_code_sent = code;
+                                self.verify_state = VerifyState::EnterCode;
+                                self.verify_code_len = 0;
+                                self.dirty = true;
+                            }
+                        }
+                    }
+                    VerifyState::EnterCode => {
+                        if cy >= 94 && cy < 116 {
+                            if self.verify_code_len == 6
+                                && &self.verify_code_input[..6] == &self.verify_code_sent[..] {
+                                self.verify_state = VerifyState::Verified;
+                                self.sip_registered = true;
+                            } else {
+                                self.verify_state = VerifyState::Failed;
+                            }
+                            self.dirty = true;
+                        }
+                    }
+                    VerifyState::Failed => {
+                        if cy >= 62 && cy < 84 {
+                            self.verify_state = VerifyState::EnterNumber;
+                            self.verify_number_len = 0;
+                            self.verify_code_len = 0;
+                            self.dirty = true;
+                        }
+                    }
+                    _ => {}
+                }
+                // SIP Register button ~y=sip_y+100..122 (sip_y=140)
+                let sip_btn_y = 140 + 100;
+                if cy >= sip_btn_y && cy < sip_btn_y + 22 {
+                    self.sip_registered = !self.sip_registered;
+                    self.dirty = true;
+                }
+            }
+        }
+    }
+
     fn wants_close(&self) -> bool { self.wants_close }
     fn title(&self) -> &str { "RustyPhone" }
 }
