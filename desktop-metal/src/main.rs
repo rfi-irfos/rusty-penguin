@@ -2520,12 +2520,17 @@ fn open_browser(w: i32, h: i32, n: usize) -> Option<TermWin> {
                 .max(left_margin)
                 .min(w - wm::WINDOW_W);
             let wy = ((h - wm::WINDOW_H - 28) / 2 + off).max(TOPBAR_H as i32).min(h - wm::WINDOW_H - 28);
-            let mut win = wm::Window::new(wx, wy, "Web");
-            // Browser wants a roomier page than the default terminal-sized window.
-            let bw = 620.min(w - 90); let bh = 460.min(h - 28 - TOPBAR_H as i32);
+            let mut win = wm::Window::new(wx, wy, "PinguBrowser");
+            // PinguBrowser opens at a near-full-HD canvas — a real browsing surface,
+            // not the terminal-sized default. Clamp to the usable desktop.
+            let usable_h = h - 28 - TOPBAR_H as i32;
+            let bw = 1280.min(w - 90); let bh = 820.min(usable_h);
             win.w = bw; win.h = bh;
             win.restore_w = bw; win.restore_h = bh;
-            win.x = win.x.min(w - bw - 8).max(75);
+            // Center it on the usable area.
+            win.x = ((w - bw) / 2).max(75).min(w - bw - 8);
+            win.y = (TOPBAR_H as i32 + (usable_h - bh) / 2).max(TOPBAR_H as i32);
+            win.restore_x = win.x; win.restore_y = win.y;
             Some(TermWin {
                 win,
                 term: t,

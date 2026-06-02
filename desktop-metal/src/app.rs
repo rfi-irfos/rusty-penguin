@@ -1917,16 +1917,16 @@ struct BrLine { kind: u8, text: &'static str, link: i32 }
 struct BrPage { url: &'static str, title: &'static str, lines: &'static [BrLine] }
 
 const PAGE_HOME: &[BrLine] = &[
-    BrLine { kind: K_H1,   text: "Rusty Penguin",                                      link: -1 },
-    BrLine { kind: K_NOTE, text: "Pure-Rust OS . ternary logic . RFI-IRFOS",          link: -1 },
+    BrLine { kind: K_H1,   text: "PinguBrowser",                                       link: -1 },
+    BrLine { kind: K_NOTE, text: "Pure-Rust reader browser . from-scratch TLS . RFI-IRFOS", link: -1 },
     BrLine { kind: K_SPACE,text: "",                                                   link: -1 },
-    BrLine { kind: K_P,    text: "Type a hostname in the address bar and press Enter", link: -1 },
-    BrLine { kind: K_P,    text: "to browse the live web over our TCP/IP stack.",      link: -1 },
+    BrLine { kind: K_P,    text: "Type a hostname to visit it, or type words to search",link: -1 },
+    BrLine { kind: K_P,    text: "Google - all over our own TCP/IP + TLS 1.3 stack.",  link: -1 },
     BrLine { kind: K_SPACE,text: "",                                                   link: -1 },
     BrLine { kind: K_H2,   text: "Bookmarks",                                          link: -1 },
     BrLine { kind: K_LINK, text: "About this OS",                                      link: 1 },
     BrLine { kind: K_LINK, text: "The ternary case",                                   link: 2 },
-    BrLine { kind: K_LINK, text: "When does the live web work?",                       link: 3 },
+    BrLine { kind: K_LINK, text: "How the live web works",                             link: 3 },
 ];
 
 const PAGE_ABOUT: &[BrLine] = &[
@@ -2406,8 +2406,27 @@ impl Browser {
         }
         self.mode = BrMode::Loading;
         self.dirty = true;
+        // Type-to-search: if the address bar holds words rather than a host
+        // (has a space, or has no dot and no scheme), search Google over TLS.
+        let is_scheme = url.starts_with(b"http://") || url.starts_with(b"https://");
+        let has_space = url.contains(&b' ');
+        let has_dot   = url.contains(&b'.');
+        let target: alloc::vec::Vec<u8> = if !is_scheme && (has_space || !has_dot) {
+            let mut q: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
+            q.extend_from_slice(b"https://www.google.com/search?q=");
+            for &c in url {
+                match c {
+                    b' ' => q.push(b'+'),
+                    b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => q.push(c),
+                    _ => q.extend_from_slice(alloc::format!("%{:02X}", c).as_bytes()),
+                }
+            }
+            q
+        } else {
+            url.to_vec()
+        };
         let mut buf = alloc::vec![0u8; FETCH_BUF];
-        let n = unsafe { sys_http_get_raw(url, &mut buf) };
+        let n = unsafe { sys_http_get_raw(&target, &mut buf) };
         if n == 0 {
             self.mode = BrMode::Err;
             self.security = Security::None;
@@ -2501,8 +2520,10 @@ impl App for Browser {
         let ph   = h.saturating_sub(BR_TOOLBAR_H + 1);
         let pw   = w;
         fb.fill_rect(x, py0, pw, ph, 0xF7F5F0);  // off-white paper
-        let lx   = x as i32 + 28;
-        let rw   = pw as i32 - 56;                // available content width
+        // Readable centered column — on a full-HD canvas, full-width lines are
+        // unreadable, so cap the text measure (~900px) and center it on the page.
+        let rw   = (pw as i32 - 56).min(900);
+        let lx   = x as i32 + (pw as i32 - rw) / 2;
 
         match self.mode {
             BrMode::Static => {
@@ -2722,7 +2743,7 @@ impl App for Browser {
     fn wants_close(&self) -> bool { self.wants_close }
     fn title(&self) -> &str {
         // Show the live page's <title> in the window chrome when we have one.
-        if self.mode == BrMode::Live && !self.title.is_empty() { &self.title } else { "Web" }
+        if self.mode == BrMode::Live && !self.title.is_empty() { &self.title } else { "PinguBrowser" }
     }
 }
 

@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented here.
 
+## [3.7.0] — 2026-06-02 — PinguBrowser (rebrand + type-to-Google + full-HD)
+
+### Changed — the native browser is now PinguBrowser
+- **Rebrand:** window title + home page → "PinguBrowser" (pure-Rust reader
+  browser over our own TCP/IP + TLS 1.3).
+- **Type-to-Google:** if the address bar holds words (a space, or no dot/scheme)
+  it searches Google over TLS (`https://www.google.com/search?q=...`,
+  URL-encoded) instead of erroring — so "checking Google" is one line.
+- **Full-HD canvas:** opens at up to 1280×820 (clamped to the desktop), centered,
+  instead of the small terminal-sized default.
+- **Readable column:** text measure capped at ~900px and centered, so full-HD
+  lines stay readable instead of stretching edge-to-edge.
+
+Honest scope: PinguBrowser is a reader browser — it renders a page's text,
+links and structure over real TLS (and you can read + click Google results),
+but it has no JS/CSS engine yet, so it is not a Chrome-pixel match. The
+from-scratch ternary CSS + JS engines are being built as separate bricks.
+
 ## [3.6.0] — 2026-06-02 — RustyPhone Messages (SMS + RCS chat)
 
 ### Added — Messages tab in RustyPhone
