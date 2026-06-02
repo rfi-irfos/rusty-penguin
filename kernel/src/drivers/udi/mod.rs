@@ -31,3 +31,12 @@ pub fn register_driver(driver: &'static dyn UniversalDriver) {
         }
     }
 }
+
+/// Dynamic probe: Called by ACPI/PCI discovery to load drivers on-the-fly.
+pub fn probe_device(vendor: u16, device: u16) {
+    crate::serial::write_str("  [udi] Probing device: ");
+    crate::serial::write_hex_u32(vendor as u32);
+    crate::serial::write_str(":");
+    crate::serial::write_hex_u32(device as u32);
+    crate::serial::write_str("\n");
+}

@@ -72,6 +72,9 @@ pub fn find(vendor: u16, device_id: u16) -> Option<(u8, u8, u8)> {
         for dev in 0u8..32 {
             for func in 0u8..8 {
                 let (v, d) = vendor_device(bus, dev, func);
+                if v != 0xFFFF {
+                    crate::drivers::udi::probe_device(v, d);
+                }
                 if v == vendor && d == device_id { return Some((bus, dev, func)); }
                 if func == 0 {
                     // Check multi-function bit (header type bit 7)
