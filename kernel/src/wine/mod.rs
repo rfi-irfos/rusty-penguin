@@ -135,6 +135,16 @@ pub fn syscall_handler(nr: u64, _a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64
     serial::write_str("\n");
     
     match nr {
+        // NtYieldExecution
+        0x01 => {
+            crate::sched::yield_();
+            0
+        }
+        // NtWaitForSingleObject stub
+        0x04 => {
+            serial::write_str("  [wine] NtWaitForSingleObject stub\n");
+            0 // STATUS_SUCCESS
+        }
         0x2c => {
             serial::write_str("  [wine] NtTerminateProcess\n");
             loop { unsafe { core::arch::asm!("hlt"); } }
