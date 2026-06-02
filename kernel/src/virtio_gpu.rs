@@ -68,6 +68,13 @@ static mut COMMON: u64 = 0; // virtio_pci_common_cfg MMIO base
 static mut NOTIFY_BASE: u64 = 0; // notify BAR base + cap offset
 static mut NOTIFY_MUL: u32 = 0; // notify_off_multiplier
 static mut QUEUE_NOTIFY_OFF: u16 = 0; // controlq's notify offset
+static mut DEVICE_CFG: u64 = 0; // virtio_gpu_config MMIO base (device-specific cfg)
+// VIRTIO_GPU_F_VIRGL (feature bit 0): the device can do 3D (virgl). Set during
+// bring-up. The host only offers it when QEMU is `virtio-gpu-gl` on a GL-capable
+// display backend (egl-headless/gtk gl=on) with virglrenderer — i.e. it lights up
+// exactly when real 3D acceleration is available to build on.
+static mut VIRGL_3D: bool = false;
+static mut NUM_CAPSETS: u32 = 0; // virtio_gpu_config.num_capsets (>0 ⇒ host virgl live)
 static mut AVAIL_IDX: u16 = 0; // our shadow of avail.idx
 static mut DISP_W: u32 = 0;
 static mut DISP_H: u32 = 0;
@@ -181,7 +188,8 @@ unsafe fn map_caps(bus: u8, dev: u8, func: u8) -> Option<(u64, u64, u32)> {
                     notify = addr;
                     notify_mul = crate::pci::read32(bus, dev, func, cap + 16);
                 }
-                VIRTIO_PCI_CAP_ISR_CFG | VIRTIO_PCI_CAP_DEVICE_CFG => {}
+                VIRTIO_PCI_CAP_DEVICE_CFG => DEVICE_CFG = addr,
+                VIRTIO_PCI_CAP_ISR_CFG => {}
                 _ => {}
             }
         }
@@ -225,12 +233,19 @@ unsafe fn bring_up(bus: u8, dev: u8, func: u8) -> bool {
     cc_w8(DEVICE_STATUS, S_ACKNOWLEDGE | S_DRIVER);
 
     // Negotiate features: we only require VIRTIO_F_VERSION_1 (feature bit 32).
+    // Word 0 carries the GPU-specific bits; bit 0 = VIRTIO_GPU_F_VIRGL (3D).
+    cc_w32(DEVICE_FEATURE_SELECT, 0);
+    let feat_lo = cc_r32(DEVICE_FEATURE);
     cc_w32(DEVICE_FEATURE_SELECT, 1);
     let feat_hi = cc_r32(DEVICE_FEATURE);
+    VIRGL_3D = feat_lo & 0x1 != 0; // VIRTIO_GPU_F_VIRGL offered by the device
     cc_w32(DRIVER_FEATURE_SELECT, 0);
     cc_w32(DRIVER_FEATURE, 0);
     cc_w32(DRIVER_FEATURE_SELECT, 1);
     cc_w32(DRIVER_FEATURE, feat_hi & 0x1); // accept only VERSION_1 (bit 0 of word 1)
+    // NB: we don't *negotiate* VIRGL yet (that would commit us to the 3D command
+    // path); detecting it + reading the host capset count is the foundational
+    // brick — it proves a real 3D-capable GPU is present to build virgl on.
 
     cc_w8(DEVICE_STATUS, S_ACKNOWLEDGE | S_DRIVER | S_FEATURES_OK);
     if cc_r8(DEVICE_STATUS) & S_FEATURES_OK == 0 {
@@ -264,6 +279,20 @@ unsafe fn bring_up(bus: u8, dev: u8, func: u8) -> bool {
     ser("  [virtio-gpu] transport up — controlq size ");
     ser_dec(qsize as u32);
     ser("\n");
+
+    // 3D capability (item-6 foundation): read num_capsets from the device config
+    // (virtio_gpu_config.num_capsets @ +12). It's non-zero only when the host's
+    // virglrenderer is live, so VIRGL-offered + capsets>0 = real 3D to build on.
+    if DEVICE_CFG != 0 {
+        NUM_CAPSETS = read_volatile((DEVICE_CFG + 12) as *const u32);
+    }
+    if VIRGL_3D {
+        ser("  [virtio-gpu] VIRGL 3D offered by device — host capsets ");
+        ser_dec(NUM_CAPSETS);
+        ser(" (3D-accel transport present; virgl command path is future work)\n");
+    } else {
+        ser("  [virtio-gpu] no VIRGL — 2D only (plain virtio-gpu / no host GL)\n");
+    }
     true
 }
 
@@ -512,6 +541,11 @@ pub fn init() -> bool {
 
 pub fn is_ready() -> bool {
     unsafe { READY }
+}
+/// True if the GPU offers VIRGL 3D acceleration (host virglrenderer present).
+/// The foundation a future virgl command path builds on; 2D works regardless.
+pub fn has_3d() -> bool {
+    unsafe { VIRGL_3D && NUM_CAPSETS > 0 }
 }
 pub fn display_dims() -> (u32, u32) {
     unsafe { (DISP_W, DISP_H) }
