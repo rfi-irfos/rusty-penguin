@@ -349,3 +349,7 @@ log for the whole stack, not just this OS).
 ## License
 
 MIT — see workspace `Cargo.toml`.
+
+## Contributors
+
+Built by the RFI-IRFOS core team — see [CONTRIBUTORS.md](CONTRIBUTORS.md).
