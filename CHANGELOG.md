@@ -4,6 +4,20 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+### Added — WiFi: WPA2 authentication core (PSK/PMK/PTK), host + bare-metal verified (2026-06-01)
+
+- The hardware-independent half of bare-metal WiFi. `kernel/src/wpa2.rs` (pure
+  `core`, no alloc, host-testable): SHA-1, HMAC-SHA1, PBKDF2-HMAC-SHA1,
+  `wpa_passphrase_to_psk` (PMK), and the IEEE 802.11i PRF + `ptk()` pairwise key
+  expansion (KCK/KEK/TK).
+- Verified against published vectors, no self-graded numbers: SHA-1 (FIPS 180-1),
+  HMAC-SHA1 (RFC 2202), PBKDF2 (RFC 6070 c=1/2/4096), the WPA PMK from IEEE
+  802.11i §H.4 (`password`/`IEEE` → `f42c…a12e`), and PTK determinism + nonce-
+  dependence. Host: `rustc -O tools/wpa2_test.rs`; boot: QEMU serial
+  `[wifi: WPA2 auth core OK (PMK/PTK vectors verified)]`.
+- Remaining for a real association: the radio MMIO/firmware bring-up + the EAPOL
+  4-way handshake state machine wired to the driver (needs real Intel hardware).
+
 ### Added — Power: software brightness control (Quick Settings slider + boot default) (2026-06-01)
 
 - A real, usable brightness control that works on ANY panel — including those with
