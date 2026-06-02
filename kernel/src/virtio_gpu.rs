@@ -44,6 +44,11 @@ const VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D: u32 = 0x0105;
 const VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING: u32 = 0x0106;
 const VIRTIO_GPU_RESP_OK_NODATA: u32 = 0x1100;
 const VIRTIO_GPU_RESP_OK_DISPLAY_INFO: u32 = 0x1101;
+const VIRTIO_GPU_RESP_OK_CAPSET_INFO: u32 = 0x1102;
+// virgl (3D) control commands — only valid once VIRTIO_GPU_F_VIRGL is negotiated.
+const VIRTIO_GPU_CMD_GET_CAPSET_INFO: u32 = 0x0108;
+const VIRTIO_GPU_CMD_CTX_CREATE: u32 = 0x0200;
+const VIRTIO_GPU_CMD_CTX_DESTROY: u32 = 0x0201;
 const VIRTIO_GPU_FORMAT_B8G8R8X8: u32 = 2; // matches the desktop's 0x00RRGGBB pixels
 
 // The scanout resource and its backing. Backing lives in the low identity-mapped
@@ -75,6 +80,16 @@ static mut DEVICE_CFG: u64 = 0; // virtio_gpu_config MMIO base (device-specific 
 // exactly when real 3D acceleration is available to build on.
 static mut VIRGL_3D: bool = false;
 static mut NUM_CAPSETS: u32 = 0; // virtio_gpu_config.num_capsets (>0 ⇒ host virgl live)
+// When set (via the `virgltest` boot flag, before init), bring-up NEGOTIATES
+// VIRTIO_GPU_F_VIRGL and runs the 3D control-path probe (capset query + a 3D
+// context create/destroy). Off by default so the normal 2D desktop path is
+// byte-for-byte unchanged.
+static mut WANT_VIRGL: bool = false;
+
+/// Opt into the virgl 3D control-path probe at bring-up. Call BEFORE `init()`.
+pub fn enable_virgl_test() {
+    unsafe { WANT_VIRGL = true; }
+}
 static mut AVAIL_IDX: u16 = 0; // our shadow of avail.idx
 static mut DISP_W: u32 = 0;
 static mut DISP_H: u32 = 0;
@@ -239,13 +254,13 @@ unsafe fn bring_up(bus: u8, dev: u8, func: u8) -> bool {
     cc_w32(DEVICE_FEATURE_SELECT, 1);
     let feat_hi = cc_r32(DEVICE_FEATURE);
     VIRGL_3D = feat_lo & 0x1 != 0; // VIRTIO_GPU_F_VIRGL offered by the device
+    // Accept VIRGL (word-0 bit 0) only when the virgltest probe asked for it AND
+    // the device offers it; otherwise word 0 stays 0 (2D-only, the default).
+    let drv_lo = if WANT_VIRGL && VIRGL_3D { feat_lo & 0x1 } else { 0 };
     cc_w32(DRIVER_FEATURE_SELECT, 0);
-    cc_w32(DRIVER_FEATURE, 0);
+    cc_w32(DRIVER_FEATURE, drv_lo);
     cc_w32(DRIVER_FEATURE_SELECT, 1);
-    cc_w32(DRIVER_FEATURE, feat_hi & 0x1); // accept only VERSION_1 (bit 0 of word 1)
-    // NB: we don't *negotiate* VIRGL yet (that would commit us to the 3D command
-    // path); detecting it + reading the host capset count is the foundational
-    // brick — it proves a real 3D-capable GPU is present to build virgl on.
+    cc_w32(DRIVER_FEATURE, feat_hi & 0x1); // accept VERSION_1 (bit 0 of word 1)
 
     cc_w8(DEVICE_STATUS, S_ACKNOWLEDGE | S_DRIVER | S_FEATURES_OK);
     if cc_r8(DEVICE_STATUS) & S_FEATURES_OK == 0 {
@@ -289,11 +304,77 @@ unsafe fn bring_up(bus: u8, dev: u8, func: u8) -> bool {
     if VIRGL_3D {
         ser("  [virtio-gpu] VIRGL 3D offered by device — host capsets ");
         ser_dec(NUM_CAPSETS);
-        ser(" (3D-accel transport present; virgl command path is future work)\n");
+        if WANT_VIRGL {
+            ser(" (F_VIRGL negotiated)\n");
+            virgl_probe();
+        } else {
+            ser(" (3D-accel transport present; pass `virgltest` to negotiate)\n");
+        }
     } else {
         ser("  [virtio-gpu] no VIRGL — 2D only (plain virtio-gpu / no host GL)\n");
     }
     true
+}
+
+/// Exercise the virgl 3D CONTROL path (not 3D rendering yet): query the host's
+/// capability set, then create and destroy a 3D context. Both round-trip through
+/// virglrenderer on the host, so success proves the 3D command channel — the
+/// transport every later virgl brick (RESOURCE_CREATE_3D, SUBMIT_3D, …) rides on.
+unsafe fn virgl_probe() {
+    // 1. GET_CAPSET_INFO(index 0): virtio_gpu_get_capset_info {hdr(24); index u32; pad u32}
+    zero(REQ_PHYS, 32);
+    zero(RESP_PHYS, 64);
+    write_volatile(REQ_PHYS as *mut u32, VIRTIO_GPU_CMD_GET_CAPSET_INFO);
+    write_volatile((REQ_PHYS + 24) as *mut u32, 0u32); // capset_index 0
+    submit(32, 40);
+    let resp = RESP_PHYS as *const u8;
+    let rtype = read_volatile(resp as *const u32);
+    if rtype == VIRTIO_GPU_RESP_OK_CAPSET_INFO {
+        let id = read_volatile(resp.add(24) as *const u32);       // 1=VIRGL, 2=VIRGL2
+        let ver = read_volatile(resp.add(28) as *const u32);
+        let size = read_volatile(resp.add(32) as *const u32);
+        ser("  [virgl] capset 0: id ");
+        ser_dec(id);
+        ser(" max-version ");
+        ser_dec(ver);
+        ser(" max-size ");
+        ser_dec(size);
+        ser("\n");
+    } else {
+        ser("  [virgl] GET_CAPSET_INFO unexpected resp 0x");
+        crate::serial::write_hex_u32(rtype);
+        ser("\n");
+        return;
+    }
+
+    // 2. CTX_CREATE(ctx_id 1): virtio_gpu_ctx_create {hdr(24); nlen u32; ctx_init u32; name[64]}
+    zero(REQ_PHYS, 96);
+    zero(RESP_PHYS, 64);
+    write_volatile(REQ_PHYS as *mut u32, VIRTIO_GPU_CMD_CTX_CREATE);
+    write_volatile((REQ_PHYS + 16) as *mut u32, 1u32); // hdr.ctx_id = 1
+    let name = b"rustypenguin";
+    write_volatile((REQ_PHYS + 24) as *mut u32, name.len() as u32); // nlen
+    for (i, &c) in name.iter().enumerate() {
+        write_volatile((REQ_PHYS + 32 + i as u64) as *mut u8, c);
+    }
+    submit(96, 24);
+    let r2 = read_volatile(RESP_PHYS as *const u32);
+    if r2 == VIRTIO_GPU_RESP_OK_NODATA {
+        ser("  [virgl] 3D context 1 created (CTX_CREATE OK) — 3D control path live\n");
+    } else {
+        ser("  [virgl] CTX_CREATE unexpected resp 0x");
+        crate::serial::write_hex_u32(r2);
+        ser("\n");
+        return;
+    }
+
+    // 3. CTX_DESTROY(ctx_id 1): clean up — just the hdr with ctx_id set.
+    zero(REQ_PHYS, 24);
+    zero(RESP_PHYS, 64);
+    write_volatile(REQ_PHYS as *mut u32, VIRTIO_GPU_CMD_CTX_DESTROY);
+    write_volatile((REQ_PHYS + 16) as *mut u32, 1u32);
+    submit(24, 24);
+    ser("  [virgl] 3D context 1 destroyed — virgl control-path probe PASSED\n");
 }
 
 /// Submit a two-descriptor command (request → device, response ← device) on the

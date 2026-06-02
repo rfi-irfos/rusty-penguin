@@ -468,6 +468,11 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
     // virtio-gpu — from-scratch GPU driver (brick 1: transport + display query).
     // Additive: the VBE framebuffer stays the live display for now.
     vga::write_str("  [virtio-gpu]\n", vga::Color::Cyan);
+    // `virgltest` → negotiate VIRTIO_GPU_F_VIRGL and probe the 3D control path
+    // (capset query + context create). Off by default (2D path unchanged).
+    if unsafe { mb2_cmdline_contains(mb2, b"virgltest") } {
+        virtio_gpu::enable_virgl_test();
+    }
     if virtio_gpu::init() {
         let (gw, gh) = virtio_gpu::display_dims();
         if gw > 0 {
