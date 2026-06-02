@@ -1161,15 +1161,11 @@ fn draw_desktop_icons(fb: &mut Framebuffer, hover_icon: Option<usize>) {
         let icon = &DESKTOP_ICONS[FAV_IDX[slot]];
         let (x, y, tw, th) = fav_rect(slot, h);
         let hovered = hover_icon == Some(FAV_IDX[slot]);
-        // accent-tinted glass tile with a soft shadow and hairline border.
-        let tile = tint(icon.color, if hovered { 72 } else { 40 });
-        fb.fill_rounded_rect(x + 1, y + 1, tw, th, 13, 0x0A0D10);
-        fb.fill_rounded_rect(x + 2, y + 2, tw - 2, th - 2, 12, 0x06080A);
-        fb.fill_rounded_rect_glass(x, y, tw, th, 13, tile, if hovered { 212 } else { 188 });
-        draw_round_border(fb, x, y, tw, th, 13, if hovered { icon.color } else { PANEL_EDGE });
-        fb.fill_rect_s(x + 10, y + 1, tw - 20, 1, 0x74818A);
-        fb.fill_rect_s(x + 9, y + th - 2, tw - 18, 1, 0x181D22);
-        if hovered { fb.fill_rect_s(x + 10, y + th - 3, tw - 20, 2, icon.color); }
+        // Clean solid colored tile — tint at 110 gives a medium-dark colored
+        // background (≈43% accent + dark base) matching the original icon style.
+        // No glass layers, no sheen lines, no borders — those read as noise at 40px.
+        let bg = tint(icon.color, if hovered { 150 } else { 110 });
+        fb.fill_rounded_rect(x, y, tw, th, 12, bg);
         let isz = icons::ICON_PX as i32;
         fb.draw_icon(x + (tw - isz) / 2, y + (th - isz) / 2, icon.icon, icon.color);
     }
