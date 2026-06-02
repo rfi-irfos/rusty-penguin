@@ -1108,6 +1108,134 @@ fn spawn_linux_static_elf(elf: &[u8]) -> usize {
     }
 }
 
+/// Copy an ELF's PT_LOAD segments into address space `as_` at `bias` (0 for
+/// ET_EXEC, a load base for ET_DYN/PIE), writing each page through the physmap.
+unsafe fn load_segments_into(as_: u64, elf: &[u8], bias: u64, pfw: u64) -> bool {
+    let phoff = rd_u64(elf, 32) as usize;
+    let phnum = rd_u16(elf, 56) as usize;
+    let phent = rd_u16(elf, 54) as usize;
+    for s in 0..phnum {
+        let ph = phoff + s * phent;
+        if ph + 56 > elf.len() || rd_u32(elf, ph) != 1 { continue; } // PT_LOAD
+        let p_off = rd_u64(elf, ph + 8) as usize;
+        let p_va = rd_u64(elf, ph + 16) + bias;
+        let p_fsz = rd_u64(elf, ph + 32) as usize;
+        let p_msz = rd_u64(elf, ph + 40) as usize;
+        let start = p_va & !0xFFF;
+        let end = (p_va + p_msz as u64 + 0xFFF) & !0xFFF;
+        let mut va = start;
+        while va < end {
+            let frame = match crate::pmm::alloc_frame() { Some(f) => f, None => return false };
+            let dst = crate::vmm::phys_to_virt(frame) as *mut u8;
+            core::ptr::write_bytes(dst, 0, 4096);
+            let file_va_end = p_va + p_fsz as u64;
+            let cs = va.max(p_va);
+            let ce = (va + 4096).min(file_va_end);
+            if ce > cs {
+                let src_off = p_off + (cs - p_va) as usize;
+                let dst_off = (cs - va) as usize;
+                let len = (ce - cs) as usize;
+                if src_off + len <= elf.len() {
+                    core::ptr::copy_nonoverlapping(elf.as_ptr().add(src_off), dst.add(dst_off), len);
+                }
+            }
+            if !crate::vmm::map_page_in(as_, va, frame, pfw) { return false; }
+            va += 4096;
+        }
+    }
+    true
+}
+
+/// Load a Linux ELF — static OR dynamic (ET_DYN PIE needing ld.so) — into a fresh
+/// private address space and schedule it as a Linux-ABI task. For a dynamic ELF
+/// the interpreter (ld.so) is loaded too and we jump to IT; ld.so then relocates
+/// the program and mmaps libc from the initrd (the mmap path is now private-AS
+/// aware — see linux.rs). The System V auxv carries AT_BASE (ld.so base) and
+/// AT_ENTRY (the program's real entry). Returns the task index, or 0 on failure.
+/// (windowed-DOOM brick 2b — DOOM is a dynamic PIE.)
+fn spawn_linux_dyn_elf(elf: &[u8]) -> usize {
+    unsafe {
+        if elf.len() < 64 || &elf[0..4] != b"\x7fELF" { return 0; }
+        const INTERP_BASE: u64 = 0x0080_0000; // 8 MiB (matches enter())
+        const PROG_BASE: u64 = 0x0100_0000;   // 16 MiB
+        let prog_bias = if crate::elf::is_dyn(elf) { PROG_BASE } else { 0 };
+        for i in 1..MAX_TASKS {
+            if TASKS[i].used { continue; }
+            let as_ = match crate::vmm::new_address_space_private() { Some(p) => p, None => return 0 };
+            let pfw = crate::vmm::PTE_PRESENT | crate::vmm::PTE_WRITABLE | crate::vmm::PTE_USER;
+
+            if !load_segments_into(as_, elf, prog_bias, pfw) { return 0; }
+            let prog_entry = rd_u64(elf, 24) + prog_bias;
+
+            // Dynamic? Load ld.so and jump to it; it relocates the program + libc.
+            let (rip, at_base, at_entry) = match crate::elf::interp_path(elf) {
+                Some(ipath) => {
+                    let p = if ipath.starts_with(b"/") { &ipath[1..] } else { ipath };
+                    let interp = match crate::ramfs::find(p) { Some(e) => e, None => return 0 };
+                    if !load_segments_into(as_, interp, INTERP_BASE, pfw) { return 0; }
+                    (rd_u64(interp, 24) + INTERP_BASE, INTERP_BASE, prog_entry)
+                }
+                None => (prog_entry, 0, prog_entry),
+            };
+
+            // Stack + System V auxv (in the top stack page, staged via physmap).
+            let stack_top = crate::vmm::USER_STACK_TOP;
+            let pages = crate::vmm::USER_STACK_PAGES as u64;
+            let stack_bottom = stack_top - pages * 4096;
+            let mut top_frame_va = 0u64;
+            let mut sva = stack_bottom;
+            while sva < stack_top {
+                let stk = match crate::pmm::alloc_frame() { Some(f) => f, None => return 0 };
+                let kva = crate::vmm::phys_to_virt(stk);
+                core::ptr::write_bytes(kva as *mut u8, 0, 4096);
+                crate::vmm::map_page_in(as_, sva, stk, pfw);
+                if sva == stack_top - 4096 { top_frame_va = kva; }
+                sva += 4096;
+            }
+            if top_frame_va == 0 { return 0; }
+            let page_lo = stack_top - 4096;
+            let kaddr = |uva: u64| top_frame_va + (uva - page_lo);
+            const AT_NULL: u64 = 0; const AT_PHDR: u64 = 3; const AT_PHENT: u64 = 4;
+            const AT_PHNUM: u64 = 5; const AT_PAGESZ: u64 = 6; const AT_BASE: u64 = 7;
+            const AT_ENTRY: u64 = 9; const AT_RANDOM: u64 = 25;
+            let (phdr, phent_v, phnum_v) = match crate::elf::phdr_info(elf) {
+                Some((v, e, n)) => (v + prog_bias, e, n), None => (0, 56, 0),
+            };
+            let argv0 = b"/bin/linuxapp\0";
+            let argv0_ptr = stack_top - argv0.len() as u64;
+            for (j, &b) in argv0.iter().enumerate() { *((kaddr(argv0_ptr) + j as u64) as *mut u8) = b; }
+            let rand_ptr = (argv0_ptr - 16) & !0xF;
+            let mut x = crate::idt::ticks().wrapping_mul(2862933555777941757).wrapping_add(3037000493);
+            for j in 0..16u64 { x = x.wrapping_mul(6364136223846793005).wrapping_add(1); *((kaddr(rand_ptr) + j) as *mut u8) = (x >> 40) as u8; }
+            let wordv: [u64; 20] = [
+                1, argv0_ptr, 0, 0,             // argc, argv[0], argv NULL, envp NULL
+                AT_PHDR, phdr,   AT_PHENT, phent_v, AT_PHNUM, phnum_v,
+                AT_PAGESZ, 4096, AT_BASE, at_base, AT_ENTRY, at_entry,
+                AT_RANDOM, rand_ptr, AT_NULL, 0,
+            ];
+            let user_rsp = (rand_ptr - (wordv.len() * 8) as u64) & !0xF;
+            let mut wa = user_rsp;
+            for w in wordv.iter() { *(kaddr(wa) as *mut u64) = *w; wa += 8; }
+
+            let base = core::ptr::addr_of_mut!(KSTACKS[i]) as *mut u8;
+            let ktop = ((base.add(KSTACK_SIZE) as u64) & !0xF) as u64;
+            let mut sp = ktop;
+            let push = |sp: &mut u64, v: u64| { *sp -= 8; *(*sp as *mut u64) = v; };
+            push(&mut sp, 0x1b);        // ss
+            push(&mut sp, user_rsp);    // user rsp → argc
+            push(&mut sp, 0x202);       // rflags IF=1
+            push(&mut sp, 0x23);        // cs
+            push(&mut sp, rip);         // rip = ld.so entry (dynamic) or prog entry
+            for _ in 0..15 { push(&mut sp, 0); }
+            TASKS[i] = Task { rsp: sp, used: true, alive: true, cr3: as_ };
+            TASK_LINUX[i] = true;
+            PREEMPTIVE_LINUX = true;
+            return i;
+        }
+        0
+    }
+}
+
 /// `realelf` brick: load two REAL ELF programs (built by `make_test_elf`, tags
 /// 0xE1/0xE2) into separate private address spaces and run them under preemption
 /// with the boot thread. If both tags interleave with the boot thread, the real
@@ -1564,6 +1692,37 @@ pub fn selftest_linuxmmap() -> ! {
         busy_spin();
         n += 1;
         if n % 40 == 0 { write_str("[lxm] boot thread alive (mmap task done, scheduler healthy)\n"); }
+    }
+}
+
+/// `linuxdyn` brick (windowed-DOOM brick 2b) — a DYNAMIC Linux ELF (ET_DYN PIE
+/// needing ld.so + libc) runs as a SCHEDULED process in its own private address
+/// space. ld.so relocates the program and mmaps libc from the initrd, all in the
+/// task's private AS. PASS = the program's own stdout reaches serial (ld.so got it
+/// running) and it exits + is reaped. This is exactly what DOOM (a PIE) needs.
+pub fn selftest_linuxdyn() -> ! {
+    use crate::serial::write_str;
+    write_str("\n[lxd] === linuxdyn: a DYNAMIC Linux ELF (ld.so+libc) as a scheduled process ===\n");
+    let elf = match crate::ramfs::find(b"bin/linuxtest") {
+        Some(e) => e,
+        None => { write_str("[lxd] bin/linuxtest not in initrd\n"); halt(); }
+    };
+    unsafe {
+        core::arch::asm!("cli");
+        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3() };
+        CUR_TASK = 0;
+        TASK_LINUX[0] = false;
+    }
+    let l = spawn_linux_dyn_elf(elf);
+    if l == 0 { write_str("[lxd] spawn_linux_dyn_elf failed (ld.so not in initrd / out of frames?)\n"); halt(); }
+    write_str("[lxd] dynamic binary scheduled; enabling preemption (ld.so output follows)\n");
+    crate::idt::set_timer_vector(irq_timer_preempt as *const () as u64);
+    unsafe { core::arch::asm!("sti"); }
+    let mut n = 0u32;
+    loop {
+        busy_spin();
+        n += 1;
+        if n % 40 == 0 { write_str("[lxd] boot thread alive (scheduler healthy)\n"); }
     }
 }
 

@@ -83,6 +83,10 @@ const MMAP_BASE: u64 = 0x0A00_0000; // 160 MiB
 const MMAP_CAP:  u64 = 0x1000_0000; // 256 MiB
 static mut BRK_CUR:  u64 = BRK_BASE;
 static mut MMAP_CUR: u64 = MMAP_BASE;
+// Highest brk page already backed by a frame (for a scheduled Linux process in a
+// private AS; 0 = none yet). brk extensions map only [BRK_MAPPED, page_up(new)),
+// so a partially-filled page is never re-allocated and its data is never lost.
+static mut BRK_MAPPED: u64 = 0;
 
 // ── Linux stdin key ring (populated by the PS/2 IRQ; served by read(0,…)) ────
 const LKEYS_SZ: usize = 64;
@@ -117,6 +121,7 @@ pub fn reset() {
         LINUX_ABI = false;
         RAW_KBD   = false;
         BRK_CUR   = BRK_BASE;
+        BRK_MAPPED = 0;
         MMAP_CUR  = MMAP_BASE;
         LKEYS_H   = 0;
         LKEYS_T   = 0;
@@ -345,6 +350,27 @@ pub fn syscall(nr: u64, a1: u64, a2: u64, a3: u64) -> u64 {
             if a1 == 0 { return BRK_CUR; }
             if a1 >= BRK_BASE && a1 <= BRK_CAP {
                 if a1 > BRK_CUR {
+                    // A scheduled Linux process lives in its own AS where the heap
+                    // arena isn't identity-mapped: back the newly-needed pages with
+                    // frames. BRK_MAPPED tracks the high-water mark so a partial
+                    // page is never re-allocated (no data loss across extensions).
+                    if crate::sched::is_preemptive_linux() {
+                        let cr3 = crate::vmm::current_cr3();
+                        let pfw = crate::vmm::PTE_PRESENT | crate::vmm::PTE_WRITABLE | crate::vmm::PTE_USER;
+                        let mut va = if BRK_MAPPED == 0 { BRK_BASE } else { BRK_MAPPED };
+                        let end = (a1 + 0xFFF) & !0xFFF;
+                        while va < end {
+                            match crate::pmm::alloc_frame() {
+                                Some(frame) => {
+                                    core::ptr::write_bytes(crate::vmm::phys_to_virt(frame) as *mut u8, 0, 4096);
+                                    crate::vmm::map_page_in(cr3, va, frame, pfw);
+                                }
+                                None => return BRK_CUR,
+                            }
+                            va += 4096;
+                        }
+                        BRK_MAPPED = end;
+                    }
                     core::ptr::write_bytes(BRK_CUR as *mut u8, 0, (a1 - BRK_CUR) as usize);
                 }
                 BRK_CUR = a1; a1
