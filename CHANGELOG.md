@@ -4,6 +4,24 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+### Added — Windowed-DOOM brick 2b: a DYNAMIC Linux ELF (ld.so + libc) as a scheduled process (2026-06-02)
+
+- The hard merge that was blocking windowed DOOM (DOOM is a dynamic PIE).
+  `spawn_linux_dyn_elf` loads the PIE at a bias + the interpreter (ld.so) into a
+  private address space, builds the System V auxv (AT_BASE/AT_ENTRY), and jumps to
+  ld.so, which relocates the program and mmaps libc from the initrd — all in the
+  task's own preemptively-scheduled AS, not the one-way `enter()` path.
+- `brk` now also backs its arena with real frames in a private AS (tracking
+  `BRK_MAPPED` so a partial heap page is never re-allocated). With the earlier
+  `mmap` fix, the two private-AS gaps that `enter()`'s identity map hid are closed.
+  Both gated on `is_preemptive_linux()`; the `enter()` path is unchanged.
+- New `linuxdyn` self-test: brick4-dyn (dynamically-linked glibc) as a scheduled
+  process. QEMU-verified: ld.so relocates + runs it, its glibc `printf` reaches
+  serial, clean reap, scheduler healthy, 0 faults. Regression: the `enter()`
+  dynamic path still runs it (printf + exit 0).
+- Remaining for windowed DOOM: brick 3 redirect the process's `/dev/fb0` to a
+  private surface, brick 4 composite it into a desktop window.
+
 ### Added — Windowed-DOOM brick 2b (foundation): mmap into a private address space (2026-06-02)
 
 - The precise blocker for any *dynamic* Linux process (ld.so mmapping libc, DOOM)

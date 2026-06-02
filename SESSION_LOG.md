@@ -48,11 +48,13 @@ is present (as under QEMU).
   - brick 2a ✅ a real *static* Linux ELF runs as a scheduled process in a private
     AS with a proper auxv stack; clean exit/reap; scheduler healthy (`linuxsched`,
     `133c14d`);
-  - brick 2b ◐ a *dynamic* ELF (ld.so+libc) as a scheduled task — DOOM is a PIE.
-    Foundation done (`ef536be`): `mmap` now backs the arena with real frames in the
-    task's PRIVATE AS (`linuxmmap` self-test, MMAPOK, 0 faults) — the precise
-    blocker for ld.so mmapping libc. Still ahead: MAP_FIXED refinement + ld.so
-    relocation + verifying its other syscalls from a private AS;
+  - brick 2b ✅ a *dynamic* ELF (ld.so+libc) as a scheduled task — DOOM is a PIE.
+    `spawn_linux_dyn_elf` loads PIE+ld.so into a private AS, builds the auxv
+    (AT_BASE/AT_ENTRY), jumps to ld.so → it relocates the program + mmaps libc.
+    Fixed both private-AS gaps `enter()`'s identity map hid (`mmap` `ef536be`,
+    `brk` `a55670c`). `linuxdyn` self-test: brick4-dyn's glibc printf runs
+    scheduled, clean reap, 0 faults; `enter()` path regression-passes. **This is
+    the DOOM-loading path.**;
   - brick 3 ▢ redirect that process's `/dev/fb0` to a private surface;
   - brick 4 ▢ composite the surface into a desktop window (reuses `sys_app_surface`).
 - **5. Power management** — 🟡 ACPI S5 shutdown+reboot ✅; software brightness ✅;
