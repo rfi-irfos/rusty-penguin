@@ -4,6 +4,22 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+### Added — Windowed-DOOM brick 2a: a real static Linux ELF as a SCHEDULED process (2026-06-02)
+
+- A real Linux binary now runs as one of several preemptively-scheduled processes
+  in its own private address space — not via the one-way `enter()` path.
+  `spawn_linux_static_elf` loads an ET_EXEC into a private AS and builds the System
+  V AMD64 initial stack (argc/argv/envp + auxv: AT_PHDR/PHENT/PHNUM/PAGESZ/BASE/
+  ENTRY/RANDOM) the C runtime expects, staged into the top stack frame via physmap.
+- Scheduled Linux exit: a Linux task under the scheduler that calls exit/exit_group
+  is now *reaped* (`sched::exit_current_scheduled` marks it dead; `next_alive` skips
+  it) so the desktop + others keep running, instead of halting the CPU.
+- New `linuxsched` self-test, QEMU-verified: the real static linux-hello ELF runs
+  scheduled, prints its stdout, exits + is reaped, boot thread survives, 0 faults.
+  Regression: the `enter()` Linux path still runs the same ELF (hello + exit 0).
+- Remaining for windowed DOOM: brick 2b dynamic ELF (ld.so+libc, DOOM is a PIE),
+  brick 3 redirect `/dev/fb0` to a private surface, brick 4 composite into a window.
+
 ### Added — Windowed-DOOM brick 1: per-task ABI mode (Linux process + native desktop scheduled together) (2026-06-02)
 
 - The architectural foundation for windowed DOOM. DOOM is a Linux-ABI process; the

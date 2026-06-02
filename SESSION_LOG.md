@@ -45,8 +45,11 @@ is present (as under QEMU).
   not a native one — an earlier note calling it a "mechanical swap" was wrong):
   - brick 1 ✅ per-task ABI mode — a Linux process + the native desktop scheduled
     together, each routing syscalls correctly (`linuxroute`, `9707242`);
-  - brick 2 ▢ load a dynamic Linux ELF (ld.so+libc) into a private AS as a
-    *scheduled* task (today DOOM runs only via the one-way `enter()` path);
+  - brick 2a ✅ a real *static* Linux ELF runs as a scheduled process in a private
+    AS with a proper auxv stack; clean exit/reap; scheduler healthy (`linuxsched`,
+    `133c14d`);
+  - brick 2b ▢ a *dynamic* ELF (ld.so+libc) as a scheduled task — DOOM is a PIE,
+    so this needs ld.so relocation in a private AS (the hardest remaining piece);
   - brick 3 ▢ redirect that process's `/dev/fb0` to a private surface;
   - brick 4 ▢ composite the surface into a desktop window (reuses `sys_app_surface`).
 - **5. Power management** — 🟡 ACPI S5 shutdown+reboot ✅; software brightness ✅;
