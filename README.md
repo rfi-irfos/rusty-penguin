@@ -40,6 +40,14 @@ Built by [RFI-IRFOS](https://github.com/rfi-irfos) as part of the
 [Ternary Intelligence Stack](https://ternlang.com).
 Preinstalled: `albert` · `ternlang` · `albert-cli` · `ternlang-mcp`
 
+> **How it's built (the honest version):** a 5-person lab with heavy AI
+> pair-programming — humans architect and direct, a lot of the code is AI-written
+> under review, and every milestone is verified in QEMU before we claim it. We'd
+> rather credit that than hide it. [`SESSION_LOG.md`](SESSION_LOG.md) tracks what's
+> actually proven versus still open, and the gap table below stays deliberately
+> truthful rather than aspirational. It's a research OS we're trying to grow into a
+> daily driver — not one yet.
+
 ![Rusty Penguin desktop — menu open, native browser on rustypenguin://home, Nebula wallpaper](docs/rusty-penguin-desktop.png)
 
 *The desktop with the start menu open and the native browser on `rustypenguin://home`,
@@ -53,13 +61,18 @@ libc and no Linux kernel underneath.*
 
 ## Why a third state
 
-Binary computers have two states: on and off. Every value, every decision, every
-process is either `1` or `0`.
+The bits in the hardware are binary; the *logic* you build on top of them is a
+design choice. Rusty Penguin builds on **balanced ternary** — digits `-1 / 0 / +1`
+— the number system the Soviet [Setun](https://en.wikipedia.org/wiki/Setun)
+computer ran on in 1958, and which Knuth called *"perhaps the prettiest number
+system of all"* (TAOCP Vol. 2, §4.1). It's a real, well-studied base, not a
+metaphor.
 
-Rusty Penguin treats a third state as real: **dormant**. Not running, not stopped
-— *resting*. A process that hasn't been asked for anything yet is not the same as
-a process that failed. A memory page that hasn't been touched is not dead. A
-neural-network weight of zero should cost nothing to compute.
+What the third digit buys us is that `0` carries meaning: **dormant**. Not
+running, not stopped — *resting*. A process that hasn't been asked for anything
+yet is not the same as a process that failed. A memory page that hasn't been
+touched is not dead. A neural-network weight of zero should cost nothing to
+compute.
 
 Every primitive in this system expresses three states:
 
@@ -76,7 +89,7 @@ the AI runtime all skip dormant work instead of grinding through it.
 
 ## What it is, concretely
 
-A from-scratch x86_64 OS, hand-written in Rust top to bottom:
+A from-scratch x86_64 OS, written in Rust top to bottom:
 
 - **Bootloader handoff → pure-Rust kernel** — Multiboot2, 32-bit → 64-bit long
   mode, physical/virtual memory management, interrupts, a custom syscall ABI,
