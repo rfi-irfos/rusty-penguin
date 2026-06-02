@@ -9,6 +9,7 @@ mod app;
 mod clipboard;
 mod css;
 mod tcss;
+mod tjs;
 mod editor;
 mod fb;
 mod font;
