@@ -301,6 +301,14 @@ const PANEL_EDGE:   u32 = 0x5E6B72;  // panel hairline / top sheen
 const PANEL_R:      i32 = 16;        // panel corner radius
 
 fn panel_top(h: u32) -> i32 { h as i32 - PANEL_BOTTOM - PANEL_H }
+
+// ---- Window snap ────────────────────────────────────────────────────────────
+// Drag a window's titlebar to within SNAP_ZONE px of a screen edge and release
+// to snap it to the left half, right half, or full maximized.
+const SNAP_ZONE: i32 = 20;
+
+#[derive(Copy, Clone, PartialEq)]
+enum SnapSide { Left, Right, Top }
 fn menu_btn_rect(h: u32) -> (i32, i32, i32, i32) { (PANEL_MARGIN + 8, panel_top(h) + 7, MENU_BTN_W, 40) }
 
 // Dock favourites — the mockup pins exactly 5 (Terminal, Files, TIS, Editor,
@@ -1041,6 +1049,17 @@ fn kbd_pill_hit(cx: i32, cy: i32) -> bool {
     w > 0 && cx >= x && cx < x + w && cy >= y && cy < y + hh
 }
 
+// Virtual desktop workspace dot click targets (full-panel-height hit zones for
+// easy clicking). Recorded each draw by draw_topbar.
+const N_DESKTOPS: usize = 4;
+static mut WS_DOT_RECTS: [(i32,i32,i32,i32); N_DESKTOPS] = [(0,0,0,0); N_DESKTOPS];
+fn ws_dot_hit(cx: i32, cy: i32) -> Option<usize> {
+    for (d, &(x, y, w, hh)) in unsafe { WS_DOT_RECTS }.iter().enumerate() {
+        if w > 0 && cx >= x && cx < x + w && cy >= y && cy < y + hh { return Some(d); }
+    }
+    None
+}
+
 // Battery glyph: outline body + nub + a fill bar proportional to charge. When on
 // AC (no battery) we draw a small bolt instead of a fill — a real "how full" symbol.
 fn draw_battery_glyph(fb: &mut Framebuffer, x: i32, y: i32, pct: u32, has_batt: bool, fill: u32) {
@@ -1069,7 +1088,7 @@ fn draw_mem_glyph(fb: &mut Framebuffer, x: i32, y: i32, col: u32) {
     for i in 0..4 { fb.fill_rect_s(x + 2 + i * 3, y + 9, 2, 2, col); } // pins
 }
 
-fn draw_topbar(fb: &mut Framebuffer, time: &str, s: &SysStats, ticks: u64) {
+fn draw_topbar(fb: &mut Framebuffer, time: &str, s: &SysStats, ticks: u64, current_desktop: usize) {
     // Bottom-panel TRAY (right side): keyboard layout · memory · battery · clock.
     // Real system stats with real symbols — no animated cells (the old ternary
     // bus repainted every frame and made the desktop feel laggy). Static content
@@ -1078,7 +1097,7 @@ fn draw_topbar(fb: &mut Framebuffer, time: &str, s: &SysStats, ticks: u64) {
     let ptop = panel_top(h);
     let pr = PANEL_MARGIN + (w as i32 - 2 * PANEL_MARGIN); // panel right edge
     let ty = ptop + 7;
-    let tray_w = 360;
+    let tray_w = 440;  // wider to accommodate workspace dots
     let trx = (pr - tray_w - 6).max(PANEL_MARGIN + 8);
     // Restore the cached glass dock (not an opaque fill) so the bar stays
     // translucent; the tray text/icons are then drawn on top.
@@ -1127,12 +1146,30 @@ fn draw_topbar(fb: &mut Framebuffer, time: &str, s: &SysStats, ticks: u64) {
     draw_mem_glyph(fb, mem_x, cyy + 1, mem_col);
     fb.draw_aa(mem_x + 14 + 5, txt_top, mp_s, mem_col, crate::fb::AA_T);
 
-    // Keyboard layout pill (EN / DE) — clickable to toggle, leftmost in the tray.
+    // Keyboard layout pill (EN / DE) — clickable to toggle.
     let de = unsafe { sys_kbd_layout(0) } == 1;
     let kbl = if de { "DE" } else { "EN" };
     let kb_w = Framebuffer::aa_w(kbl, crate::fb::AA_T);
     let pill_w = kb_w + 16;
+
+    // Workspace dots — 4 small rounded squares, one per virtual desktop.
+    // Drawn to the left of the keyboard pill. Current desktop = lit green; others = dim.
+    const DOT_SZ: i32 = 10;
+    const DOT_GAP: i32 = 5;
+    let ws_group_w = N_DESKTOPS as i32 * DOT_SZ + (N_DESKTOPS as i32 - 1) * DOT_GAP;
+    // keyboard pill sits left of memory; ws dots sit left of keyboard pill
     let pill_x = (mem_x - GAP - pill_w).max(trx + 4);
+    let ws_x = (pill_x - GAP - ws_group_w).max(trx + 4);
+    for d in 0..N_DESKTOPS {
+        let dx = ws_x + d as i32 * (DOT_SZ + DOT_GAP);
+        let active = d == current_desktop;
+        let dot_col = if active { tint(GREEN, 130) } else { 0x2A3540 };
+        fb.fill_rounded_rect(dx, cyy - 1, DOT_SZ, DOT_SZ, 3, dot_col);
+        if active { draw_round_border(fb, dx, cyy - 1, DOT_SZ, DOT_SZ, 3, GREEN); }
+        // Full panel-height hit zone so it's easy to click.
+        unsafe { WS_DOT_RECTS[d] = (dx, ptop, DOT_SZ, PANEL_H); }
+    }
+
     fb.fill_rounded_rect(pill_x, cyy - 2, pill_w, 16, 6, 0x2B343A);
     fb.fill_rect_s(pill_x + 6, cyy - 1, pill_w - 12, 1, 0x6B7A82);
     fb.fill_rect_s(pill_x + 6, cyy + 13, pill_w - 12, 1, 0x171C21);
@@ -1228,21 +1265,28 @@ fn tbwin_rect(_fw: u32, fh: u32, slot: usize) -> (i32, i32, i32, i32) {
     (tasks_start_x(fh) + slot as i32 * 116, panel_top(fh) + 7, 108, 40)
 }
 
-fn draw_taskbar_win_btns(fb: &mut Framebuffer, term_wins: &[TermWin]) {
+fn draw_taskbar_win_btns(fb: &mut Framebuffer, term_wins: &[TermWin], current_desktop: usize) {
     let fw = fb.width; let fh = fb.height;
     let ptop = panel_top(fh);
     let pr = PANEL_MARGIN + (fw as i32 - 2 * PANEL_MARGIN);
-    let tray_left = pr - 346;            // keep clear of the right tray
+    let tray_left = pr - 426;            // wider tray (ws dots added)
     let tx0 = tasks_start_x(fh);
     // Clear the tasks strip each frame (so closed windows leave no ghost) by
     // restoring the cached glass dock — keeps the bar translucent.
     if tray_left > tx0 { fb.restore_bg_rect(tx0.max(0) as u32, (ptop + 7).max(0) as u32, (tray_left - tx0).max(0) as u32, 40); }
 
-    let n = term_wins.len();
-    for (slot, tw) in term_wins.iter().enumerate() {
+    // Only show windows on the current virtual desktop.
+    // The focused window is the last one in `wins` that is on this desktop.
+    let focused_orig_idx = term_wins.iter().enumerate().rev()
+        .find(|(_, tw)| tw.win.desktop == current_desktop)
+        .map(|(i, _)| i);
+
+    let mut slot = 0usize;
+    for (orig_idx, tw) in term_wins.iter().enumerate() {
+        if tw.win.desktop != current_desktop { continue; }
         let (x, y, w, h) = tbwin_rect(fw, fh, slot);
         if x + w > tray_left { break; }  // out of room → stop
-        let is_focused   = slot == n - 1;
+        let is_focused   = Some(orig_idx) == focused_orig_idx;
         let is_minimized = tw.win.minimized;
         let bg     = if is_minimized { 0x262D32u32 } else { 0x343D44u32 };
         let txt    = if is_minimized { 0xAAB3B8u32 } else { WHITE };
@@ -1261,6 +1305,7 @@ fn draw_taskbar_win_btns(fb: &mut Framebuffer, term_wins: &[TermWin]) {
         fb.draw_aa(x + 22, y + 12, lbl, txt, crate::fb::AA_T);
         // focus underline
         if is_focused { fb.fill_rect_s(x + 9, y + h - 5, w - 18, 2, ACCENT_CREAM); }
+        slot += 1;
     }
 }
 
@@ -1284,10 +1329,13 @@ fn draw_taskbar_clock(fb: &mut Framebuffer, time_str: &str) {
     fb.draw_str(x, tb_y + 10, hhmm, WHITE, 0x293137);
 }
 
-fn tbwin_hit(fw: u32, fh: u32, wins: &[TermWin], mx: i32, my: i32) -> Option<usize> {
-    for (slot, _) in wins.iter().enumerate() {
+fn tbwin_hit(fw: u32, fh: u32, wins: &[TermWin], mx: i32, my: i32, current_desktop: usize) -> Option<usize> {
+    let mut slot = 0usize;
+    for (orig_idx, tw) in wins.iter().enumerate() {
+        if tw.win.desktop != current_desktop { continue; }
         let (x, y, w, h) = tbwin_rect(fw, fh, slot);
-        if mx >= x && mx < x + w && my >= y && my < y + h { return Some(slot); }
+        if mx >= x && mx < x + w && my >= y && my < y + h { return Some(orig_idx); }
+        slot += 1;
     }
     None
 }
@@ -2245,9 +2293,30 @@ fn open_minesweeper(w: i32, h: i32, n: usize) -> Option<TermWin> {
     }
 }
 
+// ---- Snap preview overlay ───────────────────────────────────────────────────
+// A semi-transparent green half-screen (or full-screen) rectangle drawn while
+// the user is dragging near a snap zone, showing where the window will land.
+fn draw_snap_preview(fb: &mut Framebuffer, side: SnapSide, topbar_h: i32) {
+    let sw = fb.width as i32; let sh = fb.height as i32;
+    let usable_y = topbar_h;
+    let usable_h = sh - 28 - topbar_h;  // 28 = dock area
+    let (x, y, pw, ph) = match side {
+        SnapSide::Left  => (0,      usable_y, sw / 2,       usable_h),
+        SnapSide::Right => (sw / 2, usable_y, sw - sw / 2,  usable_h),
+        SnapSide::Top   => (0,      usable_y, sw,            usable_h),
+    };
+    let pad = 6;
+    // Soft glow behind the preview rectangle
+    fb.fill_rounded_rect_glass(x + pad, y + pad, pw - 2*pad, ph - 2*pad, 14, 0x1A4A38, 110);
+    // Crisp green outline
+    draw_round_border(fb, x + pad, y + pad, pw - 2*pad, ph - 2*pad, 14, GREEN);
+    // Subtle inner fill so the zone is clearly visible over any wallpaper
+    fb.fill_rounded_rect_glass(x + pad + 1, y + pad + 1, pw - 2*pad - 2, ph - 2*pad - 2, 13, 0x1C3428, 60);
+}
+
 // ---- Full scene recomposite ─────────────────────────────────────────────────
 
-fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, ctx_menu: Option<(i32,i32)>, stats: &SysStats, blink_on: bool, hover_icon: Option<usize>, wallpaper_v: u8) {
+fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, ctx_menu: Option<(i32,i32)>, stats: &SysStats, blink_on: bool, hover_icon: Option<usize>, wallpaper_v: u8, snap_side: Option<SnapSide>, current_desktop: usize) {
     // Static background (gradient + logo + icon dock) is cached: blitting it is
     // far cheaper than recomputing the 1080-row gradient every frame, which is
     // what made dragging a window at 1080p janky. The cache is rebuilt only
@@ -2259,7 +2328,12 @@ fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, 
         fb.snapshot_bg();
     }
     draw_desktop_icons(fb, hover_icon);
-    draw_taskbar_win_btns(fb, wins);
+    draw_taskbar_win_btns(fb, wins, current_desktop);
+    // Snap preview — draw BEFORE windows so the semi-transparent overlay sits
+    // underneath the dragged window and gives clear visual feedback.
+    if let Some(side) = snap_side {
+        draw_snap_preview(fb, side, TOPBAR_H as i32);
+    }
     // Menu button active indicator: green underline + brightened bg when open.
     // Drawn per-frame (not in the cached bg) so it only appears on state change.
     if start_menu {
@@ -2273,10 +2347,14 @@ fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, 
         fb.fill_rect_s(mbx + 14, mby + bh - 3, mbw - 28, 3, GREEN);
     }
     let up = rtc_str();
-    let n = wins.len();
+    // Find the focused index on the current desktop (last non-minimized window there).
+    let focused_idx = wins.iter().enumerate().rev()
+        .find(|(_, tw)| !tw.win.minimized && tw.win.desktop == current_desktop)
+        .map(|(i, _)| i);
     for (i, tw) in wins.iter_mut().enumerate() {
         if tw.win.minimized { continue; }
-        let focused = i == n - 1;
+        if tw.win.desktop != current_desktop { continue; }
+        let focused = Some(i) == focused_idx;
         wm::draw_window(fb, &tw.win, focused);
         let (ox, oy) = wm::content_origin(&tw.win);
         let cw = (tw.win.w - 2).max(0) as u32;
@@ -2294,7 +2372,7 @@ fn recomposite(fb: &mut Framebuffer, wins: &mut Vec<TermWin>, start_menu: bool, 
     }
     if start_menu { draw_start_menu(fb); }
     if let Some((cmx, cmy)) = ctx_menu { draw_ctx_menu(fb, cmx, cmy); }
-    draw_topbar(fb, up.as_str(), stats, sys_ticks());
+    draw_topbar(fb, up.as_str(), stats, sys_ticks(), current_desktop);
     if unsafe { QS_OPEN } { draw_quick_settings(fb); }
     // Dock hover tooltip (drawn last, as an overlay; the cached bg restore on the
     // next recomposite wipes it cleanly). Suppressed while a menu is open.
@@ -2388,7 +2466,7 @@ pub extern "C" fn _start() -> ! {
     let mut stats = sample_stats();
     draw_scene_static_v(&mut fb, wallpaper_variant);
     let up0 = rtc_str();
-    draw_topbar(&mut fb, up0.as_str(), &stats, sys_ticks());
+    draw_topbar(&mut fb, up0.as_str(), &stats, sys_ticks(), 0);
 
     let cbl = (CURSOR_BW * CURSOR_BH) as usize;
     let mut cbuf = vec![BG; cbl];
@@ -2411,12 +2489,15 @@ pub extern "C" fn _start() -> ! {
     let mut ctx_menu: Option<(i32, i32)> = None;
     let mut hover_icon: Option<usize> = None;
     let mut pending_screenshot = false; // right-click "Take Screenshot" → capture next clean frame
+    let mut current_desktop: usize = 0;  // active virtual desktop (0-3)
+    let mut snap_preview: Option<SnapSide> = None;  // snap zone preview during drag
 
     // autostart=N on the kernel cmdline opens app N immediately (headless
     // screendump verification — no mouse needed).
     let autostart = sys_autostart();
     if autostart != u64::MAX {
-        if let Some(tw) = open_app_by_index(autostart, w, h, wins.len()) {
+        if let Some(mut tw) = open_app_by_index(autostart, w, h, wins.len()) {
+            tw.win.desktop = current_desktop;
             wins.push(tw);
         }
     }
@@ -2483,17 +2564,20 @@ pub extern "C" fn _start() -> ! {
         // Keyboard → global shortcuts first, then focused terminal/editor
         for &k in keys.iter() {
             if k == 0x14 { // Ctrl+T
-                if let Some(tw) = open_term(w, h, wins.len(), &LAUNCHERS[0]) {
+                if let Some(mut tw) = open_term(w, h, wins.len(), &LAUNCHERS[0]) {
+                    tw.win.desktop = current_desktop;
                     wins.push(tw);
                     scene_dirty = true;
                 }
             } else if k == 0x02 { // Ctrl+B — open browser
-                if let Some(tw) = open_browser(w, h, wins.len()) {
+                if let Some(mut tw) = open_browser(w, h, wins.len()) {
+                    tw.win.desktop = current_desktop;
                     wins.push(tw);
                     scene_dirty = true;
                 }
             } else if k == 0x07 { // Ctrl+G — open Image Viewer (gallery)
-                if let Some(tw) = open_image_viewer(w, h, wins.len()) {
+                if let Some(mut tw) = open_image_viewer(w, h, wins.len()) {
+                    tw.win.desktop = current_desktop;
                     wins.push(tw);
                     scene_dirty = true;
                 }
@@ -2502,28 +2586,29 @@ pub extern "C" fn _start() -> ! {
             } else if k == 0x06 { // Ctrl+F — exec real fbDOOM (Linux ABI test)
                 sys_exec_linux(b"bin/fbdoom");
             } else if k == 0x04 { // Ctrl+D — open DOOM raycaster window
-                if let Some(tw) = open_doom_raycaster(w, h, wins.len()) {
+                if let Some(mut tw) = open_doom_raycaster(w, h, wins.len()) {
+                    tw.win.desktop = current_desktop;
                     wins.push(tw);
                     scene_dirty = true;
                 }
-            } else if k == 0x17 { // Ctrl+W
-                if !wins.is_empty() {
-                    wins.pop();
-                    scene_dirty = true;
-                }
+            } else if k == 0x17 { // Ctrl+W — close the focused window on this desktop
+                // Close only the top window on the current desktop (not across desktops).
+                let idx = wins.iter().enumerate().rev()
+                    .find(|(_, tw)| tw.win.desktop == current_desktop)
+                    .map(|(i, _)| i);
+                if let Some(i) = idx { wins.remove(i); scene_dirty = true; }
             } else if k == 0x13 { // Ctrl+S (save editor)
-                if let Some(tw) = wins.last_mut() {
-                    if let Some(ed) = &mut tw.editor {
-                        ed.save();
-                    }
+                if let Some(tw) = wins.iter_mut().rev()
+                    .find(|tw| tw.win.desktop == current_desktop) {
+                    if let Some(ed) = &mut tw.editor { ed.save(); }
                 }
             } else if k == 0x11 { // Ctrl+Q (close editor)
-                if let Some(tw) = wins.last_mut() {
-                    if let Some(ed) = &mut tw.editor {
-                        ed.wants_close = true;
-                    }
+                if let Some(tw) = wins.iter_mut().rev()
+                    .find(|tw| tw.win.desktop == current_desktop) {
+                    if let Some(ed) = &mut tw.editor { ed.wants_close = true; }
                 }
-            } else if let Some(tw) = wins.last_mut() {
+            } else if let Some(tw) = wins.iter_mut().rev()
+                .find(|tw| tw.win.desktop == current_desktop) {
                 if let Some(app) = &mut tw.app {
                     app.on_key(k);
                     tw.win_dirty = true;
@@ -2591,12 +2676,12 @@ pub extern "C" fn _start() -> ! {
         }
 
         // Text cursor blink: toggle every 50 ticks (~500ms @ 100Hz).
-        // Only the focused (topmost) terminal shows a cursor at all.
+        // Only the focused (topmost) terminal on the current desktop blinks.
         if now_ticks.wrapping_sub(last_blink_tick) >= 50 {
             last_blink_tick = now_ticks;
             blink_on = !blink_on;
-            // Mark focused terminal dirty so the blink triggers a re-render.
-            if let Some(tw) = wins.iter_mut().rev().find(|tw| !tw.win.minimized) {
+            if let Some(tw) = wins.iter_mut().rev()
+                .find(|tw| !tw.win.minimized && tw.win.desktop == current_desktop) {
                 tw.term.dirty = true;
             }
         }
@@ -2620,7 +2705,8 @@ pub extern "C" fn _start() -> ! {
             let prev_open = ctx_menu.is_some() || start_menu_open;
             ctx_menu = None;
             start_menu_open = false;
-            let on_win = wins.iter().any(|tw| wm::window_hit(&tw.win, cx, cy));
+            let on_win = wins.iter().any(|tw|
+                tw.win.desktop == current_desktop && wm::window_hit(&tw.win, cx, cy));
             if !on_win && cy >= TOPBAR_H as i32 && cy < h - 28 {
                 ctx_menu = Some((cx, cy));
             }
@@ -2629,7 +2715,14 @@ pub extern "C" fn _start() -> ! {
 
         if left_edge {
             let qs_open = unsafe { QS_OPEN };
-            if kbd_pill_hit(cx, cy) {
+            if let Some(d) = ws_dot_hit(cx, cy) {
+                // Workspace dot click — switch virtual desktop.
+                if d != current_desktop {
+                    current_desktop = d;
+                    snap_preview = None;
+                    scene_dirty = true;
+                }
+            } else if kbd_pill_hit(cx, cy) {
                 // Toggle keyboard layout EN <-> DE via the kernel (syscall #21).
                 let cur = unsafe { sys_kbd_layout(0) };
                 unsafe { sys_kbd_layout(if cur == 1 { 1 } else { 2 }); }
@@ -2669,17 +2762,19 @@ pub extern "C" fn _start() -> ! {
                 if let Some(item) = ctx_menu_item_hit(cx, cy, cmx, cmy, fb.width, fb.height) {
                     match ctx_action(item) {
                         0 => { // Open Terminal
-                            if let Some(tw) = open_term(w, h, wins.len(), &LAUNCHERS[0]) {
-                                wins.push(tw);
+                            if let Some(mut tw) = open_term(w, h, wins.len(), &LAUNCHERS[0]) {
+                                tw.win.desktop = current_desktop; wins.push(tw);
                             }
                         }
                         1 => { // Open Files
-                            if let Some(tw) = open_file_manager(w, h, wins.len()) {
-                                wins.push(tw);
+                            if let Some(mut tw) = open_file_manager(w, h, wins.len()) {
+                                tw.win.desktop = current_desktop; wins.push(tw);
                             }
                         }
-                        2 => { // Show Desktop — minimize all windows
-                            for tw in wins.iter_mut() { tw.win.minimized = true; }
+                        2 => { // Show Desktop — minimize windows on current desktop
+                            for tw in wins.iter_mut() {
+                                if tw.win.desktop == current_desktop { tw.win.minimized = true; }
+                            }
                         }
                         3 => { // Take Screenshot — capture on the NEXT clean frame
                                // (after this menu is gone), so the shot is unobstructed.
@@ -2692,12 +2787,12 @@ pub extern "C" fn _start() -> ! {
                             fb.invalidate_bg();
                         }
                         5 => { // Display Settings
-                            if let Some(tw) = open_settings(w, h, wins.len()) {
-                                wins.push(tw);
+                            if let Some(mut tw) = open_settings(w, h, wins.len()) {
+                                tw.win.desktop = current_desktop; wins.push(tw);
                             }
                         }
-                        6 => { // Close All Windows
-                            wins.clear();
+                        6 => { // Close All Windows on current desktop
+                            wins.retain(|tw| tw.win.desktop != current_desktop);
                         }
                         _ => {}
                     }
@@ -2734,7 +2829,10 @@ pub extern "C" fn _start() -> ! {
                             MenuLaunch::App(16)  => open_process_monitor(w, h, wins.len()),
                             MenuLaunch::App(_)   => None,
                         };
-                        if let Some(tw) = opened { wins.push(tw); }
+                        if let Some(mut tw) = opened {
+                            tw.win.desktop = current_desktop;
+                            wins.push(tw);
+                        }
                     }
                 }
                 start_menu_open = false;
@@ -2743,12 +2841,18 @@ pub extern "C" fn _start() -> ! {
                 start_menu_open = true;
                 scene_dirty = true;
             } else {
+                // Only hit-test windows on the current virtual desktop.
                 let hit = wins.iter().enumerate().rev()
-                    .find(|(_, tw)| wm::window_hit(&tw.win, cx, cy))
+                    .find(|(_, tw)| tw.win.desktop == current_desktop && wm::window_hit(&tw.win, cx, cy))
                     .map(|(i, _)| i);
 
                 if let Some(hi) = hit {
-                    if hi != wins.len() - 1 {
+                    // Bring to front if not already — preserve desktop assignment.
+                    let last_on_desktop = wins.iter().enumerate().rev()
+                        .find(|(_, tw)| tw.win.desktop == current_desktop)
+                        .map(|(i, _)| i)
+                        .unwrap_or(wins.len().saturating_sub(1));
+                    if hi != last_on_desktop {
                         let tw = wins.remove(hi); wins.push(tw);
                         wins.last_mut().unwrap().win_dirty = true;
                     }
@@ -2801,9 +2905,12 @@ pub extern "C" fn _start() -> ! {
                     }
                 } else {
                     if show_desktop_hit(fb.width, fb.height, cx, cy) {
-                        for tw in wins.iter_mut() { tw.win.minimized = true; }
+                        // Minimize only windows on the current desktop.
+                        for tw in wins.iter_mut() {
+                            if tw.win.desktop == current_desktop { tw.win.minimized = true; }
+                        }
                         scene_dirty = true;
-                    } else if let Some(mi) = tbwin_hit(fb.width, fb.height, &wins, cx, cy) {
+                    } else if let Some(mi) = tbwin_hit(fb.width, fb.height, &wins, cx, cy, current_desktop) {
                         wins[mi].win.minimized = false;
                         let tw = wins.remove(mi); wins.push(tw);
                         scene_dirty = true;
@@ -2823,7 +2930,8 @@ pub extern "C" fn _start() -> ! {
                             10 => open_browser(w, h, wins.len()),
                             _ => None,
                         };
-                        if let Some(tw) = opened {
+                        if let Some(mut tw) = opened {
+                            tw.win.desktop = current_desktop;
                             wins.push(tw);
                             scene_dirty = true;
                         }
@@ -2836,11 +2944,33 @@ pub extern "C" fn _start() -> ! {
         // the recomposite this frame, otherwise dragging looks like the
         // window is stuck while the cursor moves smoothly past it.
         if left_down {
-            if let Some(tw) = wins.last_mut() {
+            // Operate on the topmost DRAGGING/RESIZING window (which is always last
+            // in wins since it was brought to front on click).
+            let dragging_idx = wins.iter().enumerate().rev()
+                .find(|(_, tw)| tw.win.dragging || tw.win.resizing)
+                .map(|(i, _)| i);
+            if let Some(di) = dragging_idx {
+                let tw = &mut wins[di];
                 if tw.win.dragging {
                     let oy = tw.win.y; let oh = tw.win.h;
                     let nx2 = (cx - tw.win.drag_ox).max(75).min(w - tw.win.w);
                     let ny2 = (cy - tw.win.drag_oy).max(TOPBAR_H as i32).min(h - tw.win.h - 28);
+
+                    // Snap zone detection: show preview when cursor is near an edge.
+                    let new_snap = if cx < SNAP_ZONE {
+                        Some(SnapSide::Left)
+                    } else if cx > w - SNAP_ZONE {
+                        Some(SnapSide::Right)
+                    } else if cy < TOPBAR_H as i32 + SNAP_ZONE {
+                        Some(SnapSide::Top)
+                    } else {
+                        None
+                    };
+                    if new_snap != snap_preview {
+                        snap_preview = new_snap;
+                        scene_dirty = true;
+                    }
+
                     if nx2 != tw.win.x || ny2 != tw.win.y {
                         // Damage band = union of old + new vertical span (plus a
                         // little slack for the cursor + shadow).
@@ -2868,12 +2998,40 @@ pub extern "C" fn _start() -> ! {
                 }
             }
         } else {
-            // Drag/resize ended — flush final position unconditionally.
-            let was_active = wins.iter().any(|tw| tw.win.dragging || tw.win.resizing);
-            for tw in wins.iter_mut() {
-                tw.win.dragging = false;
-                tw.win.resizing = false;
+            // Mouse button released — apply snap if a drag just ended.
+            let was_dragging = wins.iter().any(|tw| tw.win.dragging);
+            let was_active   = was_dragging || wins.iter().any(|tw| tw.win.resizing);
+
+            if was_dragging {
+                if let Some(side) = snap_preview.take() {
+                    // Find the dragging window and apply the snap geometry.
+                    if let Some(tw) = wins.iter_mut().find(|tw| tw.win.dragging) {
+                        let usable_h = h - 28 - TOPBAR_H as i32;
+                        // Save pre-snap restore position so the user can unsnap later.
+                        tw.win.restore_x = tw.win.x;
+                        tw.win.restore_y = tw.win.y;
+                        tw.win.restore_w = tw.win.w;
+                        tw.win.restore_h = tw.win.h;
+                        match side {
+                            SnapSide::Left => {
+                                tw.win.x = 0; tw.win.y = TOPBAR_H as i32;
+                                tw.win.w = w / 2; tw.win.h = usable_h;
+                            }
+                            SnapSide::Right => {
+                                tw.win.x = w / 2; tw.win.y = TOPBAR_H as i32;
+                                tw.win.w = w - w / 2; tw.win.h = usable_h;
+                            }
+                            SnapSide::Top => {
+                                tw.win.toggle_maximize(w, h, TOPBAR_H as i32);
+                            }
+                        }
+                    }
+                } else {
+                    snap_preview = None;
+                }
             }
+
+            for tw in wins.iter_mut() { tw.win.dragging = false; tw.win.resizing = false; }
             if was_active { scene_dirty = true; }
         }
 
@@ -2894,24 +3052,25 @@ pub extern "C" fn _start() -> ! {
         // windows we still only recompose on real state change — not every frame —
         // so the screen stops flickering.
         let cursor_moved = prev_cx != cx || prev_cy != cy;
-        let any_chrome   = scene_dirty || wins.iter().any(|tw| tw.win_dirty);
-        let any_term     = wins.iter().any(|tw| tw.term.dirty && !tw.win.minimized);
+        let any_chrome   = scene_dirty || wins.iter().any(|tw| tw.win_dirty && tw.win.desktop == current_desktop);
+        let any_term     = wins.iter().any(|tw| tw.term.dirty && !tw.win.minimized && tw.win.desktop == current_desktop);
 
         if any_chrome || any_term || cursor_moved || topbar_due {
             restore_cursor_bg(&mut fb, prev_cx, prev_cy, &cbuf);
 
             if any_chrome {
-                recomposite(&mut fb, &mut wins, start_menu_open, ctx_menu, &stats, blink_on, hover_icon, wallpaper_variant);
+                recomposite(&mut fb, &mut wins, start_menu_open, ctx_menu, &stats, blink_on, hover_icon, wallpaper_variant, snap_preview, current_desktop);
                 scene_dirty = false;
             } else if any_term {
-                // Partial: re-render only the focused terminal content. App and editor
-                // windows mark themselves dirty via win_dirty and go through the full
-                // recomposite path above instead.
-                let n = wins.len();
+                // Partial: re-render only the focused terminal content on this desktop.
+                let focused_idx = wins.iter().enumerate().rev()
+                    .find(|(_, tw)| !tw.win.minimized && tw.win.desktop == current_desktop)
+                    .map(|(i, _)| i);
                 for (i, tw) in wins.iter_mut().enumerate() {
                     if tw.win.minimized || !tw.term.dirty { continue; }
+                    if tw.win.desktop != current_desktop { continue; }
                     if tw.app.is_some() || tw.editor.is_some() { continue; }
-                    let focused = i == n - 1;
+                    let focused = Some(i) == focused_idx;
                     let (ox, oy) = wm::content_origin(&tw.win);
                     let cw = (tw.win.w - 2).max(0) as u32;
                     let ch = (tw.win.h - 3 - wm::TITLEBAR_H).max(0) as u32;
@@ -2925,22 +3084,17 @@ pub extern "C" fn _start() -> ! {
 
             if topbar_due && !any_chrome {
                 let up = rtc_str();
-                draw_topbar(&mut fb, up.as_str(), &stats, now_ticks);
+                draw_topbar(&mut fb, up.as_str(), &stats, now_ticks, current_desktop);
             }
 
-            // Re-stamp the cursor on the topmost window only — and only if
-            // it's a plain terminal. Previously we walked the stack looking
-            // for the first non-app/non-editor window, which would paint a
-            // terminal cursor block onto a window UNDERNEATH an app/editor.
-            // That pixel was then visible (bled through) when the topmost
-            // window didn't repaint over it.
-            if let Some(tw) = wins.last_mut() {
-                if !tw.win.minimized && tw.editor.is_none() && tw.app.is_none() {
-                    let (ox, oy) = wm::content_origin(&tw.win);
-                    let cw = (tw.win.w - 2).max(0) as u32;
-                    let ch = (tw.win.h - 3 - wm::TITLEBAR_H).max(0) as u32;
-                    tw.term.paint_cursor(&mut fb, ox as u32, oy as u32, cw, ch, blink_on);
-                }
+            // Re-stamp the cursor on the focused terminal window on this desktop.
+            if let Some(tw) = wins.iter_mut().rev()
+                .find(|tw| !tw.win.minimized && tw.win.desktop == current_desktop
+                           && tw.editor.is_none() && tw.app.is_none()) {
+                let (ox, oy) = wm::content_origin(&tw.win);
+                let cw = (tw.win.w - 2).max(0) as u32;
+                let ch = (tw.win.h - 3 - wm::TITLEBAR_H).max(0) as u32;
+                tw.term.paint_cursor(&mut fb, ox as u32, oy as u32, cw, ch, blink_on);
             }
 
             // schedesktop2: composite the second app's live surface into a window.

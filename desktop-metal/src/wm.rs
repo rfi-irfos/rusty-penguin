@@ -51,6 +51,7 @@ pub struct Window {
     pub maximized: bool,
     pub restore_x: i32, pub restore_y: i32,
     pub restore_w: i32, pub restore_h: i32,
+    pub desktop: usize,  // which virtual desktop this window lives on (0-based)
 }
 
 impl Window {
@@ -64,6 +65,7 @@ impl Window {
             minimized: false, maximized: false,
             restore_x: x, restore_y: y,
             restore_w: WINDOW_W, restore_h: WINDOW_H,
+            desktop: 0,
         }
     }
 
