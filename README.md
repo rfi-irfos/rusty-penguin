@@ -289,11 +289,13 @@ syscall #GP is fixed; `schedesktop2`, QEMU-verified — see `docs/SCHEDULER.md`)
 The desktop — itself a scheduled process — now **composites a second real app's
 live surface into a titled on-screen window** (`sys_app_surface`, QEMU-verified),
 so the full windowed multi-app model is proven end to end with a synthetic app.
-Remaining toward windowed DOOM: swap the synthetic app for the real DOOM binary
-with a full-size surface, a virtual `/dev/fb0`, and a higher-half-kernel VMM
-migration (`docs/VMM_HIGHER_HALF.md`). Honest status: real DOOM runs fullscreen as
-a standalone process today; a real app *in a window* is the remaining step, and the
-compositing path it needs is now in place.
+And the hard half for *DOOM specifically* is done: a **dynamically-linked Linux
+binary (ld.so + glibc) now runs as a scheduled process in its own address space**
+(`linuxdyn`, QEMU-verified) — exactly how DOOM, a dynamic PIE, must load to be
+windowed. Honest status: real DOOM runs fullscreen as a standalone process today;
+windowed DOOM now needs only two known steps on top of that scheduled-dynamic-ELF
+path — redirect its `/dev/fb0` to a private surface, then composite that surface
+into a window (the compositing path already exists).
 
 ---
 
