@@ -88,6 +88,30 @@ static mut MMAP_CUR: u64 = MMAP_BASE;
 // so a partially-filled page is never re-allocated and its data is never lost.
 static mut BRK_MAPPED: u64 = 0;
 
+// Windowed framebuffer surface for a SCHEDULED Linux process. When such a process
+// mmaps /dev/fb0 it must NOT get the real hardware framebuffer (a) it's not mapped
+// in its private AS, (b) it would draw over the whole screen. Instead it gets a
+// private, physically-contiguous surface it renders into; the desktop composites
+// that surface into a window. Fixed size so FBIOGET can report stable dims.
+pub const LFB_W: u32 = 640;
+pub const LFB_H: u32 = 400;
+const LFB_BYTES: u64 = (LFB_W as u64) * (LFB_H as u64) * 4;       // 1,024,000
+const LFB_PAGES: usize = ((LFB_BYTES + 0xFFF) / 0x1000) as usize; // 250
+const LFB_VA: u64 = 0x0900_0000; // 144 MiB — between BRK_CAP (128) and MMAP_BASE (160)
+static mut LFB_PHYS: u64 = 0;     // contiguous surface base phys (0 = not yet allocated)
+
+/// The scheduled Linux app's framebuffer surface: (phys base, width, height).
+/// phys==0 means none yet. The desktop maps this to composite the app's output.
+pub fn fb_surface() -> (u64, u32, u32) { unsafe { (LFB_PHYS, LFB_W, LFB_H) } }
+
+/// Pre-set the fb surface from the KERNEL (boot thread) before spawning the
+/// process — so the allocator + the surface phys are known kernel-side and the
+/// process just maps it on its /dev/fb0 mmap. (A value the process writes into a
+/// kernel global isn't reliably visible back on the boot thread; a boot-written
+/// one is — so the kernel owns this allocation.)
+pub fn set_fb_surface(phys: u64) { unsafe { LFB_PHYS = phys; } }
+pub const fn fb_surface_pages() -> usize { LFB_PAGES }
+
 // ── Linux stdin key ring (populated by the PS/2 IRQ; served by read(0,…)) ────
 const LKEYS_SZ: usize = 64;
 static mut LKEYS:   [u8; LKEYS_SZ] = [0u8; LKEYS_SZ];
@@ -122,6 +146,7 @@ pub fn reset() {
         RAW_KBD   = false;
         BRK_CUR   = BRK_BASE;
         BRK_MAPPED = 0;
+        LFB_PHYS  = 0;
         MMAP_CUR  = MMAP_BASE;
         LKEYS_H   = 0;
         LKEYS_T   = 0;
@@ -380,10 +405,34 @@ pub fn syscall(nr: u64, a1: u64, a2: u64, a3: u64) -> u64 {
         // a real fd is given (a5=fd, a6=offset) — needed for dynamic linking,
         // where ld.so mmaps segments of the interpreter and shared libraries.
         9 => unsafe {
-            // /dev/fb0 mmap: return physical framebuffer address directly.
-            // The FB is identity-mapped by enter() via map_mmio_range, so
-            // virt == phys and ring-3 can write pixels straight to hardware.
-            if a5 == DEV_FB_FD { return crate::fb::base() as u64; }
+            // /dev/fb0 mmap.
+            if a5 == DEV_FB_FD {
+                // A SCHEDULED process (windowed app) gets a PRIVATE surface, not
+                // the real hardware framebuffer: allocate a contiguous surface once,
+                // map it into this process's AS at LFB_VA, and hand back that VA.
+                // The desktop composites the surface into a window. The enter()
+                // single-process path still gets the real FB (virt==phys, mapped).
+                if crate::sched::is_preemptive_linux() {
+                    // Normally the kernel pre-allocates the surface (set_fb_surface)
+                    // before spawning; allocate lazily here only as a fallback.
+                    if LFB_PHYS == 0 {
+                        match crate::pmm::alloc_frames(LFB_PAGES) {
+                            Some(base) => {
+                                LFB_PHYS = base;
+                                core::ptr::write_bytes(crate::vmm::phys_to_virt(base) as *mut u8, 0, LFB_PAGES * 4096);
+                            }
+                            None => return errno(-12), // ENOMEM
+                        }
+                    }
+                    let cr3 = crate::vmm::current_cr3();
+                    let pfw = crate::vmm::PTE_PRESENT | crate::vmm::PTE_WRITABLE | crate::vmm::PTE_USER;
+                    for p in 0..LFB_PAGES as u64 {
+                        crate::vmm::map_page_in(cr3, LFB_VA + p * 4096, LFB_PHYS + p * 4096, pfw);
+                    }
+                    return LFB_VA;
+                }
+                return crate::fb::base() as u64;
+            }
 
             let len = page_up(a2);
             let fixed = (a4 & 0x10) != 0;                       // MAP_FIXED

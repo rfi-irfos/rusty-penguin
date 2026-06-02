@@ -574,6 +574,10 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
         // A hung windowed app is force-quit; the healthy one keeps running.
         sched::selftest_recover_win(); // never returns
     }
+    if unsafe { mb2_cmdline_contains(mb2, b"linuxfb") } {
+        // Scheduled Linux process renders into a private fb surface (windowed-DOOM brick 3).
+        sched::selftest_linuxfb(); // never returns
+    }
     if unsafe { mb2_cmdline_contains(mb2, b"linuxdyn") } {
         // A dynamic Linux ELF (ld.so+libc) as a scheduled process (windowed-DOOM brick 2b).
         sched::selftest_linuxdyn(); // never returns

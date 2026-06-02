@@ -1726,6 +1726,71 @@ pub fn selftest_linuxdyn() -> ! {
     }
 }
 
+/// `linuxfb` brick (windowed-DOOM brick 3) — a scheduled Linux process mmaps
+/// /dev/fb0 and renders into it. Instead of the real hardware framebuffer it gets
+/// a PRIVATE 640x400 surface (so it can't draw over the screen, and it works in
+/// its own AS). The boot thread reads that surface back via the physmap and checks
+/// the process's pixels landed — proving the per-process virtual framebuffer that
+/// windowed DOOM needs (the desktop then composites the surface, brick 4).
+pub fn selftest_linuxfb() -> ! {
+    use crate::serial::write_str;
+    write_str("\n[lfb] === linuxfb: scheduled Linux process renders into a private fb surface ===\n");
+    let elf = match crate::ramfs::find(b"bin/linuxtest") {
+        Some(e) => e,
+        None => { write_str("[lfb] bin/linuxtest not in initrd\n"); halt(); }
+    };
+    unsafe {
+        core::arch::asm!("cli");
+        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3() };
+        CUR_TASK = 0;
+        TASK_LINUX[0] = false;
+    }
+    // Allocate the fb surface KERNEL-side up front (the boot thread owns it) and
+    // hand it to the Linux ABI; the process maps it on its /dev/fb0 mmap.
+    let (sphys, sw, sh) = {
+        let pages = crate::linux::fb_surface_pages();
+        match crate::pmm::alloc_frames(pages) {
+            Some(base) => {
+                unsafe { core::ptr::write_bytes(crate::vmm::phys_to_virt(base) as *mut u8, 0, pages * 4096); }
+                crate::linux::set_fb_surface(base);
+                let (_, w, h) = crate::linux::fb_surface();
+                (base, w, h)
+            }
+            None => { write_str("[lfb] could not allocate fb surface\n"); halt(); }
+        }
+    };
+    let l = spawn_linux_static_elf(elf);
+    if l == 0 { write_str("[lfb] spawn failed\n"); halt(); }
+    write_str("[lfb] surface pre-allocated; fb-test scheduled; enabling preemption\n");
+    crate::idt::set_timer_vector(irq_timer_preempt as *const () as u64);
+    unsafe { core::arch::asm!("sti"); }
+    let mut n = 0u32;
+    let mut done = false;
+    loop {
+        busy_spin();
+        n += 1;
+        if !done && n % 40 == 0 {
+            {
+                let phys = sphys; let w = sw; let h = sh;
+                let surf = crate::vmm::phys_to_virt(phys) as *const u32;
+                let px = w * h;
+                let mut orange = 0u32;
+                let mut i = 0u32;
+                while i < px { if unsafe { *surf.add(i as usize) } == 0x00FF_8800 { orange += 1; } i += 1; }
+                if orange == px {
+                    write_str("[lfb] PASS: full 640x400 private surface is orange — per-process virtual fb works\n");
+                    done = true;
+                } else if orange > 0 {
+                    write_str("[lfb] surface allocated, partially rendered...\n");
+                } else {
+                    write_str("[lfb] surface allocated but still blank...\n");
+                }
+            }
+        }
+        if n % 200 == 0 { write_str("[lfb] boot thread alive (scheduler healthy)\n"); }
+    }
+}
+
 /// `composite` brick — the full pipeline made VISIBLE: a scheduled, isolated ELF
 /// process renders a colour into its own offscreen buffer, and the kernel
 /// compositor blits that buffer onto the real screen as a window-like rectangle.

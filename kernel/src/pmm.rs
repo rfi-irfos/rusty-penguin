@@ -105,6 +105,40 @@ pub fn alloc_frame() -> Option<u64> {
     None
 }
 
+/// Allocate `n` physically-CONTIGUOUS frames; returns the base physical address
+/// or None. Used for things that must be one mappable run in two address spaces
+/// at once — e.g. a windowed Linux app's framebuffer surface (the process renders
+/// into it, the desktop composites it). O(frames) first-fit scan; fine for the
+/// rare, large, long-lived allocations this is for.
+pub fn alloc_frames(n: usize) -> Option<u64> {
+    if n == 0 || !READY.load(Ordering::Acquire) { return None; }
+    if n == 1 { return alloc_frame(); }
+    unsafe {
+        let total = TOTAL_FRAMES.load(Ordering::Relaxed);
+        let mut start = 0usize;
+        let mut run = 0usize;
+        // Start above the first 1 MiB: that low region is conventionally reserved
+        // (IVT/BIOS), and a base of phys 0 is indistinguishable from "no allocation"
+        // for callers that use 0 as a null sentinel.
+        let mut page = 256usize;
+        while page < total {
+            if is_free(page) {
+                if run == 0 { start = page; }
+                run += 1;
+                if run == n {
+                    for p in start..start + n { mark_used(p); }
+                    FREE_FRAMES.fetch_sub(n, Ordering::Relaxed);
+                    return Some((start * PAGE_SIZE) as u64);
+                }
+            } else {
+                run = 0;
+            }
+            page += 1;
+        }
+    }
+    None
+}
+
 /// Return a frame to the free pool.
 pub fn free_frame(addr: u64) {
     let page = (addr as usize) / PAGE_SIZE;
