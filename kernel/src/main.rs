@@ -47,6 +47,8 @@ mod ca_roots;
 mod iwlwifi_fw;
 mod iwlwifi;
 mod wpa2;
+mod aes;
+mod eapol;
 mod acpi;
 
 use ternary_core::{Trit, Tryte};
@@ -443,6 +445,11 @@ pub extern "C" fn kernel_main(magic: u32, mb2: u32) {
         vga::write_str("  [wifi: WPA2 auth core OK (PMK/PTK vectors verified)]\n", vga::Color::Green);
     } else {
         vga::write_str("  [wifi: WPA2 auth core SELFTEST FAILED]\n", vga::Color::Red);
+    }
+    if aes::selftest() && eapol::selftest() {
+        vga::write_str("  [wifi: AES-128 + EAPOL 4-way handshake OK (key install verified)]\n", vga::Color::Green);
+    } else {
+        vga::write_str("  [wifi: AES/EAPOL SELFTEST FAILED]\n", vga::Color::Red);
     }
 
     // ACPI power management: parse the firmware tables so we can cleanly power
