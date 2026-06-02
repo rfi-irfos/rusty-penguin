@@ -10,7 +10,7 @@
 
 [![Language: Rust](https://img.shields.io/badge/Language-Rust-ce422b?logo=rust)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green)](LICENSE)
-[![Version: 2.7.0](https://img.shields.io/badge/Version-2.7.0-blue)](https://github.com/rfi-irfos/rusty-penguin)
+[![Version: 3.3.0](https://img.shields.io/badge/Version-3.3.0-blue)](https://github.com/rfi-irfos/rusty-penguin)
 [![Platform: x86_64](https://img.shields.io/badge/Platform-x86__64-333)](https://en.wikipedia.org/wiki/X86-64)
 [![Kernel: Pure Rust](https://img.shields.io/badge/Kernel-Pure%20Rust%2C%20no%20libc-purple)](https://github.com/rfi-irfos/rusty-penguin)
 [![Status: Active Development](https://img.shields.io/badge/Status-Active%20Development-brightgreen)](https://github.com/rfi-irfos/rusty-penguin/pulse)
@@ -48,10 +48,11 @@ Preinstalled: `albert` · `ternlang` · `albert-cli` · `ternlang-mcp`
 > truthful rather than aspirational. It's a research OS we're trying to grow into a
 > daily driver — not one yet.
 
-![Rusty Penguin desktop — menu open, native browser on rustypenguin://home, Nebula wallpaper](docs/screenshots/rusty-penguin-desktop.png)
+![Rusty Penguin desktop — System flyout menu open, native browser on rustypenguin://home, Nebula wallpaper](docs/screenshots/rusty-penguin-desktop.png)
 
-*The desktop with the start menu open and the native browser on `rustypenguin://home`,
-over the warm "Nebula" wallpaper. The browser is real: point it at any host and it
+*The desktop with the start menu open — the dingir button, the flyout category
+menu (System expanded), and the native browser on `rustypenguin://home`, over the
+deep "Nebula" wallpaper. The browser is real: point it at any host and it
 fetches live over the from-scratch TCP/IP + TLS 1.3 stack — on boot it even
 [googles the OS itself](docs/screenshots/rusty-penguin-googling-itself.png), pulling
 `google.com/search?q=rusty+penguin+os` over our own TLS with no X11, no Wayland, no
