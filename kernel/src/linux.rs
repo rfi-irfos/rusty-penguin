@@ -372,6 +372,28 @@ pub fn syscall(nr: u64, a1: u64, a2: u64, a3: u64) -> u64 {
             } else {
                 return errno(-12); // ENOMEM
             };
+            // A Linux process running UNDER the scheduler lives in its own private
+            // address space — the mmap arena is NOT identity-mapped (that only
+            // holds for the one-way enter() path). Back [p, p+len) with real frames
+            // mapped into the current AS so the writes below (and the program's
+            // later accesses) land on memory. The kernel runs with this task's CR3
+            // during the syscall, so once mapped we can touch `p` directly.
+            if crate::sched::is_preemptive_linux() {
+                let cr3 = crate::vmm::current_cr3();
+                let pfw = crate::vmm::PTE_PRESENT | crate::vmm::PTE_WRITABLE | crate::vmm::PTE_USER;
+                let mut va = p & !0xFFF;
+                let end = (p + len + 0xFFF) & !0xFFF;
+                while va < end {
+                    match crate::pmm::alloc_frame() {
+                        Some(frame) => {
+                            core::ptr::write_bytes(crate::vmm::phys_to_virt(frame) as *mut u8, 0, 4096);
+                            crate::vmm::map_page_in(cr3, va, frame, pfw);
+                        }
+                        None => return errno(-12), // ENOMEM
+                    }
+                    va += 4096;
+                }
+            }
             if anon {
                 core::ptr::write_bytes(p as *mut u8, 0, len as usize);
             } else if let Some(i) = fd_slot(a5) {

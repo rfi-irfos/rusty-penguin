@@ -1223,6 +1223,40 @@ fn make_linux_write_elf(load_va: u64) -> alloc::vec::Vec<u8> {
     make_elf(load_va, &code)
 }
 
+/// Build a LINUX-ABI program that exercises mmap: `mmap(NULL,4096,RW,PRIVATE|ANON,
+/// -1,0)`, writes "MMAPOK\n" into the returned buffer, `write(1,buf,7)`, `exit(0)`.
+/// Position-independent (the only address used is mmap's return in rax), so it
+/// only succeeds if the kernel actually backed the anonymous mmap with real memory
+/// mapped into this process's PRIVATE address space.
+fn make_linux_mmap_elf(load_va: u64) -> alloc::vec::Vec<u8> {
+    let code: &[u8] = &[
+        0x31, 0xff,                                     // xor edi,edi          addr=NULL
+        0xbe, 0x00, 0x10, 0x00, 0x00,                   // mov esi,4096         len
+        0xba, 0x03, 0x00, 0x00, 0x00,                   // mov edx,3            PROT_READ|WRITE
+        0x41, 0xba, 0x22, 0x00, 0x00, 0x00,             // mov r10d,0x22        MAP_PRIVATE|ANON
+        0x49, 0xc7, 0xc0, 0xff, 0xff, 0xff, 0xff,       // mov r8,-1            fd=-1
+        0x45, 0x31, 0xc9,                               // xor r9d,r9d          off=0
+        0xb8, 0x09, 0x00, 0x00, 0x00,                   // mov eax,9            mmap
+        0x0f, 0x05,                                     // syscall  → rax=addr
+        0xc6, 0x40, 0x00, 0x4d,                         // mov [rax+0],'M'
+        0xc6, 0x40, 0x01, 0x4d,                         // mov [rax+1],'M'
+        0xc6, 0x40, 0x02, 0x41,                         // mov [rax+2],'A'
+        0xc6, 0x40, 0x03, 0x50,                         // mov [rax+3],'P'
+        0xc6, 0x40, 0x04, 0x4f,                         // mov [rax+4],'O'
+        0xc6, 0x40, 0x05, 0x4b,                         // mov [rax+5],'K'
+        0xc6, 0x40, 0x06, 0x0a,                         // mov [rax+6],'\n'
+        0x48, 0x89, 0xc6,                               // mov rsi,rax          buf
+        0xbf, 0x01, 0x00, 0x00, 0x00,                   // mov edi,1            fd=stdout
+        0xba, 0x07, 0x00, 0x00, 0x00,                   // mov edx,7            len
+        0xb8, 0x01, 0x00, 0x00, 0x00,                   // mov eax,1            write
+        0x0f, 0x05,                                     // syscall
+        0x31, 0xff,                                     // xor edi,edi          code=0
+        0xb8, 0x3c, 0x00, 0x00, 0x00,                   // mov eax,60           exit
+        0x0f, 0x05,                                     // syscall
+    ];
+    make_elf(load_va, code)
+}
+
 /// Blit a process's 32×32 offscreen surface (frame `fb_frame`) into a window at
 /// (x,y) on the real framebuffer, with a titlebar + frame. The compositor step.
 fn composite_window(fb_frame: u64, x: u32, y: u32) {
@@ -1500,6 +1534,36 @@ pub fn selftest_linuxsched() -> ! {
         busy_spin();
         n += 1;
         if n % 40 == 0 { write_str("[lxs] boot thread still alive (Linux task reaped, scheduler healthy)\n"); }
+    }
+}
+
+/// `linuxmmap` brick (windowed-DOOM brick 2b foundation) — a scheduled Linux
+/// process exercises `mmap` in its OWN private address space. The arena is no
+/// longer identity-mapped (that only held for enter()), so the kernel must back
+/// the anonymous mapping with real frames mapped into this task's AS. PASS = the
+/// program's "MMAPOK" reaches serial (it wrote into + read back the mmap'd buffer)
+/// and it exits cleanly. This is the mmap rework every dynamic Linux process
+/// (ld.so mmapping libc, DOOM) needs to run scheduled.
+pub fn selftest_linuxmmap() -> ! {
+    use crate::serial::write_str;
+    write_str("\n[lxm] === linuxmmap: private-AS mmap for a scheduled Linux process ===\n");
+    unsafe {
+        core::arch::asm!("cli");
+        TASKS[0] = Task { rsp: 0, used: true, alive: true, cr3: crate::vmm::current_cr3() };
+        CUR_TASK = 0;
+        TASK_LINUX[0] = false;
+    }
+    let elf = make_linux_mmap_elf(0x0050_0000);
+    let l = spawn_linux_static_elf(&elf);
+    if l == 0 { write_str("[lxm] spawn failed\n"); halt(); }
+    write_str("[lxm] mmap test scheduled; enabling preemption (expect MMAPOK below)\n");
+    crate::idt::set_timer_vector(irq_timer_preempt as *const () as u64);
+    unsafe { core::arch::asm!("sti"); }
+    let mut n = 0u32;
+    loop {
+        busy_spin();
+        n += 1;
+        if n % 40 == 0 { write_str("[lxm] boot thread alive (mmap task done, scheduler healthy)\n"); }
     }
 }
 
