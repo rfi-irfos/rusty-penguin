@@ -4,6 +4,20 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+### Added — Windowed-DOOM brick 4: desktop composites a scheduled Linux app into a window (2026-06-02)
+
+- The whole windowed-Linux-app pipeline, end to end and **visible**. The real
+  desktop runs as a scheduled process; a scheduled Linux process renders into its
+  private `/dev/fb0` surface (brick 3); the kernel maps that 640×400 surface
+  read-only into the desktop's AS; the desktop reads it via `sys_app_surface` (#41)
+  + `sys_app_surface_dims` (#42) and blits it into a titled on-screen window.
+- QEMU screendump: the desktop with a "Linux app (scheduled)" window full of the
+  app's orange, 0 faults (docs/multiproc-linux-app-windowed.png). Normal boot
+  unchanged (flag-gated behind `linuxwin`).
+- Only step left for windowed DOOM: swap the synthetic fb-test for the real fbdoom
+  binary (a dynamic PIE that loads via the brick-2b path) and shake out its
+  DOOM-specific private-AS syscalls.
+
 ### Added — Windowed-DOOM brick 3: a scheduled process gets a private framebuffer surface (2026-06-02)
 
 - The virtual `/dev/fb0` windowed DOOM needs. A scheduled Linux process that mmaps
