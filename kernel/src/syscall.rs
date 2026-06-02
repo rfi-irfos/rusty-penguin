@@ -708,6 +708,12 @@ pub extern "C" fn syscall_handler(nr: u64, arg1: u64, arg2: u64, arg3: u64) -> u
             }
             u64::MAX
         }
+        // sys_et_phone_home (0x4E - Brick 48)
+        0x4e => {
+            let path_ptr = arg1 as *const u8;
+            let path_len = arg2;
+            crate::drivers::mobile::et_phone_home(path_ptr, path_len)
+        }
         60 => {
             // sys_exit(code)
             vga::write_str("\n  [psh exited]\n", vga::Color::Green);
