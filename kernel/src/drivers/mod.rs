@@ -5,6 +5,7 @@ pub mod thermal;
 pub mod nvme;
 pub mod soc;
 pub mod hid;
+pub mod audio;
 
 pub fn init() {
     crate::e1000::udi_init();
@@ -13,5 +14,6 @@ pub fn init() {
     crate::drivers::nvme::udi_init();
     crate::drivers::soc::snapdragon::udi_init();
     crate::drivers::hid::udi_init();
+    crate::drivers::audio::mixer::udi_init();
     crate::serial::write_str("  [udi] Driver bus initialized.\n");
 }
