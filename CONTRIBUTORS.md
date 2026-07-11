@@ -12,7 +12,6 @@ We run flat: equal title, pay, and voice for everyone. No seniority, no hierarch
 |---|---|---|
 | Simeon Kepp | [@simeon-kepp](https://github.com/simeon-kepp) | Graz, Austria |
 | Zabih Karimi | [@zabih-sudo](https://github.com/zabih-sudo) | Graz, Austria |
-| Lisa Scharler | [@aiqueenofaustria](https://github.com/aiqueenofaustria) | Kalsdorf bei Graz, Austria |
 | Nikoletta Csonka | [@csonikoletta](https://github.com/csonikoletta) | Graz, Austria |
 | Louis Ehrig | [@louisuhr](https://github.com/louisuhr) | Budapest, Hungary |
 | Ana Diez Martini | [@anadiezmartini](https://github.com/anadiezmartini) | Mendoza, Argentina |
