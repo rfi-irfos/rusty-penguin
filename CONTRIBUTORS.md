@@ -17,7 +17,6 @@ We run flat: equal title, pay, and voice for everyone. No seniority, no hierarch
 | Louis Ehrig | [@louisuhr](https://github.com/louisuhr) | Budapest, Hungary |
 | Ana Diez Martini | [@anadiezmartini](https://github.com/anadiezmartini) | Mendoza, Argentina |
 | Brennan Bell | [@496crows](https://github.com/496crows) | Graz, Austria |
-| Wais Sediki | [@waissediki-glitch](https://github.com/waissediki-glitch) | Graz, Austria |
 
 <sub>[@cobioearth](https://github.com/cobioearth) is the organisation's shared code-backup account.</sub>
 
