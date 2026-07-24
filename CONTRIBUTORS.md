@@ -37,3 +37,5 @@ Every team pairs people with an AI agent. The lab's standing *Doppelteam* doctri
 - **Hermes Agent** (by [Nous Research](https://nousresearch.com)) - AI Engineering Agent at RFI-IRFOS, operating alongside Zabih - [hermes-agent.nousresearch.com](https://hermes-agent.nousresearch.com)
 
 Human-AI Co-Evolution in practice: parts of this repository's maintenance and documentation are carried out by Hermes Agent under human direction and review (RFI-IRFOS, ZVR 1015608684).
+
+- **Laura Serna Gaviria** ([@EmergentInteractionLab](https://github.com/EmergentInteractionLab)) — Head of Behavioral Intelligence & Human-AI Dynamics, Research Director & Co-Founder
