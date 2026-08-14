@@ -372,6 +372,14 @@ if [ -f "$ISO_DIR/assets/meta.rpv" ]; then
 else
     echo "[build]   ! iso/assets/meta.rpv missing — Media app will show 'not found' (run scripts/make_meta_video.sh)"
 fi
+# Bundle the trained ternary GNN snapshot (DINGIR reasoning layer) so the
+# DingirGnnApp desktop app can load real relation-scoring weights from ramfs.
+if [ -f "$REPO_ROOT/docs/superpowers/specs/rp_snapshot.bin" ]; then
+    cp "$REPO_ROOT/docs/superpowers/specs/rp_snapshot.bin" "$BARE_INITRAMFS_DIR/bin/dingir_snapshot.bin"
+    echo "[build]   + bin/dingir_snapshot.bin (DINGIR GNN snapshot, $(du -sh "$REPO_ROOT/docs/superpowers/specs/rp_snapshot.bin" | cut -f1))"
+else
+    echo "[build]   ! docs/superpowers/specs/rp_snapshot.bin missing — DINGIR GNN app will show 'snapshot not found'"
+fi
 
 BARE_INITRD="$ISO_DIR/initrd-bare.img"
 (cd "$BARE_INITRAMFS_DIR" && find . | cpio -o -H newc 2>/dev/null > "$BARE_INITRD")
