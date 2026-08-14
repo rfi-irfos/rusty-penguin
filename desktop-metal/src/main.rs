@@ -271,6 +271,7 @@ fn open_app_by_index(idx: u64, w: i32, h: i32, n: usize) -> Option<TermWin> {
         14 => open_image_viewer(w, h, n),
         15 => open_system_clock(w, h, n),
         16 => open_process_monitor(w, h, n),
+        19 => open_dingir_gnn(w, h, n),
         100 => open_term(w, h, n, &LAUNCHERS[0]),
         _  => None,
     }
@@ -370,7 +371,7 @@ fn dock_is_pinned(di: usize) -> bool {
 }
 // Maps MENU_ITEMS index → DESKTOP_ICONS index (0xFF = not dockable separately).
 const MENU_TO_DI: &[usize] = &[
-    10, 1, 2, 3, 0, 5, 6, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 12, 11, 7, 8, 9,
+    10, 1, 2, 3, 0, 5, 6, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 12, 11, 13, 7, 8, 9,
 ];
 
 // favourites_row: CSS FlexRow for the icon strip inside the dock.
@@ -1356,6 +1357,7 @@ const DESKTOP_ICONS: &[DesktopIcon] = &[
     DesktopIcon { label: "Web",         icon: icons::IC_WEB,      color: 0x8CC6E5, launcher_idx: 13 }, // index 10
     DesktopIcon { label: "RustyPhone",  icon: icons::IC_PHONE,    color: 0x22C55E, launcher_idx: 99 }, // index 11
     DesktopIcon { label: "Notes",       icon: icons::IC_NOTES,    color: AMBER,    launcher_idx: 98 }, // index 12
+    DesktopIcon { label: "DINGIR GNN",  icon: icons::IC_TIS,      color: 0x4A9EFF, launcher_idx: 97 }, // index 13
 ];
 
 // Favourites are horizontal 40×40 tiles inside the bottom panel (see fav_rect).
@@ -1771,12 +1773,13 @@ const MENU_ITEMS: &[MenuItem] = &[
     MenuItem { label: "Task Manager",   desc: "Processes, CPU & memory",        color: 0x8CC6E5, icon: icons::IC_TASKS, kind: MenuLaunch::App(16) },
     MenuItem { label: "Notes",          desc: "Quick notes — Ctrl+S to save",   color: 0xF5C451, icon: icons::IC_EDIT,  kind: MenuLaunch::App(17) },
     MenuItem { label: "RustyPhone",    desc: "SIP dialer + phone verification", color: 0x22C55E, icon: icons::IC_PHONE, kind: MenuLaunch::App(18) },
-    // games start at index 16
+    MenuItem { label: "DINGIR GNN",    desc: "Ternary graph-NN inference (Kindom)", color: 0x4A9EFF, icon: icons::IC_TIS, kind: MenuLaunch::App(19) },
+    // games start at index 17
     MenuItem { label: "Snake",        desc: "Classic arcade",             color: 0x4ADE80, icon: icons::IC_SNAKE,    kind: MenuLaunch::App(6) },
     MenuItem { label: "Minesweeper",  desc: "Find the mines",             color: 0xFCD34D, icon: icons::IC_MINES,    kind: MenuLaunch::App(7) },
     MenuItem { label: "Doom",         desc: "E1M1 — shareware DOOM",      color: 0xEF4444, icon: icons::IC_DOOM,     kind: MenuLaunch::App(8) },
 ];
-const MENU_APPS_END: usize = 16;  // items 0..16 = apps, 16..19 = games
+const MENU_APPS_END: usize = 17;  // items 0..17 = apps, 17..20 = games
 
 const MENU_W:       i32 = 280;
 const MENU_HDR_H:   i32 = 54;   // dingir avatar + title + subtitle
@@ -2402,6 +2405,29 @@ fn open_process_monitor(w: i32, h: i32, n: usize) -> Option<TermWin> {
     }
 }
 
+fn open_dingir_gnn(w: i32, h: i32, n: usize) -> Option<TermWin> {
+    match term::Terminal::spawn() {
+        Ok(t) => {
+            let gnn = alloc::boxed::Box::new(app::DingirGnnApp::new());
+            let off = n as i32 * 20;
+            let left_margin = 75;
+            let wx = ((w - left_margin - wm::WINDOW_W) / 2 + left_margin + off)
+                .max(left_margin)
+                .min(w - wm::WINDOW_W);
+            let wy = ((h - wm::WINDOW_H - 28) / 2 + off).max(TOPBAR_H as i32).min(h - wm::WINDOW_H - 28);
+            Some(TermWin {
+                win: wm::Window::new(wx, wy, "DINGIR GNN"),
+                term: t,
+                editor: None,
+                app: Some(gnn),
+                win_dirty: true,
+                initial_cmd: None,
+            })
+        }
+        Err(_) => None,
+    }
+}
+
 /// Launch an app from a MenuLaunch kind — shared between left-click and context menu.
 fn launch_menu_item(kind: &MenuLaunch, w: i32, h: i32, n: usize) -> Option<TermWin> {
     match *kind {
@@ -2425,6 +2451,7 @@ fn launch_menu_item(kind: &MenuLaunch, w: i32, h: i32, n: usize) -> Option<TermW
         MenuLaunch::App(16)  => open_process_monitor(w, h, n),
         MenuLaunch::App(17)  => open_notes(w, h, n),
         MenuLaunch::App(18)  => open_rusty_phone(w, h, n),
+        MenuLaunch::App(19)  => open_dingir_gnn(w, h, n),
         MenuLaunch::App(_)   => None,
     }
 }
@@ -3334,6 +3361,7 @@ pub extern "C" fn _start() -> ! {
                             10 => open_browser(w, h, wins.len()),
                             11 => open_rusty_phone(w, h, wins.len()),
                             12 => open_notes(w, h, wins.len()),
+                            13 => open_dingir_gnn(w, h, wins.len()),
                             _ => None,
                         };
                         if let Some(mut tw) = opened {

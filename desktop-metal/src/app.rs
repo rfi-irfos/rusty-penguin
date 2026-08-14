@@ -5756,3 +5756,331 @@ fn fmt_u64_into<'a>(buf: &'a mut [u8; 24], mut n: u64) -> &'a str {
     buf[..i].reverse();
     core::str::from_utf8(&buf[..i]).unwrap_or("0")
 }
+
+// ── DINGIR GNN — ternary graph-neural-network inference viewer ──────────────
+// Loads Kindom's exported ReasoningLayer snapshot (produced by
+// kindom/execution/scripts/export_rp_snapshot.py) from the kernel ramfs and
+// runs one forward pass of link-prediction inference at construction time.
+//
+// LOADING-PATH CAVEAT: this reads the snapshot via the same raw
+// sys_open/sys_read/sys_close (syscalls 2/0/3) pattern Task 3 designed for
+// reading arbitrary embedded ramfs files from a ring-3 desktop app. Task 3's
+// own QEMU probe of this exact pattern was INCONCLUSIVE (boots fine, reaches
+// "launching desktop-metal from VFS", but headless-mode serial output gets
+// swamped by a pre-existing, unrelated syscall-spam bug before any probe
+// result could be read) and was deprioritized rather than debugged further.
+// This app therefore compiles and its parsing logic is verified against the
+// documented byte layout (see the offset math in `DingirSnapshot::load`
+// below), but the actual boot-time file read is UNVERIFIED in QEMU. If the
+// read fails for any reason (file missing, short read, corrupt/oversized
+// header), `load()` returns `None` and the app renders a clear
+// "snapshot not found" message rather than silently showing a blank window.
+use ai_runtime::graph::{distmult_score, propagate};
+use ai_runtime::{TernaryLinear, TernaryTensor};
+use ternary_core::Trit;
+
+/// sys_open (#2) — path → fd, or u64::MAX on failure. Leading '/' is stripped
+/// by the kernel if present; ramfs paths are stored without one (e.g.
+/// "bin/dingir_snapshot.bin"), matching the convention other embedded-file
+/// paths in this codebase already use (see main.rs's b"bin/fbdoom").
+unsafe fn sys_open(path: &[u8]) -> u64 {
+    let fd: u64;
+    core::arch::asm!("syscall", inout("rax") 2u64 => fd, in("rdi") path.as_ptr(),
+        in("rsi") path.len() as u64, out("rcx") _, out("r11") _, options(nostack));
+    fd
+}
+/// sys_read (#0) — fd/buf/len, Linux ABI register order (rdi/rsi/rdx). Returns
+/// bytes read (may be less than `len`, e.g. at EOF), or u64::MAX on error.
+unsafe fn sys_read(fd: u64, buf: *mut u8, len: usize) -> u64 {
+    let n: u64;
+    core::arch::asm!("syscall", inout("rax") 0u64 => n, in("rdi") fd, in("rsi") buf,
+        in("rdx") len as u64, out("rcx") _, out("r11") _, options(nostack));
+    n
+}
+/// sys_close (#3) — fd.
+unsafe fn sys_close(fd: u64) {
+    core::arch::asm!("syscall", inout("rax") 3u64 => _, in("rdi") fd,
+        out("rcx") _, out("r11") _, options(nostack));
+}
+
+/// A parsed `bin/dingir_snapshot.bin`. Byte layout (74444 bytes for the
+/// current Kindom graph — verified against
+/// kindom/execution/scripts/export_rp_snapshot.py's own
+/// `verify_written_snapshot`, which asserts the same formula against the
+/// file it just wrote):
+///
+///   [0..20)    header: 5x u32 LE — num_nodes, num_edges, num_relations,
+///              embed_dim, hidden_dim
+///   NodeIds:   num_nodes x u32 LE — stable CRC32 ids, reference-only, NOT
+///              used for indexing here (indexing is by position)
+///   NodeEmb:   num_nodes * embed_dim x i8 trits, row-major (node 0 first)
+///   Edges:     num_edges x (u32 src_idx, u32 dst_idx, u16 relation_id)
+///              = 10 bytes each
+///   RelEmb:    num_relations * hidden_dim x i8 trits, row-major
+///   Lin1W:     hidden_dim * embed_dim x i8 trits (embedding-only slice —
+///              v1's run_inference skips lin1 per Task 1's documented
+///              in_dim decision, but these bytes still occupy this offset
+///              in the file and MUST be skipped over to reach Lin2W)
+///   Lin2W:     hidden_dim * hidden_dim x i8 trits
+struct DingirSnapshot {
+    num_nodes: u32,
+    num_edges: u32,
+    num_relations: u32,
+    embed_dim: u32,
+    hidden_dim: u32,
+    node_embeddings: Vec<TernaryTensor>,
+    edges: Vec<(u32, u32, u16)>,
+    rel_embeddings: Vec<TernaryTensor>,
+    lin2: TernaryLinear,
+}
+
+impl DingirSnapshot {
+    unsafe fn load() -> Option<Self> {
+        let path = b"bin/dingir_snapshot.bin";
+        let fd = sys_open(path);
+        if fd == u64::MAX {
+            return None;
+        }
+
+        // Header first (20 bytes) so we know how big the rest of the file is
+        // before allocating anything.
+        let mut hdr = [0u8; 20];
+        if sys_read(fd, hdr.as_mut_ptr(), 20) != 20 {
+            sys_close(fd);
+            return None;
+        }
+        let num_nodes = u32::from_le_bytes([hdr[0], hdr[1], hdr[2], hdr[3]]);
+        let num_edges = u32::from_le_bytes([hdr[4], hdr[5], hdr[6], hdr[7]]);
+        let num_relations = u32::from_le_bytes([hdr[8], hdr[9], hdr[10], hdr[11]]);
+        let embed_dim = u32::from_le_bytes([hdr[12], hdr[13], hdr[14], hdr[15]]);
+        let hidden_dim = u32::from_le_bytes([hdr[16], hdr[17], hdr[18], hdr[19]]);
+
+        // Refuse to trust an absurd header (corrupt file, wrong file, torn
+        // read) rather than allocate something huge or index out of bounds.
+        let sane = num_nodes > 0 && num_edges > 0 && num_relations > 0
+            && embed_dim > 0 && hidden_dim > 0
+            && num_nodes <= 1_000_000 && num_edges <= 10_000_000
+            && num_relations <= 10_000 && embed_dim <= 4096 && hidden_dim <= 4096;
+        if !sane {
+            sys_close(fd);
+            return None;
+        }
+
+        let (nn, ne, nr, ed, hd) = (
+            num_nodes as usize,
+            num_edges as usize,
+            num_relations as usize,
+            embed_dim as usize,
+            hidden_dim as usize,
+        );
+
+        // Byte sizes of every section after the header, in file order. This
+        // is the exact formula from export_rp_snapshot.py's
+        // verify_written_snapshot (header + these six terms == total file
+        // size, 74444 bytes for the current snapshot: 20 + 1026*4 + 1026*32
+        // + 3096*10 + 6*64 + 64*32 + 64*64 = 74444).
+        let node_ids_size = nn * 4;
+        let node_emb_size = nn * ed;
+        let edges_size = ne * 10;
+        let rel_emb_size = nr * hd;
+        let lin1_size = hd * ed; // sliced embedding-only sub-block, skipped
+        let lin2_size = hd * hd;
+        let rest_size = node_ids_size + node_emb_size + edges_size + rel_emb_size + lin1_size + lin2_size;
+
+        let mut rest: Vec<u8> = alloc::vec![0u8; rest_size];
+        let mut got = 0usize;
+        while got < rest_size {
+            let n = sys_read(fd, rest.as_mut_ptr().add(got), rest_size - got);
+            if n == u64::MAX || n == 0 {
+                break;
+            }
+            got += n as usize;
+        }
+        sys_close(fd);
+        if got != rest_size {
+            return None; // short read — truncated/corrupt file
+        }
+
+        let mut off = 0usize;
+
+        // NodeIds — reference-only, not needed for index-based inference.
+        off += node_ids_size;
+
+        // NodeEmb: num_nodes tensors of embed_dim trits each.
+        let mut node_embeddings = Vec::with_capacity(nn);
+        for i in 0..nn {
+            let base = off + i * ed;
+            let mut trits = Vec::with_capacity(ed);
+            for k in 0..ed {
+                trits.push(Trit::from_i8(rest[base + k] as i8).unwrap_or(Trit::Zero));
+            }
+            node_embeddings.push(TernaryTensor::new(trits, alloc::vec![ed]));
+        }
+        off += node_emb_size;
+
+        // Edges: (u32 src, u32 dst, u16 relation) x num_edges.
+        let mut edges = Vec::with_capacity(ne);
+        for i in 0..ne {
+            let base = off + i * 10;
+            let src = u32::from_le_bytes([rest[base], rest[base + 1], rest[base + 2], rest[base + 3]]);
+            let dst = u32::from_le_bytes([rest[base + 4], rest[base + 5], rest[base + 6], rest[base + 7]]);
+            let rel = u16::from_le_bytes([rest[base + 8], rest[base + 9]]);
+            edges.push((src, dst, rel));
+        }
+        off += edges_size;
+
+        // RelEmb: num_relations tensors of hidden_dim trits each.
+        let mut rel_embeddings = Vec::with_capacity(nr);
+        for i in 0..nr {
+            let base = off + i * hd;
+            let mut trits = Vec::with_capacity(hd);
+            for k in 0..hd {
+                trits.push(Trit::from_i8(rest[base + k] as i8).unwrap_or(Trit::Zero));
+            }
+            rel_embeddings.push(TernaryTensor::new(trits, alloc::vec![hd]));
+        }
+        off += rel_emb_size;
+
+        // Lin1W (embedding-only slice) — v1 skips applying it (see
+        // DingirGnnApp::run_inference); its bytes must still be skipped to
+        // land on Lin2W at the right offset.
+        off += lin1_size;
+
+        // Lin2W: shape [hidden_dim, hidden_dim].
+        let mut lin2_trits = Vec::with_capacity(lin2_size);
+        for k in 0..lin2_size {
+            lin2_trits.push(Trit::from_i8(rest[off + k] as i8).unwrap_or(Trit::Zero));
+        }
+        let lin2 = TernaryLinear {
+            weights: TernaryTensor::new(lin2_trits, alloc::vec![hd, hd]),
+        };
+
+        Some(DingirSnapshot {
+            num_nodes,
+            num_edges,
+            num_relations,
+            embed_dim,
+            hidden_dim,
+            node_embeddings,
+            edges,
+            rel_embeddings,
+            lin2,
+        })
+    }
+}
+
+/// Desktop app wrapping one DINGIR GNN inference pass. v1: the snapshot is
+/// loaded and inference is run exactly once, at construction — not re-run on
+/// tick or interaction (see task brief).
+pub struct DingirGnnApp {
+    snapshot: Option<DingirSnapshot>,
+    predictions: Vec<(u16, i32)>, // (relation_id, distmult_score), sorted descending
+    dirty: bool,
+}
+
+impl DingirGnnApp {
+    pub fn new() -> Self {
+        let snapshot = unsafe { DingirSnapshot::load() };
+        let predictions = match &snapshot {
+            Some(s) => Self::run_inference(s),
+            None => Vec::new(),
+        };
+        Self { snapshot, predictions, dirty: true }
+    }
+
+    fn run_inference(s: &DingirSnapshot) -> Vec<(u16, i32)> {
+        // Layer 1: sum-aggregate raw node embeddings over the edge list, then
+        // lin2 (v1 skips lin1 per Task 1's in_dim decision — see the module
+        // doc comment above and Lin1W's handling in `DingirSnapshot::load`).
+        let layer1 = propagate(
+            &s.node_embeddings,
+            &s.edges.iter().map(|&(a, b, _)| (a, b)).collect::<Vec<_>>(),
+        );
+        // Fixed node pair for v1 — indices 0 and 1 into the snapshot's node
+        // list (position-indexed, not the CRC32 NodeIds).
+        let (a, b) = (0usize, 1usize);
+        if a >= layer1.len() || b >= layer1.len() {
+            return Vec::new();
+        }
+        let h_a = s.lin2.forward(&layer1[a]).0;
+        let h_b = s.lin2.forward(&layer1[b]).0;
+        let mut scored: Vec<(u16, i32)> = s
+            .rel_embeddings
+            .iter()
+            .enumerate()
+            .map(|(i, rel)| (i as u16, distmult_score(&h_a, rel, &h_b)))
+            .collect();
+        scored.sort_by(|x, y| y.1.cmp(&x.1));
+        scored
+    }
+}
+
+impl App for DingirGnnApp {
+    fn title(&self) -> &str { "DINGIR GNN" }
+
+    fn render(&mut self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, h: u32) {
+        if !self.dirty { return; }
+        let bg = 0x0D1117u32;
+        fb.fill_rect(x, y, w, h, bg);
+
+        let pad = 12i32;
+        let mut cy = y as i32 + pad;
+
+        match &self.snapshot {
+            None => {
+                fb.draw_aa(x as i32 + pad, cy, "DINGIR snapshot not found", 0xEF4444, crate::fb::AA_S);
+                cy += Framebuffer::aa_line(crate::fb::AA_S) + 8;
+                fb.draw_aa(
+                    x as i32 + pad,
+                    cy,
+                    "bin/dingir_snapshot.bin was not readable from the boot ramfs.",
+                    0x8B9EC4,
+                    crate::fb::AA_T,
+                );
+                cy += Framebuffer::aa_line(crate::fb::AA_T) + 4;
+                fb.draw_aa(
+                    x as i32 + pad,
+                    cy,
+                    "(export script + ramfs embedding are a separate build step.)",
+                    0x8B9EC4,
+                    crate::fb::AA_T,
+                );
+            }
+            Some(s) => {
+                let hdr = alloc::format!(
+                    "nodes={} edges={} relations={} embed_dim={} hidden_dim={}",
+                    s.num_nodes, s.num_edges, s.num_relations, s.embed_dim, s.hidden_dim
+                );
+                fb.draw_aa(x as i32 + pad, cy, &hdr, 0x38BDF8, crate::fb::AA_T);
+                cy += Framebuffer::aa_line(crate::fb::AA_T) + 10;
+
+                fb.draw_aa(
+                    x as i32 + pad,
+                    cy,
+                    "Predicted relation, node 0 -> node 1 (ranked, DistMult score):",
+                    0xCDD6E0,
+                    crate::fb::AA_S,
+                );
+                cy += Framebuffer::aa_line(crate::fb::AA_S) + 6;
+
+                if self.predictions.is_empty() {
+                    fb.draw_aa(x as i32 + pad, cy, "(no predictions -- graph too small)", 0x8B9EC4, crate::fb::AA_T);
+                } else {
+                    for (rank, (rel_id, score)) in self.predictions.iter().enumerate() {
+                        let line = alloc::format!("{}. relation {} -- score {}", rank + 1, rel_id, score);
+                        let col = if rank == 0 { 0x6FE18Bu32 } else { 0xF0F0F0 };
+                        fb.draw_aa(x as i32 + pad, cy, &line, col, crate::fb::AA_T);
+                        cy += Framebuffer::aa_line(crate::fb::AA_T) + 4;
+                        if (cy as u32) > y + h - 20 { break; }
+                    }
+                }
+            }
+        }
+
+        self.dirty = false;
+    }
+
+    fn on_key(&mut self, _key: u8) {}
+
+    fn wants_close(&self) -> bool { false }
+}
