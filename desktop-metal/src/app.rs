@@ -5817,10 +5817,11 @@ unsafe fn sys_close(fd: u64) {
 ///   Edges:     num_edges x (u32 src_idx, u32 dst_idx, u16 relation_id)
 ///              = 10 bytes each
 ///   RelEmb:    num_relations * hidden_dim x i8 trits, row-major
-///   Lin1W:     hidden_dim * embed_dim x i8 trits (embedding-only slice —
-///              v1's run_inference skips lin1 per Task 1's documented
-///              in_dim decision, but these bytes still occupy this offset
-///              in the file and MUST be skipped over to reach Lin2W)
+///   Lin1W:     hidden_dim * embed_dim x i8 trits (embedding-only slice, per
+///              Task 1's documented in_dim decision). Applied in
+///              run_inference to lift the embed_dim-wide propagate() output
+///              into the hidden_dim-wide space lin2/DistMult expect —
+///              skipping it would panic on a dimension mismatch.
 ///   Lin2W:     hidden_dim * hidden_dim x i8 trits
 struct DingirSnapshot {
     num_nodes: u32,
@@ -5831,6 +5832,7 @@ struct DingirSnapshot {
     node_embeddings: Vec<TernaryTensor>,
     edges: Vec<(u32, u32, u16)>,
     rel_embeddings: Vec<TernaryTensor>,
+    lin1: TernaryLinear,
     lin2: TernaryLinear,
 }
 
@@ -5941,9 +5943,19 @@ impl DingirSnapshot {
         }
         off += rel_emb_size;
 
-        // Lin1W (embedding-only slice) — v1 skips applying it (see
-        // DingirGnnApp::run_inference); its bytes must still be skipped to
-        // land on Lin2W at the right offset.
+        // Lin1W (embedding-only slice): shape [hidden_dim, embed_dim] — this
+        // is the layer that actually transforms the 32-dim node embedding
+        // into the 64-dim hidden space lin2/DistMult operate in. MUST be
+        // applied in run_inference (not just skipped over), or lin2.forward
+        // panics on a dimension mismatch (lin2 expects a hidden_dim-wide
+        // input, propagate() only produces embed_dim-wide output).
+        let mut lin1_trits = Vec::with_capacity(lin1_size);
+        for k in 0..lin1_size {
+            lin1_trits.push(Trit::from_i8(rest[off + k] as i8).unwrap_or(Trit::Zero));
+        }
+        let lin1 = TernaryLinear {
+            weights: TernaryTensor::new(lin1_trits, alloc::vec![hd, ed]),
+        };
         off += lin1_size;
 
         // Lin2W: shape [hidden_dim, hidden_dim].
@@ -5964,6 +5976,7 @@ impl DingirSnapshot {
             node_embeddings,
             edges,
             rel_embeddings,
+            lin1,
             lin2,
         })
     }
@@ -5989,9 +6002,9 @@ impl DingirGnnApp {
     }
 
     fn run_inference(s: &DingirSnapshot) -> Vec<(u16, i32)> {
-        // Layer 1: sum-aggregate raw node embeddings over the edge list, then
-        // lin2 (v1 skips lin1 per Task 1's in_dim decision — see the module
-        // doc comment above and Lin1W's handling in `DingirSnapshot::load`).
+        // Sum-aggregate raw node embeddings over the edge list. propagate()
+        // is same-shape (embed_dim in, embed_dim out) — it does not change
+        // dimensionality, it only aggregates neighbors.
         let layer1 = propagate(
             &s.node_embeddings,
             &s.edges.iter().map(|&(a, b, _)| (a, b)).collect::<Vec<_>>(),
@@ -6002,8 +6015,14 @@ impl DingirGnnApp {
         if a >= layer1.len() || b >= layer1.len() {
             return Vec::new();
         }
-        let h_a = s.lin2.forward(&layer1[a]).0;
-        let h_b = s.lin2.forward(&layer1[b]).0;
+        // lin1 (embed_dim -> hidden_dim) MUST run before lin2 (hidden_dim ->
+        // hidden_dim): lin2's weights are shaped [hidden_dim, hidden_dim], so
+        // feeding it propagate()'s embed_dim-wide output directly panics on
+        // TernaryLinear::forward's `assert_eq!(input.data.len(), in_features)`.
+        let g_a = s.lin1.forward(&layer1[a]).0;
+        let g_b = s.lin1.forward(&layer1[b]).0;
+        let h_a = s.lin2.forward(&g_a).0;
+        let h_b = s.lin2.forward(&g_b).0;
         let mut scored: Vec<(u16, i32)> = s
             .rel_embeddings
             .iter()
@@ -6019,7 +6038,14 @@ impl App for DingirGnnApp {
     fn title(&self) -> &str { "DINGIR GNN" }
 
     fn render(&mut self, fb: &mut Framebuffer, x: u32, y: u32, w: u32, h: u32) {
-        if !self.dirty { return; }
+        // No dirty-gated early return: main.rs's recomposite() calls
+        // app.render() unconditionally on every full recomposite (triggered
+        // by unrelated desktop activity — other windows, menu/icon hover,
+        // dragging), and wm::draw_window has already blanked this window's
+        // content area to a plain background rect before render() runs. An
+        // early return here would leave that blank rect on screen after the
+        // first frame. Every other app in this file (Calculator etc.) redraws
+        // unconditionally for the same reason — follow that convention.
         let bg = 0x0D1117u32;
         fb.fill_rect(x, y, w, h, bg);
 
