@@ -4,6 +4,8 @@ use alloc::vec::Vec;
 use alloc::vec;
 use ternary_core::Trit;
 
+pub mod graph;
+
 #[derive(Debug, Clone)]
 pub struct TernaryTensor {
     pub data: Vec<Trit>,
