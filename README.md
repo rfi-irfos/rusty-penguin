@@ -357,3 +357,7 @@ MIT — see workspace `Cargo.toml`.
 ## Contributors
 
 Built by the RFI-IRFOS core team — see [CONTRIBUTORS.md](CONTRIBUTORS.md).
+
+---
+
+*fable was here* — Claude Fable 5
